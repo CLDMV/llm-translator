@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:02-07:00 (1792958342)
+ *	@Last modified time: 2026-10-25T13:31:30-07:00 (1792960290)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -45,6 +45,7 @@ import { TranslatorError } from "./errors.mjs";
  * @property {boolean} parallelToolCalls - Map `disable_parallel_tool_use` to `parallel_tool_calls: false`.
  * @property {"drop"|"error"} unknownFields - Unknown request fields are dropped (and listed in `state.dropped`) or rejected.
  * @property {number} pingInterval - Milliseconds of upstream silence before the SSE writer emits a `ping` (0 disables).
+ * @property {"buffer"|"stream"} toolStreaming - OpenAI to Anthropic streams: `buffer` holds each tool call until its arguments are complete and emits one whole `tool_use` block (text and thinking keep streaming and appear before the block); `stream` forwards argument fragments incrementally and holds text that arrives meanwhile until the tool blocks are done.
  * @property {boolean} effortPassthrough - vLLM driver: send `xhigh` and `max` reasoning effort unchanged instead of clamping them to `high`.
  * @property {boolean} passthroughFilter - Restrict bodies forwarded from the OpenAI front to an OpenAI-protocol upstream to standard Chat Completions fields plus documented vLLM extensions. Off in the library; the server turns it on unless set to false.
  * @property {number} defaultMaxTokens - `max_tokens` used when an OpenAI request has none (Anthropic requires one).
@@ -75,6 +76,7 @@ export const DEFAULTS = Object.freeze({
 	parallelToolCalls: true,
 	unknownFields: "drop",
 	pingInterval: 10000,
+	toolStreaming: "buffer",
 	effortPassthrough: false,
 	passthroughFilter: false,
 	defaultMaxTokens: 8192
@@ -89,7 +91,8 @@ const ENUMS = {
 	deferredTools: ["forward", "drop"],
 	maxTokensField: ["max_completion_tokens", "max_tokens"],
 	prefill: ["continue_final_message", "none"],
-	unknownFields: ["drop", "error"]
+	unknownFields: ["drop", "error"],
+	toolStreaming: ["buffer", "stream"]
 };
 
 const BOOLEANS = ["effortPassthrough", "passthroughFilter"];

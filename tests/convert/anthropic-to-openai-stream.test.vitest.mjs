@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:03-07:00 (1792958343)
+ *	@Last modified time: 2026-10-25T13:31:31-07:00 (1792960291)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -195,7 +195,7 @@ describe("errors", () => {
 		expect(out.at(-2).error).toMatchObject({ message: "reset by peer", type: "server_error" });
 		const invalid = (await collect(stream("data: {oops\n\n"))).map((e) => e.data);
 		expect(invalid[0].error.message).toContain("not valid JSON");
-		expect(invalid[0].error.code).toBe(529);
+		expect(invalid[0].error.code).toBe(500);
 		expect(invalid[1]).toBe("[DONE]");
 	});
 

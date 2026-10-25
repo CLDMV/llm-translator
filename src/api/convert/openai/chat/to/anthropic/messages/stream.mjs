@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:58:59-07:00 (1792958339)
+ *	@Last modified time: 2026-10-25T13:31:27-07:00 (1792960287)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -33,8 +33,13 @@ import { messages } from "../../../../../../../lib/sse.mjs";
  * `<think>`), the three vLLM tool-call delta shapes (id+name first then argument fragments, name and arguments
  * together, whole call at once), usage-only final chunks, `[DONE]`, mid-stream `{"error":...}` objects (answered
  * with an Anthropic `error` event) and closing the iterator early (the upstream source is closed too). Pings are
- * the SSE writer's job, not this converter's. Tool calls that start while another tool block is streaming (parallel
- * calls, possibly with interleaved argument fragments) are buffered and emitted as complete blocks once it closes.
+ * the SSE writer's job, not this converter's.
+ *
+ * Tool calls follow `settings.toolStreaming`. `buffer` (default) holds every call until the stream finishes and then emits
+ * each one, in index order, as a single complete `tool_use` block (start, one `input_json_delta`, stop); text and
+ * thinking stream immediately, so they appear before the tool blocks and no argument fragment can arrive too late.
+ * `stream` forwards argument fragments incrementally; calls that start while a tool block is streaming are buffered and
+ * emitted whole when it closes, and text that arrives meanwhile is held until the tool blocks are done.
  * @param {ReadableStream|AsyncIterable<unknown>|Iterable<unknown>|string|Uint8Array} source - OpenAI stream.
  * @param {any} [state] - State from the request converter (original model, tool-name map).
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
@@ -82,6 +87,24 @@ export async function* stream(source, state, settings) {
 		}
 	}
 
+	// `buffer` mode: every tool call is emitted whole, in index order, once the stream has finished.
+	function* flushBuffered() {
+		for (const entry of ordered()) {
+			if (entry.state !== "buffered") continue;
+			yield* begin("tool", entry.block, entry);
+			const partial = entry.args.join("");
+			if (partial !== "") {
+				entry.sent = true;
+				yield event("content_block_delta", { index: open.index, delta: { type: "input_json_delta", partial_json: partial } });
+			}
+			yield* close();
+		}
+	}
+
+	function ordered() {
+		return [...tools.entries()].sort((left, right) => left[0] - right[0]).map((pair) => pair[1]);
+	}
+
 	function* begin(kind, block, entry) {
 		yield* close();
 		open = { kind, index: nextIndex++, entry };
@@ -114,10 +137,11 @@ export async function* stream(source, state, settings) {
 		if (entry === undefined) {
 			const name = call.function?.name ?? "";
 			const block = { type: "tool_use", id: anthropicToolId(call.id), name: restoreName(toolNames, name), input: {} };
-			entry = { state: "pending", sent: false, args: [], block };
+			entry = { state: s.toolStreaming === "buffer" ? "buffered" : "pending", sent: false, args: [], block };
 			tools.set(key, entry);
-			// Only one block can stream at a time: a call that starts while a tool block is open waits until it closes.
-			if (open?.kind !== "tool") {
+			// Buffered calls wait for the end of the stream. Otherwise only one block can stream at a time: a call that starts
+			// while a tool block is open waits until it closes.
+			if (s.toolStreaming !== "buffer" && open?.kind !== "tool") {
 				entry.state = "open";
 				yield* begin("tool", block, entry);
 			}
@@ -183,7 +207,8 @@ export async function* stream(source, state, settings) {
 		return;
 	}
 	if (splitter) yield* pieces(splitter.end());
-	const last = [...tools.values()].at(-1);
+	yield* flushBuffered();
+	const last = ordered().at(-1);
 	const argumentsComplete = last === undefined || isComplete(last.args.join(""));
 	yield* close();
 	for (const item of held) yield* piece(item.kind, item.text);

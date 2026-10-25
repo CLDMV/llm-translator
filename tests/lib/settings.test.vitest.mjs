@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:04-07:00 (1792958344)
+ *	@Last modified time: 2026-10-25T13:31:33-07:00 (1792960293)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -49,6 +49,7 @@ describe("settings", () => {
 			maxTokensField: "max_completion_tokens",
 			streamUsage: true,
 			continuousUsage: false,
+			toolStreaming: "buffer",
 			prefill: "continue_final_message",
 			unknownFields: "drop",
 			pingInterval: 10000

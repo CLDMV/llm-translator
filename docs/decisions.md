@@ -116,12 +116,12 @@ Scope: the library translates between Anthropic Messages and OpenAI Chat Complet
 - **Decision.** Names that already match the target rules pass through. Others are sanitized, shortened with a hash suffix when too long, kept unique, and recorded in `state.toolNames` (fitted to original) so replies restore the original. Tool-call ids are not remapped from Anthropic to OpenAI; from OpenAI to Anthropic invalid characters become `_` deterministically and missing ids get a fresh `toolu_` id.
 - **Rationale.** Anthropic allows 128-character names, OpenAI 64; consistent mapping keeps calls and results paired across turns without storing state.
 
-### D-18 Streaming tool calls: one block streams at a time
+### D-18 Streaming tool calls: buffered by default, optionally incremental
 
-- **Context.** vLLM tool-call deltas take three shapes (id and name first then fragments; name and arguments together; whole call at once), and parallel calls may interleave fragments with each other and with text.
-- **Decision.** All three shapes are handled. The first call streams incrementally. A call that starts while a tool block is open is buffered with its fragments and emitted as a complete block (start, one `input_json_delta`, stop) when the open block closes. Text and reasoning that arrive while a tool block is open are held and emitted after the tool blocks at the end of the stream, so fragments for any call can still arrive and no valid sequence ends in an error.
-- **Rationale.** Anthropic content blocks are strictly sequential. This supersedes the earlier decisions that interleaved fragments, and later fragments after text, end the stream in an error.
-- **Alternatives.** Buffering every call (loses argument streaming for the first call); closing the open block on text (breaks valid streams that continue a call after text).
+- **Context.** vLLM tool-call deltas take three shapes (id and name first then fragments; name and arguments together; whole call at once), and text, reasoning and parallel calls may arrive between a call's fragments, possibly interleaved with other calls' fragments. Anthropic content blocks are strictly sequential, so a text block cannot appear between the start and the end of a tool block, and a fragment cannot be added to a block that has already been closed.
+- **Decision.** The setting `toolStreaming` chooses the trade-off. `buffer` (default) holds every tool call until the stream finishes (`finish_reason`, `[DONE]` or the end of the source) and then emits all of them in index order, each as one block (start, one `input_json_delta`, stop). Text and thinking stream immediately in arrival order, so they always appear before the tool blocks. Because nothing is emitted before the end, a fragment can never arrive too late and `buffer` mode has no error case for it. A `length` stop whose highest-index call has incomplete JSON arguments is `max_tokens`. `stream` forwards argument fragments incrementally; a call that starts while a tool block is streaming is buffered and emitted whole when it closes, and text that arrives meanwhile is held until the tool blocks are done.
+- **Rationale.** A tool call ends the turn, so waiting for the end of the stream delays nothing the client could act on; pings already cover the silence. The cost is that Claude Code shows tool arguments all at once instead of as they are generated, and total completion time is unchanged because the model finishes generating either way. `stream` keeps incremental display for clients that want it.
+- **Alternatives.** Completing a call when the next index starts (breaks on interleaved fragments); always streaming (reorders text that arrives mid-call); always buffering with no switch (removes incremental argument display for good).
 
 ### D-19 Incomplete streams are errors, never fabricated completions
 
@@ -146,6 +146,7 @@ Scope: the library translates between Anthropic Messages and OpenAI Chat Complet
 ### D-23 Errors use the client's protocol
 
 - **Decision.** Upstream errors are returned in the client protocol's shape with status codes mapped one to one (`retry-after` kept on 429). `TranslatorError` carries code, status, type and param and renders either shape.
+- **Error type names.** HTTP status codes are never changed, because they drive client retries. Only the Anthropic `error.type` follows this table: 400 `invalid_request_error`, 401 `authentication_error`, 403 `permission_error`, 404 `not_found_error`, 413 `request_too_large`, 429 `rate_limit_error`, 503 and 529 `overloaded_error`, and every other status (including 502, 504 and the translator's own 502 errors such as `invalid_stream_data` and `invalid_upstream_response`) `api_error`. This supersedes the earlier mapping of 502 and 504 to `overloaded_error`.
 
 ### D-24 Pings belong to the SSE writer
 

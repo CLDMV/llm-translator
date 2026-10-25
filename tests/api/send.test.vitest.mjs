@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:03-07:00 (1792958343)
+ *	@Last modified time: 2026-10-25T13:31:31-07:00 (1792960291)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -101,7 +101,7 @@ describe("send against a local fake vLLM server", () => {
 		const api = await make({ upstreams: [{ url: "http://127.0.0.1:1", backend: "vllm" }], detect: false });
 		const reply = await api.send(hello);
 		expect(reply.status).toBe(502);
-		expect(reply.body.error).toMatchObject({ type: "overloaded_error" });
+		expect(reply.body.error).toMatchObject({ type: "api_error" });
 		expect(reply.body.error.message).toMatch(/Could not reach the upstream \(upstream-0\)/);
 	});
 

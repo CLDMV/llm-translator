@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:05-07:00 (1792958345)
+ *	@Last modified time: 2026-10-25T13:31:33-07:00 (1792960293)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -94,6 +94,42 @@ describe("server (anthropic front)", () => {
 			expect(names.at(-2)).toBe("message_delta");
 			expect(names.at(-1)).toBe("message_stop");
 			expect(out.find((frame) => frame.event === "message_delta").data.delta.stop_reason).toBe("end_turn");
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("keeps pinging while a buffered tool call produces upstream chunks but no client events", async () => {
+		const base = { id: "chatcmpl-1", object: "chat.completion.chunk", created: 1, model: "qwen3-coder" };
+		const chunk = (delta, finish = null) => ({ ...base, choices: [{ index: 0, delta, finish_reason: finish }] });
+		const fragments = Array.from({ length: 10 }, (_, index) =>
+			chunk({ tool_calls: [{ index: 0, function: { arguments: index === 0 ? '{"content":"' : "x".repeat(20) } }] })
+		);
+		const upstream = await fakeVllm({
+			chat: (_req, _body, res) =>
+				sse(
+					res,
+					[
+						chunk({ role: "assistant", content: "" }),
+						chunk({ tool_calls: [{ index: 0, id: "chatcmpl-tool-1", type: "function", function: { name: "Write", arguments: "" } }] }),
+						...fragments,
+						chunk({ tool_calls: [{ index: 0, function: { arguments: '"}' } }] }),
+						chunk({}, "tool_calls"),
+						"[DONE]"
+					],
+					{ delay: 40 }
+				)
+		});
+		try {
+			const api = await make({ upstreams: [upstream.url], settings: { pingInterval: 50, toolStreaming: "buffer" } });
+			const server = await api.server.start({ port: 0 });
+			const out = frames(await (await post(`${server.url}/v1/messages`, { ...hello, stream: true })).text());
+			const names = out.map((frame) => frame.event);
+			const start = names.indexOf("content_block_start");
+			// While the tool call is buffered the client must still see pings.
+			expect(names.slice(names.indexOf("message_start"), start).filter((name) => name === "ping").length).toBeGreaterThanOrEqual(3);
+			expect(names.at(-1)).toBe("message_stop");
+			expect(out.find((frame) => frame.event === "message_delta").data.delta.stop_reason).toBe("tool_use");
 		} finally {
 			await upstream.close();
 		}
@@ -192,7 +228,7 @@ describe("server (anthropic front)", () => {
 			const out = frames(await (await post(`${server.url}/v1/messages`, { ...hello, stream: true })).text());
 			const last = out.at(-1);
 			expect(last.event).toBe("error");
-			expect(last.data).toMatchObject({ type: "error", error: { type: "overloaded_error" } });
+			expect(last.data).toMatchObject({ type: "error", error: { type: "api_error" } });
 		} finally {
 			await upstream.close();
 		}

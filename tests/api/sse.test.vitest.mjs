@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:03-07:00 (1792958343)
+ *	@Last modified time: 2026-10-25T13:31:31-07:00 (1792960291)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -77,6 +77,23 @@ describe("sse.ping", () => {
 		const api = await make(config);
 		const out = await collect(api.sse.ping(slow(5, 2)));
 		expect(out.map((event) => event.event)).toEqual(["content_block_delta", "content_block_delta"]);
+	});
+});
+
+describe("ping timing", () => {
+	it("measures silence since the last event handed to the client, not since the last upstream chunk", async () => {
+		const api = await make({ ...config, settings: { pingInterval: 40 } });
+		// A converter that is busy (many upstream chunks) but emits nothing for a long time.
+		const buffering = (async function* () {
+			yield { event: "message_start", data: {} };
+			for (let chunk = 0; chunk < 10; chunk++) await pause(30);
+			yield { event: "content_block_start", data: {} };
+		})();
+		const out = await collect(api.sse.ping(buffering));
+		const names = out.map((event) => event.event);
+		expect(names[0]).toBe("message_start");
+		expect(names.at(-1)).toBe("content_block_start");
+		expect(names.filter((name) => name === "ping").length).toBeGreaterThanOrEqual(5);
 	});
 });
 

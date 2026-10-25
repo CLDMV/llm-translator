@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:04-07:00 (1792958344)
+ *	@Last modified time: 2026-10-25T13:31:33-07:00 (1792960293)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -57,9 +57,9 @@ describe("type mapping", () => {
 			413: "request_too_large",
 			429: "rate_limit_error",
 			529: "overloaded_error",
-			502: "overloaded_error",
+			502: "api_error",
 			503: "overloaded_error",
-			504: "overloaded_error",
+			504: "api_error",
 			500: "api_error"
 		};
 		for (const [status, type] of Object.entries(table)) expect(statusToAnthropicType(Number(status))).toBe(type);

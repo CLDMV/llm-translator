@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:03-07:00 (1792958343)
+ *	@Last modified time: 2026-10-25T13:31:31-07:00 (1792960291)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -201,11 +201,12 @@ describe("reasoning", () => {
 	});
 });
 
-describe("tool calls", () => {
+describe("tool calls (toolStreaming: stream)", () => {
+	const runIncremental = (chunks, state, settings) => run(chunks, state, { toolStreaming: "stream", ...settings });
 	const call = (index, extra = {}) => ({ index, ...extra });
 
 	test("shape A: id and name first, argument fragments after", async () => {
-		const events = await run([
+		const events = await runIncremental([
 			chunk({ role: "assistant", content: "" }),
 			chunk({ tool_calls: [call(0, { id: "chatcmpl-tool-aa", type: "function", function: { name: "Read" } })] }),
 			chunk({ tool_calls: [call(0, { function: { arguments: '{"file_' } })] }),
@@ -231,7 +232,7 @@ describe("tool calls", () => {
 	});
 
 	test("shape B: name and first arguments together", async () => {
-		const events = await run([
+		const events = await runIncremental([
 			chunk({ tool_calls: [call(0, { id: "t1", type: "function", function: { name: "Bash", arguments: '{"command":' } })] }),
 			chunk({ tool_calls: [call(0, { function: { arguments: '"ls"}' } })] }),
 			chunk({}, {}, "stop")
@@ -241,7 +242,7 @@ describe("tool calls", () => {
 	});
 
 	test("shape C: whole call in one delta, several calls with distinct indices", async () => {
-		const events = await run([
+		const events = await runIncremental([
 			chunk({
 				tool_calls: [
 					call(0, { id: "t1", type: "function", function: { name: "A", arguments: '{"x":1}' } }),
@@ -260,7 +261,7 @@ describe("tool calls", () => {
 	});
 
 	test("a call with no arguments gets an empty object; object arguments are serialized; null arguments are ignored", async () => {
-		const events = await run([
+		const events = await runIncremental([
 			chunk({ tool_calls: [call(0, { id: "t1", function: { name: "Noop" } })] }),
 			chunk({ tool_calls: [call(1, { id: "t2", function: { name: "Obj", arguments: { a: 1 } } })] }),
 			chunk({ tool_calls: [call(2, { id: "t3", function: { name: "Nul", arguments: null } })] }),
@@ -270,7 +271,7 @@ describe("tool calls", () => {
 	});
 
 	test("calls without an index: a new id starts a call, fragments continue the last one", async () => {
-		const events = await run([
+		const events = await runIncremental([
 			chunk({ tool_calls: [{ id: "t1", function: { name: "A", arguments: '{"a"' } }] }),
 			chunk({ tool_calls: [{ function: { arguments: ":1}" } }] }),
 			chunk({ tool_calls: [{ id: "t2", function: { name: "B", arguments: "{}" } }] }),
@@ -281,7 +282,7 @@ describe("tool calls", () => {
 	});
 
 	test("a call without an id gets a generated one; fitted names are restored", async () => {
-		const events = await run(
+		const events = await runIncremental(
 			[chunk({ tool_calls: [call(0, { function: { name: "fit_ab12", arguments: "{}" } })] }), chunk({}, {}, "tool_calls")],
 			{
 				toolNames: { fit_ab12: "mcp.server/tool" }
@@ -291,12 +292,12 @@ describe("tool calls", () => {
 	});
 
 	test("a call whose first delta has no function object still opens a block", async () => {
-		const events = await run([chunk({ tool_calls: [call(0, { id: "t1" })] }), chunk({}, {}, "tool_calls")]);
+		const events = await runIncremental([chunk({ tool_calls: [call(0, { id: "t1" })] }), chunk({}, {}, "tool_calls")]);
 		expect(events[1].data.content_block).toMatchObject({ id: "t1", name: "" });
 	});
 
 	test("text before a tool call and thinking before text close their blocks in order", async () => {
-		const events = await run([
+		const events = await runIncremental([
 			chunk({ reasoning: "hmm" }),
 			chunk({ content: "Checking." }),
 			chunk({ tool_calls: [call(0, { id: "t1", function: { name: "A", arguments: "{}" } })] }),
@@ -311,7 +312,7 @@ describe("tool calls", () => {
 	});
 
 	test("interleaved parallel calls: later calls are buffered and emitted whole after the open block closes", async () => {
-		const events = await run([
+		const events = await runIncremental([
 			chunk({ tool_calls: [call(0, { id: "t1", function: { name: "A", arguments: "{" } })] }),
 			chunk({ tool_calls: [call(1, { id: "t2", function: { name: "B", arguments: '{"b"' } })] }),
 			chunk({
@@ -345,7 +346,7 @@ describe("tool calls", () => {
 	});
 
 	test("buffered calls are flushed before following text", async () => {
-		const events = await run([
+		const events = await runIncremental([
 			chunk({
 				tool_calls: [
 					call(0, { id: "t1", function: { name: "A", arguments: "{}" } }),
@@ -363,7 +364,7 @@ describe("tool calls", () => {
 	});
 
 	test("text arriving while tool blocks are open waits for them, so later fragments never error", async () => {
-		const events = await run([
+		const events = await runIncremental([
 			chunk({
 				tool_calls: [
 					call(0, { id: "t1", function: { name: "A", arguments: "{" } }),
@@ -391,6 +392,137 @@ describe("tool calls", () => {
 		]);
 		expect(types(events)).not.toContain("error");
 		expect(events.at(-2).data.delta.stop_reason).toBe("tool_use");
+	});
+});
+
+describe("tool calls (toolStreaming: buffer, the default)", () => {
+	const call = (index, extra = {}) => ({ index, ...extra });
+	const blocks = (events) =>
+		events
+			.filter((e) => e.event.startsWith("content_block"))
+			.map((e) => [
+				e.event.replace("content_block_", ""),
+				e.data.index,
+				e.data.content_block?.type ?? e.data.delta?.partial_json ?? e.data.delta?.text
+			]);
+
+	test("a call is emitted whole: start, one input_json_delta, stop", async () => {
+		const events = await run([
+			chunk({ tool_calls: [call(0, { id: "t1", function: { name: "Read" } })] }),
+			chunk({ tool_calls: [call(0, { function: { arguments: '{"file_' } })] }),
+			chunk({ tool_calls: [call(0, { function: { arguments: 'path":"/a"}' } })] }),
+			chunk({}, {}, "tool_calls")
+		]);
+		expect(blocks(events)).toEqual([
+			["start", 0, "tool_use"],
+			["delta", 0, '{"file_path":"/a"}'],
+			["stop", 0, undefined]
+		]);
+		expect(events.at(-2).data.delta.stop_reason).toBe("tool_use");
+	});
+
+	test("text that arrives while a call is in progress is emitted before the tool block", async () => {
+		const events = await run([
+			chunk({ tool_calls: [call(0, { id: "t1", function: { name: "A", arguments: "{" } })] }),
+			chunk({ content: "Checking." }),
+			chunk({ reasoning: "hmm" }),
+			chunk({ tool_calls: [call(0, { function: { arguments: '"a":1}' } })] }),
+			chunk({}, {}, "tool_calls")
+		]);
+		expect(events.filter((e) => e.event === "content_block_start").map((e) => e.data.content_block.type)).toEqual([
+			"text",
+			"thinking",
+			"tool_use"
+		]);
+		expect(deltas(events).map((d) => d.partial_json ?? d.text ?? d.thinking ?? d.type)).toEqual([
+			"Checking.",
+			"hmm",
+			"signature_delta",
+			'{"a":1}'
+		]);
+	});
+
+	test("every call is held until the stream finishes and then emitted whole, in index order", async () => {
+		const events = await run([
+			chunk({ tool_calls: [call(1, { id: "t2", function: { name: "B", arguments: '{"b"' } })] }),
+			chunk({ content: "between" }),
+			chunk({ tool_calls: [call(0, { id: "t1", function: { name: "A", arguments: "{}" } })] }),
+			chunk({ tool_calls: [call(1, { function: { arguments: ":1}" } })] }),
+			chunk({}, {}, "tool_calls")
+		]);
+		expect(blocks(events)).toEqual([
+			["start", 0, "text"],
+			["delta", 0, "between"],
+			["stop", 0, undefined],
+			["start", 1, "tool_use"],
+			["delta", 1, "{}"],
+			["stop", 1, undefined],
+			["start", 2, "tool_use"],
+			["delta", 2, '{"b":1}'],
+			["stop", 2, undefined]
+		]);
+		expect(
+			events
+				.filter((e) => e.event === "content_block_start" && e.data.content_block.type === "tool_use")
+				.map((e) => e.data.content_block.id)
+		).toEqual(["t1", "t2"]);
+	});
+
+	test("calls without arguments get an empty object; object arguments and calls without an index work", async () => {
+		const events = await run([
+			chunk({ tool_calls: [{ id: "t1", function: { name: "Noop" } }] }),
+			chunk({ tool_calls: [{ id: "t2", function: { name: "Obj", arguments: { a: 1 } } }] }),
+			chunk({ tool_calls: [{ function: { arguments: null } }] }),
+			chunk({}, {}, "tool_calls")
+		]);
+		expect(deltas(events).map((d) => d.partial_json)).toEqual(["{}", '{"a":1}']);
+	});
+
+	test("interleaved fragments never error", async () => {
+		const events = await run([
+			chunk({ tool_calls: [call(0, { id: "t1", function: { name: "A", arguments: "{" } })] }),
+			chunk({ tool_calls: [call(1, { id: "t2", function: { name: "B", arguments: "{" } })] }),
+			chunk({ tool_calls: [call(0, { function: { arguments: "}" } })] }),
+			chunk({ tool_calls: [call(1, { function: { arguments: "}" } })] }),
+			chunk({}, {}, "tool_calls")
+		]);
+		expect(types(events)).not.toContain("error");
+		expect(deltas(events).map((d) => d.partial_json)).toEqual(["{}", "{}"]);
+		expect(events.at(-2).data.delta.stop_reason).toBe("tool_use");
+	});
+
+	test("a length stop with the highest-index call incomplete is max_tokens", async () => {
+		const events = await run([
+			chunk({
+				tool_calls: [
+					call(1, { id: "t2", function: { name: "B", arguments: '{"x"' } }),
+					call(0, { id: "t1", function: { name: "A", arguments: "{}" } })
+				]
+			}),
+			chunk({}, {}, "length")
+		]);
+		expect(events.at(-2).data.delta.stop_reason).toBe("max_tokens");
+		const complete = await run([
+			chunk({
+				tool_calls: [
+					call(1, { id: "t2", function: { name: "B", arguments: "{}" } }),
+					call(0, { id: "t1", function: { name: "A", arguments: '{"x"' } })
+				]
+			}),
+			chunk({}, {}, "length")
+		]);
+		expect(complete.at(-2).data.delta.stop_reason).toBe("tool_use");
+	});
+
+	test("toolStreaming defaults to buffer and rejects other values", async () => {
+		const wire = [
+			chunk({ tool_calls: [call(0, { id: "t1", function: { name: "A", arguments: "{" } })] }),
+			chunk({ tool_calls: [call(0, { function: { arguments: "}" } })] }),
+			chunk({}, {}, "tool_calls")
+		];
+		expect(deltas(await run(wire)).map((d) => d.partial_json)).toEqual(["{}"]);
+		expect(deltas(await run(wire, undefined, { toolStreaming: "stream" })).map((d) => d.partial_json)).toEqual(["{", "}"]);
+		await expect(collect(stream("", undefined, { toolStreaming: "sideways" }))).rejects.toThrow(/Invalid setting toolStreaming/);
 	});
 });
 
@@ -486,7 +618,7 @@ describe("errors and truncation", () => {
 		const events = await collect(stream(failing()));
 		expect(events.at(-1)).toEqual({ event: "error", data: { type: "error", error: { type: "api_error", message: "socket hang up" } } });
 		const invalid = await collect(stream("data: {nope\n\n"));
-		expect(invalid[0].data.error).toEqual({ type: "overloaded_error", message: expect.stringContaining("not valid JSON") });
+		expect(invalid[0].data.error).toEqual({ type: "api_error", message: expect.stringContaining("not valid JSON") });
 	});
 
 	test("closing the converter early closes the upstream source", async () => {
