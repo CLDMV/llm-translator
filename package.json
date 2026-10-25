@@ -1,0 +1,40 @@
+{
+	"name": "@cldmv/llm-translator",
+	"version": "0.0.0",
+	"description": "LLM-powered translation library.",
+	"type": "module",
+	"license": "Apache-2.0",
+	"author": {
+		"name": "Shinrai",
+		"company": "CLDMV",
+		"email": "git+npm@cldmv.net",
+		"url": "https://cldmv.net"
+	},
+	"contributors": [
+		{
+			"name": "CLDMV",
+			"url": "https://github.com/CLDMV"
+		}
+	],
+	"funding": {
+		"type": "github",
+		"url": "https://github.com/sponsors/shinrai"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"sideEffects": false,
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/CLDMV/llm-translator.git"
+	},
+	"bugs": {
+		"url": "https://github.com/CLDMV/llm-translator/issues"
+	},
+	"homepage": "https://github.com/CLDMV/llm-translator#readme",
+	"keywords": [
+		"llm",
+		"translation",
+		"i18n"
+	]
+}
