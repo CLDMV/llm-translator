@@ -1,7 +1,7 @@
 /**
  *
  *	@Project: @cldmv/llm-translator
- *	@Filename: /src/cjs-shim.cjs
+ *	@Filename: /src/index.cjs
  *	@Date: 2026-10-24T20:20:04-07:00 (1792898404)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
@@ -25,8 +25,9 @@
  * a bare ERR_REQUIRE_ESM, so the check below fails early with a message that
  * says what to do instead.
  *
- * This file is copied verbatim into dist/index.cjs by tsup's onSuccess hook
- * (see tsup.config.mjs) — it never passes through esbuild itself.
+ * tsup.config.mjs copies this file verbatim to dist/index.cjs, so it never
+ * passes through esbuild itself. Its `require("./index.mjs")` resolves to the
+ * sibling src/index.mjs in a checkout and to the bundle in dist/.
  *
  * @module @cldmv/llm-translator
  */

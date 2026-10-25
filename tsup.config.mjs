@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-24T20:22:38-07:00 (1792898558)
+ *	@Last modified time: 2026-10-24T20:37:55-07:00 (1792899475)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -17,9 +17,9 @@
  * @fileoverview Bundler config — produces the published dist/ output from source.
  *
  *  - dist/index.mjs — the real esbuild bundle of src/index.mjs.
- *  - dist/index.cjs — a thin, hand-written shim (src/cjs-shim.cjs) copied in verbatim
- *    by onSuccess below, never bundled by esbuild. It `require()`s ./index.mjs, which
- *    Node loads synchronously because the module has no top-level await.
+ *  - dist/index.cjs — the thin, hand-written CJS entry src/index.cjs, copied verbatim by
+ *    onSuccess below and never bundled by esbuild. It `require()`s ./index.mjs, which Node
+ *    loads synchronously because the module has no top-level await.
  *
  * Sourcemaps are generated for local debugging but excluded from the published
  * tarball via package.json's `files` negation entry.
@@ -44,6 +44,6 @@ export default defineConfig({
 		return { js: ".mjs" };
 	},
 	onSuccess() {
-		copyFileSync("src/cjs-shim.cjs", "dist/index.cjs");
+		copyFileSync("src/index.cjs", "dist/index.cjs");
 	}
 });

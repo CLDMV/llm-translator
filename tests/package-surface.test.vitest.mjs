@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-24T20:22:38-07:00 (1792898558)
+ *	@Last modified time: 2026-10-24T20:38:36-07:00 (1792899516)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -27,5 +27,11 @@ describe("package surface", () => {
 
 	it("exposes only the documented exports", () => {
 		expect(Object.keys(entry).sort()).toEqual(["name"]);
+	});
+
+	it("CJS entry re-exports the ESM entry", () => {
+		const cjs = require("../src/index.cjs");
+		expect(Object.keys(cjs).sort()).toEqual(Object.keys(entry).sort());
+		expect(cjs.name).toBe(entry.name);
 	});
 });
