@@ -66,7 +66,7 @@
 		"prepack": "npm run build",
 		"prepare": "node -e \"import('./.githooks/install.mjs').catch(()=>{})\"",
 		"test": "node tests/run-vitest.mjs && npm run test:dist",
-		"test:dist": "npm run build && node --test tests/dist/entry.test.cjs",
+		"test:dist": "npm run build && node --test tests/cjs/entry.test.cjs",
 		"test:watch": "vitest --config .configs/vitest.config.mjs",
 		"coverage": "node tests/run-vitest.mjs --coverage-quiet",
 		"ci:coverage": "npm run coverage && npm run test:dist",
