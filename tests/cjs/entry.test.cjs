@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-24T20:25:25-07:00 (1792898725)
+ *	@Last modified time: 2026-10-24T21:34:45-07:00 (1792902885)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -32,4 +32,10 @@ test("CJS shim re-exports the ESM bundle", async () => {
 	assert.equal(cjs.name, "@cldmv/llm-translator");
 	assert.deepEqual(Object.keys(cjs).sort(), Object.keys(esm).sort());
 	assert.equal(cjs.name, esm.name);
+});
+
+test("dist/index.mjs imports the root devcheck.mjs instead of bundling it", () => {
+	const bundle = require("node:fs").readFileSync(path.join(dist, "index.mjs"), "utf8");
+	assert.match(bundle, /import\(\s*["']\.\.\/devcheck\.mjs["']\s*\)/);
+	assert.doesNotMatch(bundle, /Development environment not properly configured/);
 });

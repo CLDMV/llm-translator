@@ -34,7 +34,8 @@
 		".": {
 			"llm-translator-dev": {
 				"types": "./types/src/index.d.mts",
-				"import": "./src/index.mjs"
+				"import": "./src/index.mjs",
+				"require": "./src/index.cjs"
 			},
 			"types": "./types/src/index.d.mts",
 			"import": "./dist/index.mjs",
@@ -45,7 +46,8 @@
 	"files": [
 		"dist/",
 		"!dist/**/*.map",
-		"types/"
+		"types/",
+		"!types/devcheck.d.mts"
 	],
 	"repository": {
 		"type": "git",
@@ -66,7 +68,7 @@
 		"prepack": "npm run build",
 		"prepare": "node -e \"import('./.githooks/install.mjs').catch(()=>{})\"",
 		"test": "node tests/run-vitest.mjs && npm run test:dist",
-		"test:dist": "npm run build && node --test tests/cjs/entry.test.cjs",
+		"test:dist": "npm run build && node --conditions=llm-translator-dev --test tests/cjs/entry.test.cjs",
 		"test:watch": "vitest --config .configs/vitest.config.mjs",
 		"coverage": "node tests/run-vitest.mjs --coverage-quiet",
 		"ci:coverage": "npm run coverage && npm run test:dist",

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-24T20:37:55-07:00 (1792899475)
+ *	@Last modified time: 2026-10-24T21:34:46-07:00 (1792902886)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -39,6 +39,9 @@ export default defineConfig({
 	minify: true,
 	keepNames: true,
 	removeNodeProtocol: false,
+	// devcheck.mjs stays at the repo root and is never published; keep the import as-is
+	// so dist/index.mjs loads the same root file instead of bundling it.
+	external: ["../devcheck.mjs"],
 	clean: true,
 	outExtension() {
 		return { js: ".mjs" };
