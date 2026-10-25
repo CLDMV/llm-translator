@@ -84,7 +84,7 @@ const server = await api.server.start({ host: "127.0.0.1", port: 8787, apiKey: "
 console.log(server.url); // http://127.0.0.1:8787
 
 await server.close(); // one server
-await api.server.stop(); // every server started through this translator
+await api.server.stop(); // every server started through this translator; open connections are closed, not waited for
 ```
 
 `start` options are `host`, `port`, `front`, `apiKey`, `bodyLimit` (default 64 MiB, large enough for images and PDFs), `logger` and `allowUnauthenticated`. `front` applies to that server only, so one translator can serve an Anthropic port and an OpenAI port at the same time; `api.status().front` keeps reporting the configured front.

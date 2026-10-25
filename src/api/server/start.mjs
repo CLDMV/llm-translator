@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:01-07:00 (1792958341)
+ *	@Last modified time: 2026-10-25T14:00:49-07:00 (1792962049)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -47,7 +47,9 @@ export async function start(options = {}) {
 			{ code: "unauthenticated_bind", status: 500 }
 		);
 	}
-	const app = fastify({ logger: options.logger ?? false });
+	// forceCloseConnections: stopping the server must not wait for clients that keep a connection open (an SSE stream, or a
+	// keep-alive socket left behind by a client that aborted), otherwise shutdown can hang indefinitely.
+	const app = fastify({ logger: options.logger ?? false, forceCloseConnections: true });
 	app.setNotFoundHandler((request, reply) => {
 		const { status, headers, body } = build(404, `Not found: ${request.method} ${request.url}`);
 		return reply.code(status).headers(headers).send(body);
