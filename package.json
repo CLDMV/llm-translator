@@ -1,6 +1,6 @@
 {
 	"name": "@cldmv/llm-translator",
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"description": "LLM-powered translation library.",
 	"type": "module",
 	"license": "Apache-2.0",
