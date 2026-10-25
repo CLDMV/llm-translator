@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:02-07:00 (1792958342)
+ *	@Last modified time: 2026-10-25T14:05:39-07:00 (1792962339)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -32,7 +32,6 @@ const TICK = Symbol("tick");
 export async function* withPings(source, interval, marker) {
 	const iterator = source[Symbol.asyncIterator]();
 	let pending = null;
-	let finished = false;
 	try {
 		for (;;) {
 			pending ??= iterator.next();
@@ -52,19 +51,12 @@ export async function* withPings(source, interval, marker) {
 				result = await pending;
 			}
 			pending = null;
-			if (result.done) {
-				finished = true;
-				return;
-			}
+			if (result.done) return;
 			yield result.value;
 		}
-	} catch (error) {
-		finished = true;
-		throw error;
 	} finally {
-		if (!finished) {
-			pending?.catch(() => {});
-			Promise.resolve(iterator.return?.()).catch(() => {});
-		}
+		// Closing a source that already finished or failed is a no-op, so no bookkeeping is needed.
+		pending?.catch(() => {});
+		Promise.resolve(iterator.return?.()).catch(() => {});
 	}
 }

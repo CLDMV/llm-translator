@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:01-07:00 (1792958341)
+ *	@Last modified time: 2026-10-25T14:05:38-07:00 (1792962338)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -50,18 +50,6 @@ export type UpstreamConfig = {
      */
     version?: string;
 };
-/**
- * @typedef {object} UpstreamConfig
- * @property {string} [name] Display name, defaults to `upstream-<index>`.
- * @property {string} url Base URL of the upstream server (`http://host:8000`).
- * @property {string} [apiKey] Key sent to the upstream.
- * @property {Record<string,string>} [headers] Extra headers sent to the upstream.
- * @property {string} [backend] Driver name, or `"auto"` (default) to detect.
- * @property {string[]} [models] Models this upstream serves (routing).
- * @property {boolean} [default] Marks the fallback upstream.
- * @property {object} [settings] Settings overrides for this upstream.
- * @property {string} [version] Server version (skips nothing, but feeds version-mapped driver settings).
- */
 /**
  * Normalize one upstream entry into the runtime endpoint record.
  * @param {string | UpstreamConfig} entry - Upstream URL or config object.

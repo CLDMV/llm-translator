@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:02-07:00 (1792958342)
+ *	@Last modified time: 2026-10-25T14:05:41-07:00 (1792962341)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -151,7 +151,7 @@ describe("lib/ping", () => {
 		expect(out).toEqual([1, 1]);
 	});
 
-	it("propagates source errors without calling return", async () => {
+	it("propagates source errors (closing the failed source is harmless)", async () => {
 		let returned = false;
 		const failing = {
 			[Symbol.asyncIterator]: () => ({
@@ -163,7 +163,7 @@ describe("lib/ping", () => {
 			})
 		};
 		await expect(withPings(failing, 10, "P").next()).rejects.toThrow("source failed");
-		expect(returned).toBe(false);
+		expect(returned).toBe(true);
 	});
 
 	it("swallows a pending read that fails after an early exit", async () => {

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:01-07:00 (1792958341)
+ *	@Last modified time: 2026-10-25T14:05:38-07:00 (1792962338)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -33,6 +33,19 @@ import { TranslatorError } from "./errors.mjs";
  */
 
 /**
+ * Upstream base URL without trailing slashes and without a trailing `/v1` (driver paths already include it).
+ * A loop instead of a regular expression keeps the cost linear for any input.
+ * @param {string} url - Configured URL.
+ * @returns {string} Normalized URL.
+ */
+function baseUrl(url) {
+	let end = url.length;
+	while (url[end - 1] === "/") end--;
+	const trimmed = url.slice(0, end);
+	return trimmed.endsWith("/v1") ? trimmed.slice(0, -3) : trimmed;
+}
+
+/**
  * Normalize one upstream entry into the runtime endpoint record.
  * @param {string | UpstreamConfig} entry - Upstream URL or config object.
  * @param {number} index - Position in the list.
@@ -45,7 +58,7 @@ export function endpoint(entry, index) {
 	}
 	return {
 		name: raw.name ?? `upstream-${index}`,
-		url: raw.url.replace(/\/+$/, "").replace(/\/v1$/, ""),
+		url: baseUrl(raw.url),
 		apiKey: raw.apiKey,
 		headers: { ...raw.headers },
 		backend: raw.backend ?? "auto",
