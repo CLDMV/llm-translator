@@ -1,6 +1,6 @@
 {
 	"name": "@cldmv/llm-translator",
-	"version": "0.0.0",
+	"version": "0.1.0",
 	"description": "LLM-powered translation library.",
 	"type": "module",
 	"license": "Apache-2.0",
@@ -24,6 +24,31 @@
 		"access": "public"
 	},
 	"sideEffects": false,
+	"engines": {
+		"node": ">=20.19.0"
+	},
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.mjs",
+	"types": "./types/src/index.d.mts",
+	"exports": {
+		".": {
+			"llm-translator-dev": {
+				"types": "./types/src/index.d.mts",
+				"import": "./src/index.mjs",
+				"require": "./src/index.cjs"
+			},
+			"types": "./types/src/index.d.mts",
+			"import": "./dist/index.mjs",
+			"require": "./dist/index.cjs"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist/",
+		"!dist/**/*.map",
+		"types/",
+		"!types/devcheck.d.mts"
+	],
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/CLDMV/llm-translator.git"
@@ -36,5 +61,43 @@
 		"llm",
 		"translation",
 		"i18n"
-	]
+	],
+	"scripts": {
+		"build": "tsup",
+		"build:ci": "npm run lint && npm run format:check && npm run types:build && npm run build",
+		"prepack": "npm run build",
+		"prepare": "node -e \"import('./.githooks/install.mjs').catch(()=>{})\"",
+		"test": "node tests/run-vitest.mjs && npm run test:dist",
+		"test:dist": "npm run build && node --conditions=llm-translator-dev --test tests/cjs/entry.test.cjs",
+		"test:watch": "vitest --config .configs/vitest.config.mjs",
+		"coverage": "node tests/run-vitest.mjs --coverage-quiet",
+		"ci:coverage": "npm run coverage && npm run test:dist",
+		"types:build": "tsc -p .configs/tsconfig.json",
+		"types:check": "tsc -p .configs/tsconfig.json --noEmit",
+		"lint": "eslint --config .configs/eslint.config.mjs .",
+		"lint:fix": "eslint --config .configs/eslint.config.mjs . --fix",
+		"format": "prettier --config .configs/.prettierrc --write .",
+		"format:check": "prettier --config .configs/.prettierrc --check .",
+		"fix:headers": "fix-headers --config .configs/fix-headers.json"
+	},
+	"devDependencies": {
+		"@cldmv/configs": "^1.3.0",
+		"@cldmv/eslint-plugin-jsonv": "^1.0.17",
+		"@cldmv/fix-headers": "^2.2.2",
+		"@cldmv/jsonv": "^1.1.5",
+		"@cldmv/prettier-plugin-jsonv": "^1.1.4",
+		"@cldmv/vitest-runner": "^1.5.4",
+		"@eslint/css": "^2.0.1",
+		"@eslint/js": "^10.0.1",
+		"@eslint/json": "^2.1.1",
+		"@eslint/markdown": "^8.0.3",
+		"@types/node": "^26.6.5",
+		"@vitest/coverage-v8": "^5.0.5",
+		"eslint": "^10.13.0",
+		"globals": "^17.13.0",
+		"prettier": "^3.9.10",
+		"tsup": "^9.0.0",
+		"typescript": "^7.0.2",
+		"vitest": "^5.0.5"
+	}
 }
