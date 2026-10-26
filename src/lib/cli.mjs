@@ -160,7 +160,10 @@ export async function main(argv, env = process.env, io = processIo, lib = {}) {
 		for (const upstream of report.upstreams ?? []) {
 			const version = upstream.version ?? "unknown";
 			const inline = upstream.probed?.inlineSystem ?? "auto";
-			io.out(`  upstream ${upstream.name} ${upstream.url}: driver=${upstream.driver} version=${version} inlineSystem=${inline}`);
+			const images = upstream.probed?.images ?? "default";
+			io.out(
+				`  upstream ${upstream.name} ${upstream.url}: driver=${upstream.driver} version=${version} inlineSystem=${inline} images=${images}`
+			);
 		}
 		await /** @type {Promise<void>} */ (new Promise((resolve) => io.onSignal(() => resolve())));
 		await api.server.stop();

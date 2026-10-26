@@ -171,7 +171,7 @@ describe("main", () => {
 			status: () => ({
 				front: "anthropic",
 				upstreams: [
-					{ name: "gpu", url: "http://gpu:8000", driver: "vllm", version: "0.32.0", probed: { inlineSystem: "user" } },
+					{ name: "gpu", url: "http://gpu:8000", driver: "vllm", version: "0.32.0", probed: { inlineSystem: "user", images: false } },
 					{ name: "other", url: "http://other:1", driver: "compatible" }
 				]
 			}),
@@ -182,8 +182,8 @@ describe("main", () => {
 		await vi.waitFor(() => expect(io.handlers).toHaveLength(1), { timeout: 30000 });
 		expect(io.lines).toEqual([
 			"llm-translator (anthropic front) listening on http://127.0.0.1:1",
-			"  upstream gpu http://gpu:8000: driver=vllm version=0.32.0 inlineSystem=user",
-			"  upstream other http://other:1: driver=compatible version=unknown inlineSystem=auto"
+			"  upstream gpu http://gpu:8000: driver=vllm version=0.32.0 inlineSystem=user images=false",
+			"  upstream other http://other:1: driver=compatible version=unknown inlineSystem=auto images=default"
 		]);
 		io.signal();
 		expect(await running).toBe(0);
