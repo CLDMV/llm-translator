@@ -148,10 +148,12 @@ Scope: the library translates between Anthropic Messages and OpenAI Chat Complet
 - **Decision.** Upstream errors are returned in the client protocol's shape with status codes mapped one to one (`retry-after` kept on 429). `TranslatorError` carries code, status, type and param and renders either shape.
 - **Error type names.** HTTP status codes are never changed, because they drive client retries. Only the Anthropic `error.type` follows this table: 400 `invalid_request_error`, 401 `authentication_error`, 403 `permission_error`, 404 `not_found_error`, 413 `request_too_large`, 429 `rate_limit_error`, 503 and 529 `overloaded_error`, and every other status (including 502, 504 and the translator's own 502 errors such as `invalid_stream_data` and `invalid_upstream_response`) `api_error`. This supersedes the earlier mapping of 502 and 504 to `overloaded_error`.
 
-### D-24 Pings belong to the SSE writer
+### D-24 Keep-alives belong to the SSE writer and must be real stream events
 
-- **Decision.** The server and the `sse` helper emit `ping` events on a timer while the upstream is silent (`pingInterval`, 0 disables). The pure converters never emit them.
-- **Rationale.** Claude Code's idle watchdog needs them during long thinking, and vLLM's own bridge sends none; timing is a transport concern.
+- **Context.** Claude Code treats a stream with no real event for 300 seconds as dead, aborts it and resends the request; `event: ping` does not count as an event for that watchdog (observed in its debug log and reproduced against a delayed fake upstream). A local model can stay silent far longer than that during prefill, and vLLM only sends response headers with the first token.
+- **Decision.** The server and the `sse` helper write a keep-alive whenever the upstream is silent for `pingInterval` (0 disables). On the Anthropic front it is an empty delta of the open content block's type; `event: ping` is the fallback when no block is open. When the reply has to be committed before the upstream answers, `message_start` and an empty thinking block are sent at once so there is an open block for the keep-alives, and the upstream's blocks are shifted by one index afterwards. The pure converters never emit keep-alives.
+- **Rationale.** Empty deltas are valid, change no content and are counted as activity by the client; timing is a transport concern. vLLM's own Anthropic bridge sends none and would hit the same watchdog.
+- **Alternatives.** Plain `ping` events (ignored by the watchdog); raising Claude Code's timeouts (capped, and requires client configuration); buffering the whole reply (loses streaming).
 
 ### D-25 OpenAI to Anthropic requests drop assistant reasoning
 
