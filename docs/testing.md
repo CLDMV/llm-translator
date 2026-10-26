@@ -71,3 +71,23 @@ Isolation rules the scripts enforce, and callers must keep:
 - `claude.sh` runs `env -i` with `HOME` and the XDG directories pointing into `tmp/e2e/cc-home`, so the run never reads or modifies a real Claude Code configuration, credentials or history.
 - `--dangerously-skip-permissions` is never added by the scripts. It is only acceptable in this setup, where the working directory is the throwaway `cc-work` project and the home is scratch; an unattended tool call can then only touch scratch files.
 - Stop the translator, the proxy and the fake server when done (select their PIDs explicitly; a pattern-matching `pkill -f` can match its own shell). Leave the vLLM container running or remove it with `docker rm -f llmt-vllm`.
+
+## Untested paths
+
+Everything below needs a real backend, client or API key and has not been run. The runs are tracked under the epic [Real-backend validation](https://github.com/CLDMV/llm-translator/issues/62). So far only single `-p` print-mode Claude Code runs against Qwen3-1.7B on a CPU vLLM (hermes and qwen3 parsers) were done.
+
+| Path                                                                                                  | Issue                                                    |
+| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Interactive Claude Code session: long multi-turn run, auto-compaction, subagents, the interactive UI  | [#63](https://github.com/CLDMV/llm-translator/issues/63) |
+| A capable model (Qwen3-8B or larger, ideally on a GPU) and other model families and vLLM tool parsers | [#64](https://github.com/CLDMV/llm-translator/issues/64) |
+| Claude Code default tool search (`ENABLE_TOOL_SEARCH` unset) with a model that calls tools            | [#65](https://github.com/CLDMV/llm-translator/issues/65) |
+| Native `claude-*` route against the real Anthropic API (headers, streaming, pings, `count_tokens`)    | [#66](https://github.com/CLDMV/llm-translator/issues/66) |
+| OpenAI front to the Anthropic API with the official `openai` SDK                                      | [#67](https://github.com/CLDMV/llm-translator/issues/67) |
+| OpenAI front to vLLM with the official `openai` SDK                                                   | [#68](https://github.com/CLDMV/llm-translator/issues/68) |
+| Anthropic front to the official OpenAI API                                                            | [#69](https://github.com/CLDMV/llm-translator/issues/69) |
+| Image-refusal wordings of non-vLLM backends (`src/lib/images.mjs`)                                    | [#70](https://github.com/CLDMV/llm-translator/issues/70) |
+| Throughput and latency benchmark on a GPU host                                                        | [#71](https://github.com/CLDMV/llm-translator/issues/71) |
+
+Drivers for llama.cpp, Ollama, SGLang and LM Studio ([#33](https://github.com/CLDMV/llm-translator/issues/33), [#34](https://github.com/CLDMV/llm-translator/issues/34), [#36](https://github.com/CLDMV/llm-translator/issues/36), [#37](https://github.com/CLDMV/llm-translator/issues/37)) carry the same note: they need real-backend validation when they are written. Tool search handling is also tracked in [#56](https://github.com/CLDMV/llm-translator/issues/56).
+
+Runs that need an API key read it from a gitignored `tools/e2e/.env.local` (`.env.local` is already in `.gitignore`); the key is never committed, logged or printed.
