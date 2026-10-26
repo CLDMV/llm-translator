@@ -119,6 +119,8 @@ describe("parse / merge", () => {
 		expect(merged.server).toEqual({ port: 5 });
 		expect(merge({ upstream: ["http://u"] }, {}, {}).translator.upstreams).toEqual([{ url: "http://u", apiKey: undefined }]);
 		expect(merge({ model: ["a=b"] }, {}, {}).translator.aliases).toEqual({ a: "b" });
+		expect(() => merge({ model: ["nope"] }, {}, {})).toThrow(/--model expects alias=target/);
+		expect(() => merge({ model: ["=target"] }, {}, {})).toThrow(/--model expects alias=target/);
 	});
 });
 
@@ -161,6 +163,30 @@ describe("main", () => {
 		expect(await running).toBe(0);
 		expect(calls.map((call) => call[0])).toEqual(["create", "start", "stop", "shutdown"]);
 		expect(calls[1][1]).toEqual({ port: 1234 });
+	});
+
+	it("prints one line per upstream with the detected driver, version and inline-system probe result", async () => {
+		const api = {
+			server: { start: async () => ({ url: "http://127.0.0.1:1" }), stop: async () => {} },
+			status: () => ({
+				front: "anthropic",
+				upstreams: [
+					{ name: "gpu", url: "http://gpu:8000", driver: "vllm", version: "0.32.0", probed: { inlineSystem: "user" } },
+					{ name: "other", url: "http://other:1", driver: "compatible" }
+				]
+			}),
+			slothlet: { shutdown: async () => {} }
+		};
+		const io = fakeIo();
+		const running = main(["--upstream", "http://u"], {}, io, { createTranslator: async () => api });
+		await vi.waitFor(() => expect(io.handlers).toHaveLength(1));
+		expect(io.lines).toEqual([
+			"llm-translator (anthropic front) listening on http://127.0.0.1:1",
+			"  upstream gpu http://gpu:8000: driver=vllm version=0.32.0 inlineSystem=user",
+			"  upstream other http://other:1: driver=compatible version=unknown inlineSystem=auto"
+		]);
+		io.signal();
+		expect(await running).toBe(0);
 	});
 
 	it("runs a real translator and server against a fake vLLM, reading the config file named by the environment", async () => {

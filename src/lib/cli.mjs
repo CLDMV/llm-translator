@@ -155,7 +155,13 @@ export async function main(argv, env = process.env, io = processIo, lib = {}) {
 		const create = lib.createTranslator ?? (await import("../index.mjs")).createTranslator;
 		const api = await create(translator);
 		const running = await api.server.start(server);
-		io.out(`llm-translator (${api.status().front} front) listening on ${running.url}`);
+		const report = api.status();
+		io.out(`llm-translator (${report.front} front) listening on ${running.url}`);
+		for (const upstream of report.upstreams ?? []) {
+			const version = upstream.version ?? "unknown";
+			const inline = upstream.probed?.inlineSystem ?? "auto";
+			io.out(`  upstream ${upstream.name} ${upstream.url}: driver=${upstream.driver} version=${version} inlineSystem=${inline}`);
+		}
 		await /** @type {Promise<void>} */ (new Promise((resolve) => io.onSignal(() => resolve())));
 		await api.server.stop();
 		await api.slothlet.shutdown();
