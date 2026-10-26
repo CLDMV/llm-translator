@@ -172,6 +172,23 @@ describe("reasoning", () => {
 		expect(events[6].data).toMatchObject({ index: 1, content_block: { type: "text" } });
 	});
 
+	test("blank lines between the reasoning and the answer are dropped, but not elsewhere", async () => {
+		const after = await run([
+			chunk({ reasoning: "hmm" }),
+			chunk({ content: "\n" }),
+			chunk({ content: "\n\nAnswer" }),
+			chunk({ content: "\n\nmore" }),
+			chunk({}, {}, "stop")
+		]);
+		expect(
+			deltas(after)
+				.filter((d) => d.type === "text_delta")
+				.map((d) => d.text)
+		).toEqual(["Answer", "\n\nmore"]);
+		const plain = await run([chunk({ content: "\n\nAnswer" }), chunk({}, {}, "stop")]);
+		expect(deltas(plain)).toEqual([{ type: "text_delta", text: "\n\nAnswer" }]);
+	});
+
 	test("<think> tags in content, at any chunk size", async () => {
 		const content = "<think>plan the work</think>\n\nDone.";
 		for (const size of [1, 2, 5, 100]) {

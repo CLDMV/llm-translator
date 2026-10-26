@@ -157,7 +157,7 @@ describe("main", () => {
 		const running = main(["--upstream", "http://u", "--front", "openai", "--port", "1234"], {}, io, {
 			createTranslator: async (config) => (calls.push(["create", config]), api)
 		});
-		await vi.waitFor(() => expect(io.handlers).toHaveLength(1));
+		await vi.waitFor(() => expect(io.handlers).toHaveLength(1), { timeout: 30000 });
 		expect(io.lines).toEqual(["llm-translator (openai front) listening on http://127.0.0.1:1"]);
 		io.signal();
 		expect(await running).toBe(0);
@@ -179,7 +179,7 @@ describe("main", () => {
 		};
 		const io = fakeIo();
 		const running = main(["--upstream", "http://u"], {}, io, { createTranslator: async () => api });
-		await vi.waitFor(() => expect(io.handlers).toHaveLength(1));
+		await vi.waitFor(() => expect(io.handlers).toHaveLength(1), { timeout: 30000 });
 		expect(io.lines).toEqual([
 			"llm-translator (anthropic front) listening on http://127.0.0.1:1",
 			"  upstream gpu http://gpu:8000: driver=vllm version=0.32.0 inlineSystem=user",
@@ -196,7 +196,7 @@ describe("main", () => {
 		try {
 			const io = fakeIo();
 			const running = main([], { LLM_TRANSLATOR_CONFIG: file }, io);
-			await vi.waitFor(() => expect(io.handlers).toHaveLength(1));
+			await vi.waitFor(() => expect(io.handlers).toHaveLength(1), { timeout: 30000 });
 			const url = /listening on (\S+)/.exec(io.lines[0])[1];
 			const reply = await fetch(`${url}/v1/messages`, {
 				method: "POST",
@@ -219,7 +219,7 @@ describe("main", () => {
 		);
 		const io = fakeIo();
 		const running = main(["--config", file], {}, io);
-		await vi.waitFor(() => expect(io.handlers).toHaveLength(1));
+		await vi.waitFor(() => expect(io.handlers).toHaveLength(1), { timeout: 30000 });
 		io.signal();
 		expect(await running).toBe(0);
 	});

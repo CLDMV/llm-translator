@@ -49,7 +49,10 @@ export function response(completion, state, settings) {
 	let reasoning = reasoningOf(message);
 	let text = typeof message.content === "string" ? message.content : "";
 	if (reasoning === "" && s.thinkTags) ({ reasoning, text } = splitThink(text));
-	if (reasoning !== "") content.push({ type: "thinking", thinking: reasoning, signature: sign() });
+	if (reasoning !== "") {
+		content.push({ type: "thinking", thinking: reasoning, signature: sign() });
+		text = text.trimStart();
+	}
 	if (text === "" && typeof message.refusal === "string") text = message.refusal;
 	if (text !== "") content.push({ type: "text", text });
 

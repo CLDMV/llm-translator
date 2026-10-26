@@ -63,6 +63,12 @@ describe("openai chat completion to anthropic message", () => {
 		}
 	});
 
+	test("blank lines between reasoning and answer are dropped", () => {
+		const out = response(completion({ content: "\n\nAnswer\n", reasoning: "step" }));
+		expect(out.content[1]).toEqual({ type: "text", text: "Answer\n" });
+		expect(response(completion({ content: "\n\nAnswer" })).content[0].text).toBe("\n\nAnswer");
+	});
+
 	test("<think> tags in content (no reasoning parser)", () => {
 		const out = response(completion({ content: "<think>plan it</think>\n\nThe answer" }));
 		expect(out.content.map((b) => b.type)).toEqual(["thinking", "text"]);

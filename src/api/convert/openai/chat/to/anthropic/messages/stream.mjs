@@ -58,6 +58,8 @@ export async function* stream(source, state, settings) {
 	let matchedStop = null;
 	let done = false;
 	let lastTool = 0;
+	// True after reasoning and until the answer has its first visible character: leading whitespace is dropped.
+	let trimNext = false;
 	// Text and reasoning that arrives while a tool block is open waits until the tool blocks are done, because blocks stream one at a time.
 	const held = [];
 
@@ -112,7 +114,10 @@ export async function* stream(source, state, settings) {
 	}
 
 	function* piece(kind, text) {
+		// Models put blank lines between their reasoning and the answer; Anthropic's answers do not start with them.
+		if (kind === "text" && trimNext) text = text.trimStart();
 		if (text === "") return;
+		trimNext = kind === "thinking";
 		if (open?.kind === "tool") {
 			held.push({ kind, text });
 			return;
