@@ -256,6 +256,29 @@ describe("server behavior", () => {
 		await app.close();
 	});
 
+	it("reports a failure that happens after the stream was committed as an in-band error event", async () => {
+		for (const [host, driver, expected] of [
+			["latecrash.test", "latecrash", { type: "api_error", message: "Internal server error" }],
+			["lateknown.test", "lateknown", { type: "invalid_request_error", message: "late translator error" }]
+		]) {
+			const api = await make({
+				upstreams: [{ url: `http://${host}` }],
+				transport: async () => new Response("{}"),
+				settings: { pingInterval: 30 }
+			});
+			await api.slothlet.api.add(["driver", driver], new URL(`../fixtures/driver/${driver}`, import.meta.url).pathname);
+			await api.detect();
+			const app = Fastify({ logger: false });
+			await app.register(api.server.plugin);
+			const reply = await app.inject({ method: "POST", url: "/v1/messages", payload: { ...hello, stream: true } });
+			expect(reply.statusCode).toBe(200);
+			const last = reply.body.trim().split("\n\n").at(-1);
+			expect(last.startsWith("event: error")).toBe(true);
+			expect(JSON.parse(last.split("data: ")[1]).error).toMatchObject(expected);
+			await app.close();
+		}
+	});
+
 	it("accepts a valid Bearer key next to an empty x-api-key", async () => {
 		const upstream = await fakeVllm();
 		try {

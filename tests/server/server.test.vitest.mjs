@@ -89,8 +89,21 @@ describe("server (anthropic front)", () => {
 			expect(reply.headers.get("content-type")).toMatch(/^text\/event-stream/);
 			const out = frames(await reply.text());
 			const names = out.map((frame) => frame.event);
-			expect(names.filter((name) => name === "ping").length).toBeGreaterThanOrEqual(2);
-			expect(names.indexOf("ping")).toBeLessThan(names.indexOf("message_start"));
+			// message_start and an empty thinking block are sent as soon as the reply is committed (before any token); the
+			// keep-alives while the upstream is silent are empty thinking deltas (Claude Code ignores `ping` events).
+			expect(names[0]).toBe("message_start");
+			expect(names.filter((name) => name === "message_start")).toHaveLength(1);
+			expect(out[0].data.message.model).toBe(hello.model);
+			expect(out[1].data).toMatchObject({ index: 0, content_block: { type: "thinking" } });
+			const keepAlives = out.filter(
+				(frame) => frame.event === "content_block_delta" && frame.data.index === 0 && frame.data.delta.type === "thinking_delta"
+			);
+			expect(keepAlives.length).toBeGreaterThanOrEqual(2);
+			expect(keepAlives.every((frame) => frame.data.delta.thinking === "")).toBe(true);
+			expect(names.filter((name) => name === "ping")).toHaveLength(0);
+			// The upstream's own blocks follow, shifted by one index.
+			const first = out.find((frame, position) => position > 1 && frame.event === "content_block_start");
+			expect(first.data.index).toBe(1);
 			expect(names.at(-2)).toBe("message_delta");
 			expect(names.at(-1)).toBe("message_stop");
 			expect(out.find((frame) => frame.event === "message_delta").data.delta.stop_reason).toBe("end_turn");
@@ -271,7 +284,7 @@ describe("server (anthropic front)", () => {
 			const reply = await post(`${server.url}/v1/messages`, { ...hello, stream: true });
 			expect(reply.status).toBe(200);
 			const out = frames(await reply.text());
-			expect(out.filter((frame) => frame.event === "ping").length).toBeGreaterThanOrEqual(1);
+			expect(out.filter((frame) => frame.event === "content_block_delta").length).toBeGreaterThanOrEqual(1);
 			expect(out.at(-1)).toEqual({
 				event: "error",
 				data: { type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 150 tokens > 100 maximum" } }
@@ -576,9 +589,9 @@ describe("end to end: Claude Code shaped traffic through the server to a fake vL
 			expect(reply.status).toBe(200);
 			const out = frames(await reply.text());
 			const names = out.map((frame) => frame.event);
-			expect(names).toContain("ping");
-			expect(names.filter((name) => name !== "ping")).toEqual([
-				"message_start",
+			const keepAliveEnd = out.findIndex((frame) => frame.event === "content_block_stop" && frame.data.index === 0);
+			expect(names.slice(0, 2)).toEqual(["message_start", "content_block_start"]);
+			expect(names.slice(keepAliveEnd + 1)).toEqual([
 				"content_block_start",
 				"content_block_delta",
 				"content_block_delta",

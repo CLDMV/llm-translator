@@ -59,6 +59,41 @@ describe("sse.ping", () => {
 		expect(out.at(-1).event).toBe("content_block_delta");
 	});
 
+	it("sends empty deltas on the open content block, because Claude Code ignores ping events", async () => {
+		const api = await make({ ...config, settings: { pingInterval: 15 } });
+		const block = (index, type) => ({
+			event: "content_block_start",
+			data: { type: "content_block_start", index, content_block: { type } }
+		});
+		const stop = (index) => ({ event: "content_block_stop", data: { type: "content_block_stop", index } });
+		const events = (async function* () {
+			for (const [index, type] of [
+				[0, "thinking"],
+				[1, "text"],
+				[2, "tool_use"],
+				[3, "server_tool_use"]
+			]) {
+				yield block(index, type);
+				await pause(60);
+				yield stop(index);
+			}
+			await pause(60);
+			yield { event: "message_stop", data: {} };
+		})();
+		const out = await collect(api.sse.ping(events));
+		const during = (index) =>
+			out.filter((event) => event.event === "content_block_delta" && event.data.index === index).map((event) => event.data.delta);
+		expect(during(0).length).toBeGreaterThanOrEqual(1);
+		expect(during(0).every((delta) => delta.type === "thinking_delta" && delta.thinking === "")).toBe(true);
+		expect(during(1).every((delta) => delta.type === "text_delta" && delta.text === "")).toBe(true);
+		expect(during(1).length).toBeGreaterThanOrEqual(1);
+		expect(during(2).every((delta) => delta.type === "input_json_delta" && delta.partial_json === "")).toBe(true);
+		expect(during(2).length).toBeGreaterThanOrEqual(1);
+		// A block type without a no-op delta, and silence between blocks, fall back to a plain ping.
+		expect(during(3)).toEqual([]);
+		expect(out.filter((event) => event.event === "ping").length).toBeGreaterThanOrEqual(2);
+	});
+
 	it("yields comment frames for an OpenAI front", async () => {
 		const api = await make({ ...config, front: "openai", settings: { pingInterval: 20 } });
 		const out = await collect(api.sse.ping(slow(70, 1)));

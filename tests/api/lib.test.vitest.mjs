@@ -145,6 +145,14 @@ describe("lib/ping", () => {
 		expect(out.filter((item) => item === "P").length).toBeGreaterThanOrEqual(2);
 	});
 
+	it("calls a function marker each time a ping is due", async () => {
+		let calls = 0;
+		const out = [];
+		for await (const item of withPings(source([60]), 15, () => `P${++calls}`)) out.push(item);
+		expect(out.slice(0, 2)).toEqual(["P1", "P2"]);
+		expect(out.at(-1)).toBe(60);
+	});
+
 	it("passes items through untouched when pings are off", async () => {
 		const out = [];
 		for await (const item of withPings(source([1, 1]), 0, "P")) out.push(item);

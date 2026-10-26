@@ -26,7 +26,7 @@ const TICK = Symbol("tick");
  * @template T
  * @param {AsyncIterable<T>} source - Event source.
  * @param {number} interval - Silence in ms before a ping; `0` (or less) disables pings.
- * @param {*} marker - Value yielded as the ping.
+ * @param {*} marker - Value yielded as the ping, or a function called each time one is due that returns it.
  * @returns {AsyncGenerator<T | *>} Source events interleaved with pings.
  */
 export async function* withPings(source, interval, marker) {
@@ -44,7 +44,7 @@ export async function* withPings(source, interval, marker) {
 				result = await Promise.race([pending, tick]);
 				clearTimeout(timer);
 				if (result === TICK) {
-					yield marker;
+					yield typeof marker === "function" ? marker() : marker;
 					continue;
 				}
 			} else {

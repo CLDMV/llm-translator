@@ -19,6 +19,8 @@
  */
 import { timingSafeEqual } from "node:crypto";
 import { TranslatorError } from "./errors.mjs";
+import { messageId } from "./ids.mjs";
+import { sign } from "./thinking.mjs";
 
 const BODY_LIMIT = 64 * 1024 * 1024;
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
@@ -50,12 +52,52 @@ async function settle(promise, interval) {
  * as a final error event (the HTTP status is already 200, so the error travels in-band).
  * @param {Promise<any>} sending - Pending `send` result.
  * @param {any} api - Captured translator parts.
+ * @param {string} [model] - Model the client asked for (used in the early `message_start`).
  * @returns {AsyncGenerator<any>} Client events.
  */
-async function* late(sending, api) {
+async function* late(sending, api, model) {
+	const anthropic = api.front === "anthropic";
+	if (anthropic) {
+		// Anthropic's API opens every stream with `message_start` before any token exists, and clients (Claude Code) treat
+		// the first real event as the sign that the request was accepted. Send it now, with the model the client asked
+		// for, together with an empty thinking block that the keep-alives (see `sse.ping`) can ride on while the upstream
+		// is still working. The block is closed when the upstream answers and its own blocks are shifted by one index.
+		yield {
+			event: "message_start",
+			data: {
+				type: "message_start",
+				message: {
+					id: messageId(),
+					type: "message",
+					role: "assistant",
+					model,
+					content: [],
+					stop_reason: null,
+					stop_sequence: null,
+					usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+				}
+			}
+		};
+		yield {
+			event: "content_block_start",
+			data: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }
+		};
+	}
 	const result = await sending;
+	if (anthropic) {
+		yield {
+			event: "content_block_delta",
+			data: { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: sign() } }
+		};
+		yield { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } };
+	}
 	if (result.stream) {
-		yield* result.stream;
+		for await (const event of result.stream) {
+			if (!anthropic) yield event;
+			else if (event.event !== "message_start") {
+				yield typeof event.data?.index === "number" ? { ...event, data: { ...event.data, index: event.data.index + 1 } } : event;
+			}
+		}
 		return;
 	}
 	yield* failure(api, result.body);
@@ -95,7 +137,13 @@ async function stream(reply, api, controller, events, status = 200, headers = SS
 	} catch (error) {
 		if (!controller.signal.aborted) {
 			const known = error instanceof TranslatorError;
-			const { body } = api.build(known ? error.status : 502, error.message, known ? { type: error.type, code: error.code } : {});
+			// Details of unexpected failures stay in the server log, as for errors that happen before the stream is committed.
+			if (!known) reply.log.error(error);
+			const { body } = api.build(
+				known ? error.status : 502,
+				known ? error.message : "Internal server error",
+				known ? { type: error.type, code: error.code } : {}
+			);
 			for (const event of failure(api, body)) raw.write(api.encode(event));
 		}
 	}
@@ -211,7 +259,7 @@ export function register(fastify, options, captured) {
 		const gone = new Promise((resolve) => controller.signal.addEventListener("abort", () => resolve(GONE), { once: true }));
 		const result = await settle(Promise.race([sending, gone]), request.body?.stream === true ? api.interval : 0);
 		if (result === GONE) return reply;
-		if (result === STALLED) return stream(reply, api, controller, late(sending, api));
+		if (result === STALLED) return stream(reply, api, controller, late(sending, api, request.body?.model));
 		if (!result.stream) return reject(reply, result);
 		return stream(reply, api, controller, result.stream, result.status, result.headers);
 	});
