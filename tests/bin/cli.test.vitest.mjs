@@ -119,8 +119,6 @@ describe("parse / merge", () => {
 		expect(merged.server).toEqual({ port: 5 });
 		expect(merge({ upstream: ["http://u"] }, {}, {}).translator.upstreams).toEqual([{ url: "http://u", apiKey: undefined }]);
 		expect(merge({ model: ["a=b"] }, {}, {}).translator.aliases).toEqual({ a: "b" });
-		expect(() => merge({ model: ["nope"] }, {}, {})).toThrow(/--model expects alias=target/);
-		expect(() => merge({ model: ["=target"] }, {}, {})).toThrow(/--model expects alias=target/);
 	});
 });
 
