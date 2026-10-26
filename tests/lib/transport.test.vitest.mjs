@@ -56,7 +56,7 @@ describe("transport", () => {
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ echo: "" });
 		expect(res.headers.getSetCookie()).toEqual(["a=1", "b=2"]);
-		expect(seen.at(-1)).toMatchObject({ method: "GET", headers: { "accept-encoding": "identity" } });
+		expect(seen.at(-1)).toMatchObject({ method: "GET", headers: { "accept-encoding": "identity", connection: "close" } });
 		expect(seen.at(-1).headers).not.toHaveProperty("content-length");
 	});
 

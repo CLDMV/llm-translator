@@ -75,8 +75,11 @@ async function bind(c, endpoint, network, probe) {
 	endpoint.facts = facts;
 	endpoint.driverSettings = (await driver.settings?.(facts)) ?? {};
 	endpoint.probed = {};
-	if (network && endpoint.backend === "auto" && driver.probe && c.settings(endpoint).inlineSystem === "auto") {
-		endpoint.probed = await driver.probe({ endpoint, facts, ...probe });
+	if (network && endpoint.backend === "auto" && driver.probe) {
+		// Only probe what the configuration leaves open: explicit settings always win.
+		const given = (key) => endpoint.settings[key] !== undefined || c.config.settings[key] !== undefined;
+		const want = { inlineSystem: c.settings(endpoint).inlineSystem === "auto", images: !given("images") };
+		if (want.inlineSystem || want.images) endpoint.probed = await driver.probe({ endpoint, facts, want, ...probe });
 	}
 	if (facts.reachable === false) {
 		warn(

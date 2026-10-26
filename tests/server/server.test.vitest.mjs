@@ -16,10 +16,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import Fastify from "fastify";
 import { closeAll, make } from "../helpers/translator.mjs";
-import { fakeVllm, json, sse, textChunks } from "../helpers/fake-server.mjs";
+import { completion, fakeVllm, json, sse, textChunks } from "../helpers/fake-server.mjs";
 
 afterEach(closeAll);
 
+/** Startup asks every vLLM-like upstream whether it accepts images; tests that hang on purpose answer that probe at once. */
+const probed = (body, res) => (JSON.stringify(body).includes("image_url") ? (json(res, 200, completion("ok")), true) : false);
 const hello = { model: "qwen3-coder", max_tokens: 64, messages: [{ role: "user", content: "hi" }] };
 const post = (url, body, headers = {}, signal) =>
 	fetch(url, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body), signal });
@@ -175,7 +177,8 @@ describe("server (anthropic front)", () => {
 		let upstreamClosed;
 		const closed = new Promise((resolve) => (upstreamClosed = resolve));
 		const upstream = await fakeVllm({
-			chat: (_req, _body, res) => {
+			chat: (_req, body, res) => {
+				if (probed(body, res)) return;
 				res.on("close", upstreamClosed);
 				res.writeHead(200, { "content-type": "text/event-stream" });
 				res.write(`data: ${JSON.stringify(textChunks(["a"])[0])}\n\n`);
@@ -198,7 +201,11 @@ describe("server (anthropic front)", () => {
 	it("aborts while still waiting for the upstream to answer", async () => {
 		let upstreamClosed;
 		const closed = new Promise((resolve) => (upstreamClosed = resolve));
-		const upstream = await fakeVllm({ chat: (_req, _body, res) => void res.on("close", upstreamClosed) });
+		// Startup probes the model with an image; only the real request is left hanging.
+		const upstream = await fakeVllm({
+			chat: (_req, body, res) =>
+				JSON.stringify(body).includes("image_url") ? json(res, 200, completion("ok")) : void res.on("close", upstreamClosed)
+		});
 		try {
 			const api = await make({ upstreams: [upstream.url] });
 			const server = await api.server.start({ port: 0 });
@@ -216,7 +223,7 @@ describe("server (anthropic front)", () => {
 	it("stays silent when the client leaves while the stream is committed but the upstream has not answered", async () => {
 		let upstreamClosed;
 		const closed = new Promise((resolve) => (upstreamClosed = resolve));
-		const upstream = await fakeVllm({ chat: (_req, _body, res) => void res.on("close", upstreamClosed) });
+		const upstream = await fakeVllm({ chat: (_req, body, res) => void (probed(body, res) || res.on("close", upstreamClosed)) });
 		try {
 			const api = await make({ upstreams: [upstream.url], settings: { pingInterval: 30 } });
 			const server = await api.server.start({ port: 0 });
@@ -234,7 +241,7 @@ describe("server (anthropic front)", () => {
 	it("drops a streaming request quietly when the client leaves before the ping interval", async () => {
 		let upstreamClosed;
 		const closed = new Promise((resolve) => (upstreamClosed = resolve));
-		const upstream = await fakeVllm({ chat: (_req, _body, res) => void res.on("close", upstreamClosed) });
+		const upstream = await fakeVllm({ chat: (_req, body, res) => void (probed(body, res) || res.on("close", upstreamClosed)) });
 		try {
 			const api = await make({ upstreams: [upstream.url], settings: { pingInterval: 60000 } });
 			const server = await api.server.start({ port: 0 });
@@ -626,7 +633,7 @@ describe("end to end: Claude Code shaped traffic through the server to a fake vL
 			expect(out.find((frame) => frame.event === "message_start").data.message.model).toBe("claude-opus-5-5");
 			expect(out.find((frame) => frame.event === "message_delta").data.delta.stop_reason).toBe("end_turn");
 
-			const sent = upstream.requests.find((entry) => entry.url === "/v1/chat/completions").body;
+			const sent = upstream.requests.findLast((entry) => entry.url === "/v1/chat/completions").body;
 			expect(sent.model).toBe("qwen3-coder");
 			expect(sent.messages[0].role).toBe("system");
 			expect(JSON.stringify(sent)).not.toContain("x-anthropic-billing-header");

@@ -106,6 +106,24 @@ describe("vllm.detect / probe / count over a fake transport", () => {
 		expect(await api.driver.vllm.probe({ endpoint, transport: ok, facts: { models: [] } })).toEqual({ inlineSystem: "keep" });
 	});
 
+	it("probe can check image support on its own, and reports only what is conclusive", async () => {
+		const api = await make({ upstreams: ["http://x.test"], detect: false });
+		const probeWith = (answer) =>
+			api.driver.vllm.probe({
+				endpoint,
+				transport: fakeTransport(() => answer),
+				facts: { models: ["m"] },
+				want: { inlineSystem: false, images: true }
+			});
+		expect(await probeWith({ body: { id: "x" } })).toEqual({ images: true });
+		expect(await probeWith({ status: 400, body: { error: { message: "m is not a multimodal model" } } })).toEqual({ images: false });
+		expect(await probeWith({ status: 400, body: { error: { message: "This model does not support image inputs" } } })).toEqual({
+			images: false
+		});
+		expect(await probeWith({ status: 400, body: { error: { message: "prompt too long" } } })).toEqual({});
+		expect(await probeWith({ status: 500, body: "boom" })).toEqual({});
+	});
+
 	it("token.count returns null for malformed answers", async () => {
 		const api = await make({ upstreams: ["http://x.test"], detect: false });
 		const request = { model: "m", messages: [], tools: undefined };

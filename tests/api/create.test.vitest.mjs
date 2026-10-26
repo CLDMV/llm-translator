@@ -14,7 +14,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fakeVllm } from "../helpers/fake-server.mjs";
+import { fakeVllm, json } from "../helpers/fake-server.mjs";
 import { closeAll, fakeTransport, make } from "../helpers/translator.mjs";
 import { createTranslator, TranslatorError } from "../../src/index.mjs";
 import defaultExport from "../../src/index.mjs";
@@ -89,7 +89,44 @@ describe("detection", () => {
 		const server = await fakeVllm({ tokenizeRejectsInlineSystem: true });
 		try {
 			const api = await make({ upstreams: [server.url] });
-			expect(api.status().upstreams[0].probed).toEqual({ inlineSystem: "user" });
+			expect(api.status().upstreams[0].probed).toEqual({ inlineSystem: "user", images: true });
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("learns that a text-only model does not accept images and then replaces them with notes", async () => {
+		const server = await fakeVllm({
+			chat: (_req, body, res) =>
+				JSON.stringify(body).includes("image_url")
+					? json(res, 400, { error: { message: "qwen3-1.7b is not a multimodal model", type: "BadRequestError", code: 400 } })
+					: json(res, 200, { id: "x", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] })
+		});
+		try {
+			const api = await make({ upstreams: [server.url] });
+			expect(api.status().upstreams[0].probed.images).toBe(false);
+			const call = await api.request({
+				model: "m",
+				max_tokens: 5,
+				messages: [{ role: "user", content: [{ type: "image", source: { type: "url", url: "https://x/y.png" } }] }]
+			});
+			expect(JSON.stringify(call.body)).not.toContain("image_url");
+			expect(JSON.stringify(call.body)).toContain("does not accept images");
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("leaves images on when the probe is inconclusive, and skips it when images is configured", async () => {
+		const server = await fakeVllm({ chat: (_req, _body, res) => json(res, 400, { error: { message: "something else", code: 400 } }) });
+		try {
+			const api = await make({ upstreams: [server.url] });
+			expect(api.status().upstreams[0].probed).not.toHaveProperty("images");
+			const before = server.requests.filter((entry) => entry.url === "/v1/chat/completions").length;
+			expect(before).toBe(1);
+			await make({ upstreams: [{ url: server.url, settings: { images: true } }] });
+			await make({ upstreams: [server.url], settings: { images: false } });
+			expect(server.requests.filter((entry) => entry.url === "/v1/chat/completions").length).toBe(1);
 		} finally {
 			await server.close();
 		}
@@ -100,6 +137,9 @@ describe("detection", () => {
 		try {
 			await make({ upstreams: [{ url: server.url, settings: { inlineSystem: "hoist" } }] });
 			expect(server.requests.some((entry) => entry.url === "/tokenize")).toBe(false);
+			server.requests.length = 0;
+			await make({ upstreams: [{ url: server.url, settings: { inlineSystem: "hoist", images: false } }] });
+			expect(server.requests.some((entry) => entry.url === "/v1/chat/completions" || entry.url === "/tokenize")).toBe(false);
 		} finally {
 			await server.close();
 		}

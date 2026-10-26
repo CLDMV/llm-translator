@@ -52,9 +52,21 @@ describe("sse.encode / sse.parse", () => {
 describe("sse.ping", () => {
 	it("yields Anthropic ping events while the source is silent", async () => {
 		const api = await make({ ...config, settings: { pingInterval: 20 } });
-		const out = await collect(api.sse.ping(slow(70, 1)));
+		let release;
+		const gate = new Promise((resolve) => {
+			release = resolve;
+		});
+		const source = (async function* () {
+			await gate;
+			yield { event: "content_block_delta", data: { index: 0 } };
+		})();
+		const out = [];
+		for await (const event of api.sse.ping(source)) {
+			out.push(event);
+			if (out.length === 2) release();
+		}
 		const pings = out.filter((event) => event.event === "ping");
-		expect(pings.length).toBeGreaterThanOrEqual(2);
+		expect(pings.length).toBe(2);
 		expect(pings[0]).toEqual({ event: "ping", data: { type: "ping" } });
 		expect(out.at(-1).event).toBe("content_block_delta");
 	});

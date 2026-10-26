@@ -6,7 +6,8 @@
  * long prompt on a CPU or a busy GPU can take far longer than five minutes to produce one. This transport applies no
  * timeouts at all (the caller aborts through `signal`), never follows redirects (so credentials in headers are never
  * replayed to another host; with `redirect: "error"` a redirect rejects instead of being returned) and does not
- * decompress (it asks for `identity`).
+ * decompress (it asks for `identity`). Every request uses a fresh connection (no keep-alive pool), so a server that closed an
+ * idle connection can never make the next request fail with a stale-socket reset.
  */
 
 import http from "node:http";
@@ -30,7 +31,7 @@ export function transport(url, init = {}, modules = { http, https }) {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) return reject(signal.reason);
 		const client = target.protocol === "https:" ? modules.https : modules.http;
-		const request = client.request(target, { method: init.method ?? "GET", headers }, (incoming) => {
+		const request = client.request(target, { method: init.method ?? "GET", headers, agent: false }, (incoming) => {
 			signal?.removeEventListener("abort", onAbort);
 			if (redirect === "error" && incoming.statusCode >= 300 && incoming.statusCode < 400 && incoming.headers.location) {
 				incoming.destroy();
