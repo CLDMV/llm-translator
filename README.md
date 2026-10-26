@@ -53,6 +53,7 @@ Then point Claude Code at it with `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`. Th
 - [Drivers, detection and routing](docs/drivers.md)
 - [Protocol support](docs/protocol-support.md)
 - [Settings](docs/settings.md)
+- [Testing and the real-backend harness](docs/testing.md)
 - [Feature inventory](docs/feature-inventory.md)
 - [Changelog](docs/changelog)
 
