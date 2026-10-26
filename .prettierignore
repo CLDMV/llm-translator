@@ -14,3 +14,6 @@ package-lock.json
 # and YAML disallows tabs) would reindent every file 4->2 for no real gain.
 *.yml
 *.yaml
+
+# generated declarations (npm run types:build)
+types/

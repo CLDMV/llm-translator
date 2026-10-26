@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-24T21:34:42-07:00 (1792902882)
+ *	@Last modified time: 2026-10-26T07:20:29-07:00 (1793024429)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -20,6 +20,9 @@ import path from "node:path";
 // Anchor the project root to the package directory so include/exclude work no
 // matter what cwd vitest is invoked from.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// True inside the per-file child processes of @cldmv/vitest-runner's coverage mode.
+const blobRun = process.argv.includes("--reporter=blob");
 
 export default defineConfig({
 	root,
@@ -54,7 +57,11 @@ export default defineConfig({
 			provider: "v8",
 			include: ["src/**/*.mjs"],
 			exclude: ["**/*.json", "tests/**"],
-			reporter: ["text", "html", "json-summary", "json"]
+			reporter: ["text", "html", "json-summary", "json"],
+			// Coverage must stay at 100%: a drop makes the coverage run (and so CI) fail. The runner executes every
+			// test file in its own vitest process (--reporter=blob) and merges the blobs afterwards; a single file never
+			// covers all of src/, so the threshold applies to the merged report and to plain `vitest --coverage` runs only.
+			thresholds: blobRun ? undefined : { lines: 100, statements: 100, functions: 100, branches: 100 }
 		}
 	}
 });
