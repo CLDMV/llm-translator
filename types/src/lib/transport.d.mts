@@ -1,13 +1,16 @@
 /**
- * @fileoverview Default upstream transport: a small `fetch`-compatible function on top of `node:http` / `node:https`.
  *
- * It exists because the global `fetch` (undici) enforces a 300 second headers timeout and a 300 second body timeout,
- * which kill requests to slow local servers: vLLM sends its response headers together with the first token, and a
- * long prompt on a CPU or a busy GPU can take far longer than five minutes to produce one. This transport applies no
- * timeouts at all (the caller aborts through `signal`), never follows redirects (so credentials in headers are never
- * replayed to another host; with `redirect: "error"` a redirect rejects instead of being returned) and does not
- * decompress (it asks for `identity`). Every request uses a fresh connection (no keep-alive pool), so a server that closed an
- * idle connection can never make the next request fail with a stale-socket reset.
+ *	@Project: @cldmv/llm-translator
+ *	@Filename: /src/lib/transport.mjs
+ *	@Date: 2026-10-25T21:38:02-07:00 (1792989482)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-26T15:38:58-07:00 (1793054338)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
  */
 /**
  * `fetch`-style request.

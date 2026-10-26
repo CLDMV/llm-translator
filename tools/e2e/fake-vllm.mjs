@@ -1,4 +1,19 @@
 /**
+ *
+ *	@Project: @cldmv/llm-translator
+ *	@Filename: /tools/e2e/fake-vllm.mjs
+ *	@Date: 2026-10-26T06:00:29-07:00 (1793019629)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-26T15:39:12-07:00 (1793054352)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
  * @fileoverview A scripted vLLM-like upstream for debugging the harness and the translator without a model. It answers the
  * startup probes, replays Read/Write tool calls for the Claude Code scenarios and otherwise says hello.
  *

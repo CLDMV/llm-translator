@@ -2,12 +2,12 @@
  *
  *	@Project: @cldmv/llm-translator
  *	@Filename: /tests/api/image-fallback.test.vitest.mjs
- *	@Date: 2026-10-26T09:30:00-07:00 (1793032200)
+ *	@Date: 2026-10-26T06:00:20-07:00 (1793019620)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-26T09:30:00-07:00 (1793032200)
+ *	@Last modified time: 2026-10-26T15:39:00-07:00 (1793054340)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *

@@ -1,3 +1,18 @@
+/**
+ *
+ *	@Project: @cldmv/llm-translator
+ *	@Filename: /tests/lib/transport.test.vitest.mjs
+ *	@Date: 2026-10-25T21:38:02-07:00 (1792989482)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-26T15:39:11-07:00 (1793054351)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { transport } from "../../src/lib/transport.mjs";
