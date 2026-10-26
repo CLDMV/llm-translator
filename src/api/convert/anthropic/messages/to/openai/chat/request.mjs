@@ -21,6 +21,7 @@ import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { createNameFitter } from "../../../../../../../lib/ids.mjs";
 import { sanitize } from "../../../../../../../lib/schema.mjs";
+import { NOTE } from "../../../../../../../lib/images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
 
 const HANDLED = new Set([
@@ -344,7 +345,7 @@ function finalize(out, s, system, hoisted, keepThinking) {
 function imageParts(block, s, state) {
 	if (!s.images) {
 		drop(state, "image");
-		return [{ type: "text", text: "[An image was omitted because this model does not accept images.]" }];
+		return [{ type: "text", text: NOTE }];
 	}
 	const source = block.source;
 	if (source.type === "base64") return [{ type: "image_url", image_url: { url: `data:${source.media_type};base64,${source.data}` } }];

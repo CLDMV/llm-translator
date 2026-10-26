@@ -46,6 +46,10 @@ export type Settings = {
      */
     images: boolean;
     /**
+     * - Retry a request once without images when an OpenAI-protocol upstream answers 400 that the model does not accept images, and remember that for the endpoint and model until the process ends.
+     */
+    imageFallback: boolean;
+    /**
      * - How `document` blocks are handled.
      */
     documents: "extract" | "note" | "error";
@@ -139,6 +143,7 @@ export type Settings = {
  * @property {boolean} thinkingBudget - Send `thinking_token_budget` for `thinking.type = "enabled"`.
  * @property {boolean} effort - Map `output_config.effort` to `reasoning_effort`.
  * @property {boolean} images - The model accepts images. When false images are replaced by a text note.
+ * @property {boolean} imageFallback - Retry a request once without images when an OpenAI-protocol upstream answers 400 that the model does not accept images, and remember that for the endpoint and model until the process ends.
  * @property {"extract"|"note"|"error"} documents - How `document` blocks are handled.
  * @property {((block: object, ctx: object) => Promise<object[]>|object[])|null} documentConverter - Override for `document` conversion; returns Anthropic content blocks.
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.

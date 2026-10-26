@@ -18,6 +18,7 @@
  * @module @cldmv/llm-translator/driver/vllm
  */
 import * as http from "../../../lib/http.mjs";
+import { refused } from "../../../lib/images.mjs";
 
 /** 1x1 PNG used to ask whether the served model accepts images. */
 const PIXEL = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
@@ -77,8 +78,7 @@ export async function probe({ endpoint, transport, signal, timeout, facts, want 
 			timeout
 		});
 		if (result.ok) out.images = true;
-		else if (result.status === 400 && /multimodal|not support.*image|image.*not support/i.test(JSON.stringify(result.body)))
-			out.images = false;
+		else if (result.status === 400 && refused(JSON.stringify(result.body))) out.images = false;
 	}
 	return out;
 }

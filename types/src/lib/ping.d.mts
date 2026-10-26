@@ -18,7 +18,7 @@
  * @template T
  * @param {AsyncIterable<T>} source - Event source.
  * @param {number} interval - Silence in ms before a ping; `0` (or less) disables pings.
- * @param {*} marker - Value yielded as the ping.
+ * @param {*} marker - Value yielded as the ping, or a function called each time one is due that returns it.
  * @returns {AsyncGenerator<T | *>} Source events interleaved with pings.
  */
 export declare function withPings<T>(source: AsyncIterable<T>, interval: number, marker: any): AsyncGenerator<T | any>;

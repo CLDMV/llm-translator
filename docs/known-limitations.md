@@ -27,6 +27,7 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 - Citations (`citations` on text blocks and documents, citation deltas, OpenAI annotations) are dropped. `search_result` blocks become plain text. Tracked in [#16](https://github.com/CLDMV/llm-translator/issues/16).
 - PDF page images are only produced when the model accepts images, `@napi-rs/canvas` loaded, and the page budget (`pdf.maxImages`) allows. Scanned PDFs without a text layer yield empty page text; there is no OCR.
 - Encrypted or corrupt PDFs fall back to a text note. PDFs over 100 pages or 32 MB are rejected with an Anthropic-shaped error.
+- A text-only model behind a non-vLLM upstream is only discovered on the first request that carries an image: that request is sent twice (the second time without images) and the model is remembered as text-only for the rest of the process. The wording match is deliberately conservative, so a server that refuses images with an unusual message still returns its 400; set `images: false` for it. See `imageFallback` in [settings](settings.md).
 - Audio, video and file-by-id inputs on the OpenAI side are dropped when converting to Anthropic. File references: [#17](https://github.com/CLDMV/llm-translator/issues/17).
 - Assistant prefill depends on the chat template; templates that inject thinking into the generation prompt may behave unpredictably.
 

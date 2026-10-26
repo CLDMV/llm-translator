@@ -70,6 +70,7 @@ export async function createTranslator(config) {
 		transport: normalized.transport ?? transport,
 		servers: new Set(),
 		warned: new Set(),
+		textOnly: new Set(),
 		front: undefined
 	};
 	const pdf = await load();
