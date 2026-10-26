@@ -146,11 +146,23 @@ describe("lib/ping", () => {
 	});
 
 	it("calls a function marker each time a ping is due", async () => {
+		let release;
+		const gate = new Promise((resolve) => {
+			release = resolve;
+		});
+		const gated = (async function* () {
+			await gate;
+			yield 60;
+		})();
 		let calls = 0;
 		const out = [];
-		for await (const item of withPings(source([60]), 15, () => `P${++calls}`)) out.push(item);
-		expect(out.slice(0, 2)).toEqual(["P1", "P2"]);
-		expect(out.at(-1)).toBe(60);
+		for await (const item of withPings(gated, 5, () => {
+			calls += 1;
+			if (calls === 2) release();
+			return `P${calls}`;
+		}))
+			out.push(item);
+		expect(out).toEqual(["P1", "P2", 60]);
 	});
 
 	it("passes items through untouched when pings are off", async () => {

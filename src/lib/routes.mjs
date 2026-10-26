@@ -61,7 +61,8 @@ async function* late(sending, api, model) {
 		// Anthropic's API opens every stream with `message_start` before any token exists, and clients (Claude Code) treat
 		// the first real event as the sign that the request was accepted. Send it now, with the model the client asked
 		// for, together with an empty thinking block that the keep-alives (see `sse.ping`) can ride on while the upstream
-		// is still working. The block is closed when the upstream answers and its own blocks are shifted by one index.
+		// is still working. When the upstream answers, a first thinking block of its own takes over the early one; otherwise the early block is closed
+		// and the upstream's blocks are shifted by one index.
 		yield {
 			event: "message_start",
 			data: {
@@ -84,22 +85,39 @@ async function* late(sending, api, model) {
 		};
 	}
 	const result = await sending;
-	if (anthropic) {
+	// Closes the early thinking block (its signature is ours, like the converter's).
+	const closeEarly = function* () {
 		yield {
 			event: "content_block_delta",
 			data: { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: sign() } }
 		};
 		yield { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } };
-	}
+	};
 	if (result.stream) {
+		// `offset` stays null until the first real block decides it: a thinking block takes over the early one (offset 0),
+		// anything else closes it and is shifted by one index.
+		let offset = null;
 		for await (const event of result.stream) {
-			if (!anthropic) yield event;
-			else if (event.event !== "message_start") {
-				yield typeof event.data?.index === "number" ? { ...event, data: { ...event.data, index: event.data.index + 1 } } : event;
+			if (!anthropic) {
+				yield event;
+				continue;
 			}
+			if (event.event === "message_start") continue;
+			if (offset === null && event.event === "content_block_start" && event.data.content_block.type === "thinking") {
+				offset = 0;
+				continue;
+			}
+			if (offset === null) {
+				yield* closeEarly();
+				offset = 1;
+			}
+			yield offset > 0 && typeof event.data?.index === "number"
+				? { ...event, data: { ...event.data, index: event.data.index + offset } }
+				: event;
 		}
 		return;
 	}
+	if (anthropic) yield* closeEarly();
 	yield* failure(api, result.body);
 }
 

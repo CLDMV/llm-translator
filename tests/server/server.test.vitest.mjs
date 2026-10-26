@@ -99,7 +99,8 @@ describe("server (anthropic front)", () => {
 				(frame) => frame.event === "content_block_delta" && frame.data.index === 0 && frame.data.delta.type === "thinking_delta"
 			);
 			expect(keepAlives.length).toBeGreaterThanOrEqual(2);
-			expect(keepAlives.every((frame) => frame.data.delta.thinking === "")).toBe(true);
+			expect(keepAlives.filter((frame) => frame.data.delta.thinking === "").length).toBeGreaterThanOrEqual(2);
+			expect(keepAlives.some((frame) => frame.data.delta.thinking === "think")).toBe(true);
 			expect(names.filter((name) => name === "ping")).toHaveLength(0);
 			// The upstream's own blocks follow, shifted by one index.
 			const first = out.find((frame, position) => position > 1 && frame.event === "content_block_start");
@@ -107,6 +108,25 @@ describe("server (anthropic front)", () => {
 			expect(names.at(-2)).toBe("message_delta");
 			expect(names.at(-1)).toBe("message_stop");
 			expect(out.find((frame) => frame.event === "message_delta").data.delta.stop_reason).toBe("end_turn");
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("closes the early thinking block and shifts the upstream blocks when the answer starts with text", async () => {
+		const upstream = await fakeVllm({
+			chat: (_req, _body, res) => sse(res, textChunks(["Hi", "!"]), { stallFirst: 150 })
+		});
+		try {
+			const api = await make({ upstreams: [upstream.url], settings: { pingInterval: 30 } });
+			const server = await api.server.start({ port: 0 });
+			const out = frames(await (await post(`${server.url}/v1/messages`, { ...hello, stream: true })).text());
+			const names = out.map((frame) => frame.event);
+			const closed = out.findIndex((frame) => frame.event === "content_block_stop" && frame.data.index === 0);
+			expect(out[closed - 1].data.delta.type).toBe("signature_delta");
+			expect(out[closed + 1]).toMatchObject({ event: "content_block_start", data: { index: 1, content_block: { type: "text" } } });
+			expect(names.filter((name) => name === "message_start")).toHaveLength(1);
+			expect(out.filter((frame) => frame.event === "content_block_stop").map((frame) => frame.data.index)).toEqual([0, 1]);
 		} finally {
 			await upstream.close();
 		}
@@ -138,9 +158,12 @@ describe("server (anthropic front)", () => {
 			const server = await api.server.start({ port: 0 });
 			const out = frames(await (await post(`${server.url}/v1/messages`, { ...hello, stream: true })).text());
 			const names = out.map((frame) => frame.event);
-			const start = names.indexOf("content_block_start");
-			// While the tool call is buffered the client must still see pings.
-			expect(names.slice(names.indexOf("message_start"), start).filter((name) => name === "ping").length).toBeGreaterThanOrEqual(3);
+			const start = out.findIndex((frame) => frame.event === "content_block_start" && frame.data.content_block.type === "tool_use");
+			// While the tool call is buffered the client must still see keep-alives (a ping, or an empty delta on the early block).
+			const emptyDelta = (frame) =>
+				frame.event === "content_block_delta" &&
+				[frame.data.delta.text, frame.data.delta.thinking, frame.data.delta.partial_json].includes("");
+			expect(out.slice(0, start).filter((frame) => frame.event === "ping" || emptyDelta(frame)).length).toBeGreaterThanOrEqual(3);
 			expect(names.at(-1)).toBe("message_stop");
 			expect(out.find((frame) => frame.event === "message_delta").data.delta.stop_reason).toBe("tool_use");
 		} finally {
@@ -591,11 +614,8 @@ describe("end to end: Claude Code shaped traffic through the server to a fake vL
 			const names = out.map((frame) => frame.event);
 			const keepAliveEnd = out.findIndex((frame) => frame.event === "content_block_stop" && frame.data.index === 0);
 			expect(names.slice(0, 2)).toEqual(["message_start", "content_block_start"]);
+			// The model's thinking took over the early block, so only its text block follows.
 			expect(names.slice(keepAliveEnd + 1)).toEqual([
-				"content_block_start",
-				"content_block_delta",
-				"content_block_delta",
-				"content_block_stop",
 				"content_block_start",
 				"content_block_delta",
 				"content_block_delta",
