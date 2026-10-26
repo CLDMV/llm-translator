@@ -70,6 +70,10 @@ Claude Code treats a silent stream as a dead connection, and a local model can s
 - If the upstream has not answered the request at all after `pingInterval` ms, the server commits to HTTP 200 with an SSE body and starts pinging. A later upstream error, such as a context overflow, is then delivered in-band as `event: error` (Anthropic) or an error chunk followed by `[DONE]` (OpenAI).
 - If the upstream answers within the interval, its real HTTP status is used, so retry logic and prompt-too-long handling keep working.
 
+## Upstream timeouts
+
+The default transport is built on `node:http` and applies no timeouts of its own: a slow upstream (for example a long prompt on a CPU) may take as long as it needs to send headers or the next token, and the request ends only when the upstream answers or the client disconnects. The global `fetch` is not used because it aborts after 300 seconds without response headers. A custom `transport` can still be supplied in the configuration.
+
 ## Client disconnects
 
 When the client goes away the upstream request is aborted, so the GPU stops generating tokens nobody reads. This works while waiting for the upstream, while streaming, and after an early commit.

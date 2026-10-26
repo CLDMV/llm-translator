@@ -27,6 +27,7 @@ import slothlet from "@cldmv/slothlet";
 import { normalize } from "./lib/config.mjs";
 import { TranslatorError } from "./lib/errors.mjs";
 import { load } from "./lib/pdf.mjs";
+import { transport } from "./lib/transport.mjs";
 import { warn } from "./lib/warn.mjs";
 
 // Development environment check. devcheck.mjs lives at the repo root and exists only in
@@ -66,7 +67,7 @@ export async function createTranslator(config) {
 	const normalized = normalize(config);
 	const state = {
 		endpoints: normalized.endpoints,
-		transport: normalized.transport ?? ((url, init) => globalThis.fetch(url, init)),
+		transport: normalized.transport ?? transport,
 		servers: new Set(),
 		warned: new Set(),
 		front: undefined
