@@ -65,6 +65,8 @@ export async function* stream(source, state, settings) {
 				id = `chatcmpl-${String(data.message.id).replace(/^msg_/, "")}`;
 				model = state?.model ?? data.message.model;
 				usage = { ...data.message.usage };
+				// Kept on the state while the stream runs, so a report for a stream that fails partway still has the counts seen so far.
+				if (state) state.upstreamUsage = usage;
 				yield chunk({ role: "assistant", content: "" });
 			} else if (data.type === "content_block_start") {
 				const block = data.content_block;
@@ -84,6 +86,7 @@ export async function* stream(source, state, settings) {
 				}
 			} else if (data.type === "message_delta") {
 				for (const [key, value] of Object.entries(data.usage ?? {})) if (value !== null && value !== undefined) usage[key] = value;
+				if (state) state.upstreamUsage = usage;
 				const extra = typeof data.delta?.stop_sequence === "string" ? { stop_reason: data.delta.stop_sequence } : {};
 				yield chunk({}, toOpenAIFinish(data.delta?.stop_reason), extra);
 			} else if (data.type === "message_stop") {

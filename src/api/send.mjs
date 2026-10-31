@@ -88,8 +88,10 @@ async function round({ transport, textOnly, request, response, stream, error }, 
 	const note = (sent) => {
 		meter.meta.model = sent.body.model ?? null;
 		meter.meta.upstream = sent.upstream;
-		// A reply converted from an OpenAI-protocol upstream carries numbers the converter made up for the client; meter the upstream's own.
+		// A converted reply carries numbers the converter wrote for the client (zeros for what the upstream did not carry, and nothing for
+		// a stream that fails partway); meter the upstream's own counts, which the converter keeps on its state.
 		if (!sent.state.native && sent.state.front === "anthropic") meter.source(() => sent.state.convert?.upstreamUsage);
+		else if (!sent.state.native) meter.source(() => sent.state.convert?.upstreamUsage, "folded");
 	};
 	/**
 	 * Build the error reply for an upstream failure and settle the meter.

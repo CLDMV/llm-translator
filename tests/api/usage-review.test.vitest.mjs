@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { closeAll, collect, fakeTransport, make } from "../helpers/translator.mjs";
 import { openaiSse } from "../helpers/streams.mjs";
 import { fakeVllm } from "../helpers/fake-server.mjs";
+import { normalize } from "../../src/lib/usage.mjs";
 import { late } from "../../src/lib/routes.mjs";
 
 afterEach(closeAll);
@@ -279,6 +280,106 @@ describe("OpenAI-front streams are always metered", () => {
 		expect(metered.body.stream_options).toEqual({ include_usage: true });
 		const odd = await api.request({ ...ask, stream: true, stream_options: "nope" }, { usage: true });
 		expect(odd.body.stream_options).toEqual({ include_usage: true });
+	});
+});
+
+describe("OpenAI front over an Anthropic upstream keeps partial counts", () => {
+	const body = { model: "claude-sonnet-5", max_tokens: 8, stream: true, messages: [{ role: "user", content: "hi" }] };
+	const startWithCache = [
+		"message_start",
+		{
+			type: "message_start",
+			message: {
+				id: "msg_1",
+				type: "message",
+				role: "assistant",
+				model: "claude-sonnet-5",
+				content: [],
+				usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 4, cache_creation_input_tokens: 2 }
+			}
+		}
+	];
+	const broken = () => {
+		let sent = false;
+		return new Response(
+			new ReadableStream({
+				pull(stream) {
+					if (sent) return stream.error(new Error("socket hang up"));
+					sent = true;
+					stream.enqueue(new TextEncoder().encode(events([startWithCache, block])));
+				}
+			}),
+			{ status: 200, headers: { "content-type": "text/event-stream" } }
+		);
+	};
+
+	it("a stream that fails partway still reports what message_start carried", async () => {
+		const api = await make({ front: "openai", upstreams: [claude], transport: broken, detect: false });
+		const reply = await api.send(body);
+		await collect(reply.stream);
+		expect(await reply.usage).toMatchObject({
+			reported: true,
+			complete: false,
+			reason: "error",
+			input_tokens: 12,
+			output_tokens: 1,
+			cache_read_input_tokens: 4,
+			cache_creation_input_tokens: null
+		});
+	});
+
+	it("normal completion reports the same numbers as before: delta output, creation folded into input", async () => {
+		const api = await make({
+			front: "openai",
+			upstreams: [claude],
+			transport: fakeTransport(() => sse(events([startWithCache, block, delta, stop]))),
+			detect: false
+		});
+		const reply = await api.send(body);
+		await collect(reply.stream);
+		expect(await reply.usage).toMatchObject({
+			complete: true,
+			reason: "done",
+			input_tokens: 12,
+			output_tokens: 3,
+			cache_read_input_tokens: 4,
+			cache_creation_input_tokens: null
+		});
+	});
+
+	it("a JSON reply is metered from the upstream's usage too", async () => {
+		const message = {
+			id: "msg_1",
+			type: "message",
+			role: "assistant",
+			model: "claude-sonnet-5",
+			content: [{ type: "text", text: "Hi" }],
+			stop_reason: "end_turn",
+			stop_sequence: null,
+			usage: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+		};
+		const api = await make({ front: "openai", upstreams: [claude], transport: fakeTransport(() => ({ body: message })), detect: false });
+		const reply = await api.send({ ...body, stream: false });
+		expect(await reply.usage).toMatchObject({
+			input_tokens: 10,
+			output_tokens: 3,
+			cache_read_input_tokens: null,
+			cache_creation_input_tokens: null,
+			complete: true
+		});
+	});
+
+	it("normalize folds Anthropic usage and keeps missing fields null", () => {
+		expect(normalize("folded", { output_tokens: 2 })).toEqual({
+			input_tokens: null,
+			output_tokens: 2,
+			cache_read_input_tokens: null,
+			cache_creation_input_tokens: null
+		});
+		expect(normalize("folded", { input_tokens: 5, cache_creation_input_tokens: 1, cache_read_input_tokens: 3 })).toMatchObject({
+			input_tokens: 6,
+			cache_read_input_tokens: 3
+		});
 	});
 });
 

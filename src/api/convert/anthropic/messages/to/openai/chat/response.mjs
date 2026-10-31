@@ -52,6 +52,8 @@ export function response(message, state, settings) {
 	if (toolCalls.length > 0) out.tool_calls = toolCalls;
 	const choice = { index: 0, message: out, finish_reason: toOpenAIFinish(message.stop_reason) };
 	if (typeof message.stop_sequence === "string") choice.stop_reason = message.stop_sequence;
+	// Kept for `send`, whose usage report wants the upstream's own counts.
+	if (state) state.upstreamUsage = message.usage;
 	return {
 		id: `chatcmpl-${String(message.id).replace(/^msg_/, "")}`,
 		object: "chat.completion",
