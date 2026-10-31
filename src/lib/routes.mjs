@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:02-07:00 (1792958342)
+ *	@Last modified time: 2026-10-31T14:45:55-07:00 (1793483155)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -208,10 +208,26 @@ function forwardable(headers) {
 }
 
 /**
+ * Normalize what an `authorize` hook returned.
+ * @param {any} value - Hook result: `true`, `{ ok: true, context? }`, `false`, `{ ok: false, status?, message? }`.
+ * @returns {{ok: true, context: any} | {ok: false, status: number, message: string}} Verdict; anything unrecognised is a refusal.
+ */
+function verdictOf(value) {
+	if (value === true) return { ok: true, context: undefined };
+	if (value && typeof value === "object" && value.ok === true) return { ok: true, context: value.context };
+	const refusal = value && typeof value === "object" && value.ok === false ? value : {};
+	return {
+		ok: false,
+		status: Number.isInteger(refusal.status) && refusal.status >= 400 && refusal.status <= 599 ? refusal.status : 401,
+		message: typeof refusal.message === "string" && refusal.message !== "" ? refusal.message : "unauthorized"
+	};
+}
+
+/**
  * Register the routes for one front on a Fastify instance.
  * @param {any} fastify - Fastify instance (usually an encapsulated plugin scope).
- * @param {any} options - `{ apiKey, bodyLimit }`.
- * @param {any} captured - Captured translator parts `{ front, interval, filter, send, count, list, build, encode, write }`; `front` applies to this instance only.
+ * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage }`.
+ * @param {any} captured - Captured translator parts `{ front, interval, filter, send, route, count, list, build, encode, write }`; `front` applies to this instance only.
  * @returns {void}
  */
 export function register(fastify, options, captured) {
@@ -221,11 +237,15 @@ export function register(fastify, options, captured) {
 		...captured,
 		build: (status, message, extra = {}) => captured.build(status, message, { ...extra, front }),
 		send: (body, extra) => captured.send(body, { ...extra, front, filter }),
+		route: (body) => captured.route(body, { front }),
 		count: (body, extra) => captured.count(body, { ...extra, front }),
 		list: (extra) => captured.list({ ...extra, front })
 	};
 	const keys = [options.apiKey ?? []].flat().filter(Boolean);
 	const bodyLimit = options.bodyLimit ?? BODY_LIMIT;
+
+	// What an allowing `authorize` hook returned as `context`, per request.
+	const contexts = new WeakMap();
 
 	const reject = (reply, reply_) => reply.code(reply_.status).headers(reply_.headers).send(reply_.body);
 
@@ -245,6 +265,39 @@ export function register(fastify, options, captured) {
 		if (given && keys.some((key) => same(given, key))) return;
 		return reject(reply, api.build(401, "invalid x-api-key"));
 	});
+
+	if (typeof options.authorize === "function") {
+		// Runs after body parsing so the hook can see the requested model.
+		fastify.addHook("preHandler", async (request, reply) => {
+			if (request.routeOptions.config?.public) return;
+			let route = null;
+			if (request.body && typeof request.body === "object" && request.body.model !== undefined) {
+				try {
+					route = api.route(request.body);
+				} catch {
+					// A bad body is refused by the normal handler with its own 400.
+				}
+			}
+			let verdict;
+			try {
+				verdict = verdictOf(
+					await options.authorize({
+						method: request.method,
+						url: request.url,
+						headers: request.headers,
+						body: request.body,
+						front: api.front,
+						route
+					})
+				);
+			} catch (error) {
+				request.log.error(error);
+				verdict = { ok: false, status: 401, message: "unauthorized" };
+			}
+			if (!verdict.ok) return reject(reply, api.build(verdict.status, verdict.message));
+			contexts.set(request, verdict.context);
+		});
+	}
 
 	fastify.route({
 		method: ["GET", "HEAD"],
@@ -272,11 +325,19 @@ export function register(fastify, options, captured) {
 		reply.raw.on("close", () => {
 			if (!reply.raw.writableFinished) controller.abort();
 		});
-		const sending = api.send(request.body, { signal: controller.signal, clientHeaders: forwardable(request.headers) });
+		const onUsage = typeof options.onUsage === "function" ? (report) => options.onUsage(report, contexts.get(request)) : undefined;
+		const sending = api.send(request.body, { signal: controller.signal, clientHeaders: forwardable(request.headers), onUsage });
 		sending.catch(() => {});
 		const gone = new Promise((resolve) => controller.signal.addEventListener("abort", () => resolve(GONE), { once: true }));
 		const result = await settle(Promise.race([sending, gone]), request.body?.stream === true ? api.interval : 0);
-		if (result === GONE) return reply;
+		if (result === GONE) {
+			// A stream that arrives after the client left is never read; return it so its usage report is delivered.
+			sending.then(
+				(late) => late.stream?.return?.(),
+				() => {}
+			);
+			return reply;
+		}
 		if (result === STALLED) return stream(reply, api, controller, late(sending, api, request.body?.model));
 		if (!result.stream) return reject(reply, result);
 		return stream(reply, api, controller, result.stream, result.status, result.headers);

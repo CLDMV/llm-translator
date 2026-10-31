@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T14:00:49-07:00 (1792962049)
+ *	@Last modified time: 2026-10-31T14:45:53-07:00 (1793483153)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,7 +23,7 @@ import { isLoopback } from "../../lib/http.mjs";
 
 /**
  * Start an HTTP server in front of the translator. Fastify is an optional peer dependency and is imported here.
- * @param {any} [options] - `{ host = "127.0.0.1", port = 8787, front, apiKey, bodyLimit, logger, allowUnauthenticated }`. Listening on a non-loopback address without an `apiKey` is refused unless `allowUnauthenticated` is true.
+ * @param {any} [options] - `{ host = "127.0.0.1", port = 8787, front, apiKey, bodyLimit, logger, allowUnauthenticated, authorize, onUsage }`. `authorize(request)` and `onUsage(report, context)` are described at `server.plugin`. Listening on a non-loopback address without an `apiKey` or an `authorize` hook is refused unless `allowUnauthenticated` is true.
  * @returns {Promise<{url: string, host: string, port: number, app: any, close: () => Promise<void>}>} Running server handle.
  */
 export async function start(options = {}) {
@@ -41,9 +41,14 @@ export async function start(options = {}) {
 		});
 	}
 	const host = options.host ?? "127.0.0.1";
-	if (!isLoopback(host) && [options.apiKey ?? []].flat().filter(Boolean).length === 0 && options.allowUnauthenticated !== true) {
+	if (
+		!isLoopback(host) &&
+		[options.apiKey ?? []].flat().filter(Boolean).length === 0 &&
+		typeof options.authorize !== "function" &&
+		options.allowUnauthenticated !== true
+	) {
 		throw new TranslatorError(
-			`Refusing to listen on ${host} without an apiKey: anyone who can reach the port could use the upstream. Set \`apiKey\` (CLI: --api-key), bind to 127.0.0.1, or opt in with \`allowUnauthenticated: true\` (CLI: --allow-unauthenticated).`,
+			`Refusing to listen on ${host} without an apiKey or an authorize hook: anyone who can reach the port could use the upstream. Set \`apiKey\` (CLI: --api-key) or \`authorize\`, bind to 127.0.0.1, or opt in with \`allowUnauthenticated: true\` (CLI: --allow-unauthenticated).`,
 			{ code: "unauthenticated_bind", status: 500 }
 		);
 	}
@@ -54,7 +59,13 @@ export async function start(options = {}) {
 		const { status, headers, body } = build(404, `Not found: ${request.method} ${request.url}`);
 		return reply.code(status).headers(headers).send(body);
 	});
-	await app.register(plugin, { front: options.front, apiKey: options.apiKey, bodyLimit: options.bodyLimit });
+	await app.register(plugin, {
+		front: options.front,
+		apiKey: options.apiKey,
+		bodyLimit: options.bodyLimit,
+		authorize: options.authorize,
+		onUsage: options.onUsage
+	});
 	await app.listen({ host, port: options.port ?? 8787 });
 	const port = app.server.address().port;
 	const handle = {

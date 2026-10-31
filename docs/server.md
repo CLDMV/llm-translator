@@ -49,9 +49,37 @@ The process runs until SIGINT or SIGTERM, then closes the server and the transla
 
 ## Authentication
 
-Listening on anything other than a loopback address (`127.x`, `::1`, `localhost`) requires an `apiKey`: the start-up is refused otherwise, because anyone who can reach the port could spend your GPU. Pass `--allow-unauthenticated` (`allowUnauthenticated: true`) to opt out, for example behind a trusted network or an authenticating reverse proxy.
+Listening on anything other than a loopback address (`127.x`, `::1`, `localhost`) requires an `apiKey` or an `authorize` hook: the start-up is refused otherwise, because anyone who can reach the port could spend your GPU. Pass `--allow-unauthenticated` (`allowUnauthenticated: true`) to opt out, for example behind a trusted network or an authenticating reverse proxy.
 
 `apiKey` (a string or an array) makes the server require the key as `x-api-key` or `Authorization: Bearer <key>` on the API routes. `/` and `/api/hello` stay open. Upstream keys are configured separately on each upstream and never reach the client.
+
+### `authorize` hook and `onUsage`
+
+An app with its own key system passes `authorize(request)` (sync or async) to `server.start` or `server.plugin` instead of rebuilding the routes. It runs on the API routes after the `apiKey` check (when one is set) and after the body is parsed; `/` and `/api/hello` skip it.
+
+```js
+const server = await api.server.start({
+	host: "0.0.0.0",
+	authorize: async (request) => {
+		const key = await keys.lookup(request.headers["x-api-key"]);
+		if (!key) return { ok: false, status: 401, message: "invalid key" };
+		if (request.route && !key.models.includes(request.route.model)) return { ok: false, status: 403, message: "model not allowed" };
+		return { ok: true, context: { keyId: key.id } };
+	},
+	onUsage: (report, context) => meter.add(context?.keyId, report)
+});
+```
+
+`request` is `{ method, url, headers, body, front, route }`. `body` is the parsed body (`undefined` for `GET`). `route` is the result of `api.route(body)` (see below) when the body is an object with a `model`, otherwise `null`; a body that cannot be routed is passed with `route: null` and answered with the usual 400.
+
+| Return value                                | Result                                                      |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| `true`, `{ ok: true, context? }`            | The request proceeds; `context` is kept for `onUsage`.      |
+| `false`, `{ ok: false, status?, message? }` | Refused; defaults are status `401`, message `unauthorized`. |
+| anything else                               | Refused with `401`.                                         |
+| a thrown or rejected hook                   | Refused with `401`; the error goes to the request logger.   |
+
+A refusal is delivered through `api.error.build`, so each front gets its own error format (Anthropic `{"type":"error",…}`, OpenAI `{"error":{…}}`). `onUsage(report, context)` is called once per request with the usage report described under [usage reporting](#usage-reporting-and-model-allow-lists) and the `context` the hook returned (`undefined` without a hook); it also works without `authorize`. With `authorize` set, a non-loopback bind no longer needs an `apiKey`.
 
 ## Forwarded requests and header allow-list
 
@@ -105,7 +133,7 @@ await app.register(api.server.plugin, { prefix: "/llm", apiKey: "change-me" });
 await app.listen({ port: 3000 }); // POST /llm/v1/messages
 ```
 
-The plugin is encapsulated: its error handler and auth hook apply only to its own routes. Options are `front`, `apiKey` and `bodyLimit`.
+The plugin is encapsulated: its error handler and auth hook apply only to its own routes. Options are `front`, `apiKey`, `bodyLimit`, `authorize` and `onUsage`.
 
 ## Your own server with the helper leaves
 
