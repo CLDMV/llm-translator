@@ -75,7 +75,7 @@ describe("a stream is complete only after its terminal marker", () => {
 		expect(await reply.usage).toMatchObject({ complete: true, reason: "done" });
 	});
 
-	it("OpenAI front: truncated is an error; [DONE] or a finish_reason chunk is done", async () => {
+	it("OpenAI front: only the [DONE] sentinel completes a stream", async () => {
 		const run = async (frames) => {
 			const api = await make({ front: "openai", upstreams: [vllm], transport: fakeTransport(() => sse(openaiSse(frames))), detect: false });
 			const reply = await api.send({ ...ask, stream: true });
@@ -85,7 +85,8 @@ describe("a stream is complete only after its terminal marker", () => {
 		const open = [chunk({ role: "assistant", content: "" }), chunk({ content: "Hi" })];
 		expect(await run(open)).toMatchObject({ complete: false, reason: "error" });
 		expect(await run([...open, "[DONE]"])).toMatchObject({ complete: true, reason: "done" });
-		expect(await run([...open, chunk({}, "stop")])).toMatchObject({ complete: true, reason: "done" });
+		// A finish_reason chunk alone is not enough.
+		expect(await run([...open, chunk({}, "stop")])).toMatchObject({ complete: false, reason: "error" });
 	});
 
 	it("a converted Anthropic-front stream that ends normally is done", async () => {
@@ -214,6 +215,60 @@ describe("OpenAI-front streams are always metered", () => {
 		expect(await quiet.usage).toMatchObject({ reported: true, output_tokens: 3, complete: true });
 		const asked = await api.send({ ...body, stream_options: { include_usage: true } });
 		expect(usageChunks(await collect(asked.stream))).toHaveLength(1);
+	});
+
+	it("does not force include_usage when streamUsage is off, and leaves the client's own stream_options alone", async () => {
+		const transport = fakeTransport(() => sse(openaiSse(frames)));
+		const api = await make({
+			front: "openai",
+			upstreams: [{ url: "https://api.openai.com", backend: "openai", models: ["qwen3-coder"] }],
+			settings: { streamUsage: false },
+			transport,
+			detect: false
+		});
+		const quiet = await api.send({ ...ask, stream: true });
+		await collect(quiet.stream);
+		expect(JSON.parse(transport.calls[0].init.body).stream_options).toBeUndefined();
+		const own = await api.send({ ...ask, stream: true, stream_options: { include_usage: true } });
+		await collect(own.stream);
+		expect(JSON.parse(transport.calls[1].init.body).stream_options).toEqual({ include_usage: true });
+		const none = await make({
+			front: "openai",
+			upstreams: [{ url: "https://api.openai.com", backend: "openai", models: ["qwen3-coder"] }],
+			settings: { streamUsage: false },
+			transport: fakeTransport(() => sse(openaiSse([chunk({ content: "Hi" }), chunk({}, "stop"), "[DONE]"]))),
+			detect: false
+		});
+		const bare = await none.send({ ...ask, stream: true });
+		await collect(bare.stream);
+		expect(await bare.usage).toMatchObject({ reported: false, complete: true, reason: "done" });
+	});
+
+	it("every OpenAI-front stream ends with [DONE]: pass-through from a vLLM fake and the Anthropic converter", async () => {
+		const upstream = await fakeVllm();
+		try {
+			const api = await make({ front: "openai", upstreams: [upstream.url] });
+			const reply = await api.send({ ...ask, stream: true });
+			const seen = await collect(reply.stream);
+			expect(seen.at(-1).data).toBe("[DONE]");
+			expect(await reply.usage).toMatchObject({ complete: true, reason: "done", reported: true });
+		} finally {
+			await upstream.close();
+		}
+		const converted = await make({
+			front: "openai",
+			upstreams: [claude],
+			transport: fakeTransport(() => sse(events([start, block, delta, stop]))),
+			detect: false
+		});
+		const reply = await converted.send({
+			model: "claude-sonnet-5",
+			max_tokens: 8,
+			stream: true,
+			messages: [{ role: "user", content: "hi" }]
+		});
+		expect((await collect(reply.stream)).at(-1).data).toBe("[DONE]");
+		expect(await reply.usage).toMatchObject({ complete: true, reason: "done" });
 	});
 
 	it("api.request leaves stream_options alone unless send asks for usage", async () => {

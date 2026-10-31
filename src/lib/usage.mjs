@@ -91,7 +91,7 @@ export function meter(meta, onUsage, warn) {
 	let reported = false;
 	let done = false;
 	let failed = false;
-	// The reply reached its terminal marker: a JSON body, `message_stop`, `[DONE]` or a chunk with a `finish_reason`.
+	// The reply reached its terminal marker: a JSON body, `message_stop` or the `[DONE]` sentinel.
 	let terminal = false;
 	// Reads the upstream's own usage (see `source`); when set it replaces the usage seen in the client output.
 	let raw = null;
@@ -158,7 +158,6 @@ export function meter(meta, onUsage, warn) {
 				if (data.type === "message_stop") terminal = true;
 				if (!raw) take(data.type === "message_start" ? data.message?.usage : data.usage);
 			} else {
-				if (Array.isArray(data.choices) && data.choices.some((choice) => choice?.finish_reason)) terminal = true;
 				take(data.usage);
 			}
 		},

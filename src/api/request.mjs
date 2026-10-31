@@ -50,7 +50,8 @@ export async function request(body, options = {}) {
 	if (options.usage === true && stream && c.front === "openai") {
 		// Internal (used by `send`): always ask for the final usage chunk so usage can be metered; `send` hides it from clients that did not ask.
 		if (convert) converted.includeUsage = true;
-		else {
+		else if (settings.streamUsage) {
+			// Not forced when `streamUsage` is off (an upstream that rejects `stream_options`); the client's own stream_options pass through as before.
 			const given = upstream.stream_options && typeof upstream.stream_options === "object" ? upstream.stream_options : {};
 			upstream.stream_options = { ...given, include_usage: true };
 		}
