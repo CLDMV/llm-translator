@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:04-07:00 (1792958344)
+ *	@Last modified time: 2026-10-31T14:46:00-07:00 (1793483160)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -64,6 +64,7 @@ describe("package surface", () => {
 					"error",
 					"model",
 					"request",
+					"route",
 					"response",
 					"send",
 					"server",

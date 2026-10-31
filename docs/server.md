@@ -109,7 +109,7 @@ The plugin is encapsulated: its error handler and auth hook apply only to its ow
 
 ## Your own server with the helper leaves
 
-Any HTTP framework can use the pieces directly. `api.send(body, { signal })` does the full round trip and returns either `{ status, headers, body }` or `{ status, headers, stream }`; `api.sse` and `api.error` provide the wire helpers.
+Any HTTP framework can use the pieces directly. `api.send(body, { signal, onUsage })` does the full round trip and returns either `{ status, headers, body }` or `{ status, headers, stream }`; `api.route(body)` resolves where a request would go without sending it; `api.sse` and `api.error` provide the wire helpers.
 
 ```js
 import http from "node:http";
@@ -136,6 +136,37 @@ http
 	})
 	.listen(8787);
 ```
+
+### Usage reporting and model allow-lists
+
+Every reply from `send`, including error replies, has a `usage` property: a promise of one normalized report that never rejects. `onUsage(report)` receives the same report exactly once. For JSON and error replies the report is ready when `send` returns; for a stream it is delivered when the stream ends, fails or is stopped early (`break` or `return()`). A stream nobody iterates never settles. The stream is passed through unchanged, so `api.sse.write` works as before.
+
+```js
+const allowed = new Set(["qwen3-coder"]);
+
+const body = JSON.parse(raw);
+const { model, upstream } = api.route(body); // no I/O; throws TranslatorError (400) for a body that is not an object
+if (!allowed.has(model)) return deny(403);
+
+const reply = await api.send(body, {
+	signal: controller.signal,
+	onUsage: (report) => meter.add(apiKey, report) // or: reply.usage.then(...)
+});
+```
+
+`api.route(body)` returns `{ upstream, model, requested, protocol, backend, native, unserved }`: the upstream endpoint name, the model name sent upstream (after aliases and routing), the model the client asked for, the upstream protocol, its backend, whether the body is forwarded without conversion and whether no upstream lists the model.
+
+The report:
+
+| Field                                                                                     | Meaning                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` | Numbers, or `null` when unknown (never `0` for unknown). `input_tokens` excludes cached tokens. On the OpenAI front, cache creation is folded into `input_tokens`.                            |
+| `reported`                                                                                | `false` when the reply carried no usage; every token field is then `null`. An OpenAI-front stream carries usage only when the client sent `stream_options.include_usage`.                     |
+| `complete`                                                                                | `true` only when the reply finished normally.                                                                                                                                                 |
+| `reason`                                                                                  | `"done"`, `"aborted"` (signal aborted, or the consumer stopped iterating), `"error"` (stream failure, connection failure, conversion failure) or `"upstream_error"` (non-OK upstream status). |
+| `model`, `requested`, `upstream`, `front`, `stream`                                       | Model sent upstream, model the client asked for, upstream endpoint name, client protocol, and whether a stream was requested.                                                                 |
+
+A partial stream reports the usage seen so far (cumulative; the last values win). Counts are read from the client-protocol output, so converted and pass-through replies are reported the same way. Usage that is absent or all zero counts as not reported. An exception in `onUsage` is reported as a warning and never breaks the reply. When `send` throws (the caller aborted), `onUsage` is still called.
 
 - `api.sse.encode(event)` formats one frame, `api.sse.parse(source)` reads frames, `api.sse.ping(events, { interval })` adds pings to any event stream, and `api.sse.write(target, events)` pumps a stream into a writable with backpressure.
 - `api.error.build(status, message, { type, code, param })` creates an error reply in the front's shape for failures that originate in your server, such as authentication.

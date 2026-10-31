@@ -7,14 +7,10 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:02-07:00 (1792958342)
+ *	@Last modified time: 2026-10-31T14:45:55-07:00 (1793483155)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
- */
-/**
- * @fileoverview Chooses the upstream endpoint for a requested model.
- * @module @cldmv/llm-translator/lib/route
  */
 /**
  * Does the endpoint serve the model?
@@ -35,4 +31,19 @@ export declare function pick(config: any, endpoints: any[], model: string | unde
     endpoint: any;
     model: string | undefined;
     unserved: boolean;
+};
+/**
+ * Validate a client request body and resolve where it goes. Shared by `request` and `route` so both always agree.
+ * @param {any} c - Captured translator parts (`capture`).
+ * @param {any} body - Client request body.
+ * @returns {{endpoint: any, model: string, requested: string | undefined, unserved: boolean, convert: any}} The chosen endpoint, the model name sent
+ * upstream, the model the client asked for, whether no endpoint serves it and the converters (null for a native pass-through).
+ * @throws {TranslatorError} `invalid_body` when the body is not a JSON object.
+ */
+export declare function resolve(c: any, body: any): {
+    endpoint: any;
+    model: string;
+    requested: string | undefined;
+    unserved: boolean;
+    convert: any;
 };

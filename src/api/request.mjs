@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:00-07:00 (1792958340)
+ *	@Last modified time: 2026-10-31T14:45:53-07:00 (1793483153)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -19,8 +19,7 @@
  */
 import { context, self } from "../lib/runtime.mjs";
 import { capture } from "../lib/capture.mjs";
-import { TranslatorError } from "../lib/errors.mjs";
-import { pick } from "../lib/route.mjs";
+import { resolve } from "../lib/route.mjs";
 import * as http from "../lib/http.mjs";
 import { filterChatBody } from "../lib/passthrough.mjs";
 import * as images from "../lib/images.mjs";
@@ -34,16 +33,12 @@ import * as images from "../lib/images.mjs";
  */
 export async function request(body, options = {}) {
 	const c = capture(self, context, options.front);
-	if (!body || typeof body !== "object" || Array.isArray(body)) {
-		throw new TranslatorError("The request body must be a JSON object", { code: "invalid_body", status: 400 });
-	}
-	const { endpoint, model, unserved } = pick(c.config, c.state.endpoints, body.model);
+	const { endpoint, model, unserved, convert } = resolve(c, body);
 	const driver = c.driver(endpoint);
 	const key = `${endpoint.name}\n${model}`;
 	// A refusal remembered earlier in this process, or an explicit `images: false`, sends the request without images.
 	const text = options.images === false || (c.state.textOnly.has(key) && c.settings(endpoint).imageFallback);
 	const settings = text ? { ...c.settings(endpoint), images: false } : c.settings(endpoint);
-	const convert = c.converters(endpoint);
 	const stream = body.stream === true;
 	let upstream;
 	let converted;
