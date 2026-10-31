@@ -26,7 +26,7 @@ import { resolve } from "../lib/route.mjs";
  * check a model allow-list before `send`. Uses the same routing as `request`.
  * @param {any} body - Client request body (Anthropic Messages or OpenAI Chat Completions, per `front`).
  * @param {any} [options] - `{ front }` overrides the configured front for this call.
- * @returns {{upstream: string, model: string, requested: string | undefined, protocol: string, backend: string, native: boolean, unserved: boolean}} `upstream` is the endpoint name, `model` the name sent upstream, `requested` the name the client used, `protocol` the upstream's protocol (`openai.chat` or `anthropic.messages`), `backend` its detected backend, `native` whether the body is forwarded without conversion and `unserved` whether no upstream lists the model.
+ * @returns {{upstream: string, model: string, requested: string | undefined, protocol: string, backend: string, native: boolean, unserved: boolean}} `upstream` is the endpoint name, `model` the name sent upstream, `requested` the name the client used, `protocol` the upstream's protocol (`openai.chat` or `anthropic.messages`), `backend` the driver detection chose (`vllm`, `openai`, `anthropic` or `compatible`, the `driver` that `status()` reports), `native` whether the body is forwarded without conversion and `unserved` whether no upstream lists the model.
  * @throws {TranslatorError} `invalid_body` (400) when the body is not a JSON object.
  */
 export function route(body, options = {}) {
@@ -37,7 +37,7 @@ export function route(body, options = {}) {
 		model,
 		requested,
 		protocol: endpoint.protocol,
-		backend: endpoint.backend,
+		backend: endpoint.driver,
 		native: convert === null,
 		unserved
 	};

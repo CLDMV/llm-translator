@@ -88,7 +88,7 @@ describe("send usage reporting, Anthropic front", () => {
 			input_tokens: 12,
 			output_tokens: 5,
 			cache_read_input_tokens: 8,
-			cache_creation_input_tokens: 0,
+			cache_creation_input_tokens: null,
 			reported: true,
 			complete: true,
 			reason: "done",

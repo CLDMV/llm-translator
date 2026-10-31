@@ -77,7 +77,9 @@ export async function send(body, options = {}) {
  * @returns {Promise<any>} Client-protocol reply.
  */
 async function round({ transport, textOnly, request, response, stream, error }, body, options, meter) {
-	const ask = { front: options.front, headers: options.headers, clientHeaders: options.clientHeaders, filter: options.filter };
+	const ask = { front: options.front, headers: options.headers, clientHeaders: options.clientHeaders, filter: options.filter, usage: true };
+	// An OpenAI-front client sees the final usage chunk only when it asked for one; the meter always gets it.
+	const hide = meter.meta.front === "openai" && body?.stream_options?.include_usage !== true;
 	/**
 	 * Record where the request goes.
 	 * @param {any} sent - Result of `request`.
@@ -86,6 +88,8 @@ async function round({ transport, textOnly, request, response, stream, error }, 
 	const note = (sent) => {
 		meter.meta.model = sent.body.model ?? null;
 		meter.meta.upstream = sent.upstream;
+		// A reply converted from an OpenAI-protocol upstream carries numbers the converter made up for the client; meter the upstream's own.
+		if (!sent.state.native && sent.state.front === "anthropic") meter.source(() => sent.state.convert?.upstreamUsage);
 	};
 	/**
 	 * Build the error reply for an upstream failure and settle the meter.
@@ -116,7 +120,7 @@ async function round({ transport, textOnly, request, response, stream, error }, 
 	const headers = http.plain(result.headers);
 	if (!result.ok) return fail(result.status, await parse(result), headers, upstream.state, "upstream_error");
 	if (upstream.state.stream) {
-		return { status: 200, headers: SSE_HEADERS, stream: meter.track(stream(result.body, upstream.state), options.signal) };
+		return { status: 200, headers: SSE_HEADERS, stream: meter.track(stream(result.body, upstream.state), options.signal, hide) };
 	}
 	const parsed = await parse(result);
 	if (parsed === null || typeof parsed !== "object") {

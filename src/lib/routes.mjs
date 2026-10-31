@@ -55,70 +55,83 @@ async function settle(promise, interval) {
  * @param {string} [model] - Model the client asked for (used in the early `message_start`).
  * @returns {AsyncGenerator<any>} Client events.
  */
-async function* late(sending, api, model) {
-	const anthropic = api.front === "anthropic";
-	if (anthropic) {
-		// Anthropic's API opens every stream with `message_start` before any token exists, and clients (Claude Code) treat
-		// the first real event as the sign that the request was accepted. Send it now, with the model the client asked
-		// for, together with an empty thinking block that the keep-alives (see `sse.ping`) can ride on while the upstream
-		// is still working. When the upstream answers, a first thinking block of its own takes over the early one; otherwise the early block is closed
-		// and the upstream's blocks are shifted by one index.
-		yield {
-			event: "message_start",
-			data: {
-				type: "message_start",
-				message: {
-					id: messageId(),
-					type: "message",
-					role: "assistant",
-					model,
-					content: [],
-					stop_reason: null,
-					stop_sequence: null,
-					usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+export async function* late(sending, api, model) {
+	// True once the upstream's stream is being read (the loop below then closes it).
+	let adopted = false;
+	try {
+		const anthropic = api.front === "anthropic";
+		if (anthropic) {
+			// Anthropic's API opens every stream with `message_start` before any token exists, and clients (Claude Code) treat
+			// the first real event as the sign that the request was accepted. Send it now, with the model the client asked
+			// for, together with an empty thinking block that the keep-alives (see `sse.ping`) can ride on while the upstream
+			// is still working. When the upstream answers, a first thinking block of its own takes over the early one; otherwise the early block is closed
+			// and the upstream's blocks are shifted by one index.
+			yield {
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: {
+						id: messageId(),
+						type: "message",
+						role: "assistant",
+						model,
+						content: [],
+						stop_reason: null,
+						stop_sequence: null,
+						usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+					}
 				}
-			}
-		};
-		yield {
-			event: "content_block_start",
-			data: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }
-		};
-	}
-	const result = await sending;
-	// Closes the early thinking block (its signature is ours, like the converter's).
-	const closeEarly = function* () {
-		yield {
-			event: "content_block_delta",
-			data: { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: sign() } }
-		};
-		yield { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } };
-	};
-	if (result.stream) {
-		// `offset` stays null until the first real block decides it: a thinking block takes over the early one (offset 0),
-		// anything else closes it and is shifted by one index.
-		let offset = null;
-		for await (const event of result.stream) {
-			if (!anthropic) {
-				yield event;
-				continue;
-			}
-			if (event.event === "message_start") continue;
-			if (offset === null && event.event === "content_block_start" && event.data.content_block.type === "thinking") {
-				offset = 0;
-				continue;
-			}
-			if (offset === null) {
-				yield* closeEarly();
-				offset = 1;
-			}
-			yield offset > 0 && typeof event.data?.index === "number"
-				? { ...event, data: { ...event.data, index: event.data.index + offset } }
-				: event;
+			};
+			yield {
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }
+			};
 		}
-		return;
+		const result = await sending;
+		// Closes the early thinking block (its signature is ours, like the converter's).
+		const closeEarly = function* () {
+			yield {
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: sign() } }
+			};
+			yield { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } };
+		};
+		if (result.stream) {
+			adopted = true;
+			// `offset` stays null until the first real block decides it: a thinking block takes over the early one (offset 0),
+			// anything else closes it and is shifted by one index.
+			let offset = null;
+			for await (const event of result.stream) {
+				if (!anthropic) {
+					yield event;
+					continue;
+				}
+				if (event.event === "message_start") continue;
+				if (offset === null && event.event === "content_block_start" && event.data.content_block.type === "thinking") {
+					offset = 0;
+					continue;
+				}
+				if (offset === null) {
+					yield* closeEarly();
+					offset = 1;
+				}
+				yield offset > 0 && typeof event.data?.index === "number"
+					? { ...event, data: { ...event.data, index: event.data.index + offset } }
+					: event;
+			}
+			return;
+		}
+		if (anthropic) yield* closeEarly();
+		yield* failure(api, result.body);
+	} finally {
+		// Closed before the upstream answered (the client left while the early events were being written): a stream that arrives
+		// later is never read, so close it for its usage report to be delivered.
+		if (!adopted)
+			sending.then(
+				(result) => result.stream?.return?.(),
+				() => {}
+			);
 	}
-	if (anthropic) yield* closeEarly();
-	yield* failure(api, result.body);
 }
 
 /**
@@ -271,11 +284,11 @@ export function register(fastify, options, captured) {
 		fastify.addHook("preHandler", async (request, reply) => {
 			if (request.routeOptions.config?.public) return;
 			let route = null;
-			if (request.body && typeof request.body === "object" && request.body.model !== undefined) {
+			if (request.body && typeof request.body === "object" && !Array.isArray(request.body)) {
 				try {
 					route = api.route(request.body);
 				} catch {
-					// A bad body is refused by the normal handler with its own 400.
+					// An invalid body is refused by the normal handler with its own 400.
 				}
 			}
 			let verdict;

@@ -113,14 +113,33 @@ describe("authorize (anthropic front)", () => {
 			expect(seen[0].headers["x-tenant"]).toBe("t1");
 			expect(seen[0].route).toEqual(api.route({ model: "opus" }));
 			expect(seen[0].route).toMatchObject({ requested: "opus", model: "qwen3-coder" });
-			// GET: no body, no route. A body without a model, and a body that is not an object: no route either; the handler answers.
+			// GET: no body, no route. A body without a model is routed like request routes it; only a body that is not an object gets no route.
 			await fetch(`${server.url}/v1/models`);
 			expect(seen[1]).toMatchObject({ method: "GET", url: "/v1/models", body: undefined, route: null });
 			await post(`${server.url}/v1/messages`, { max_tokens: 1, messages: [] });
-			expect(seen[2].route).toBeNull();
+			expect(seen[2].route).toEqual(api.route({ max_tokens: 1, messages: [] }));
+			expect(seen[2].route).toMatchObject({ requested: undefined, model: "qwen3-coder" });
 			const array = await post(`${server.url}/v1/messages`, []);
 			expect(seen[3]).toMatchObject({ body: [], route: null });
 			expect(array.status).toBe(400);
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("cannot be bypassed by leaving the model out", async () => {
+		const upstream = await fakeVllm({ models: ["secret-model"] });
+		try {
+			const api = await make({ upstreams: [upstream.url] });
+			const seen = [];
+			const server = await api.server.start({
+				port: 0,
+				authorize: (request) => (seen.push(request.route), request.route?.model === "allowed")
+			});
+			const reply = await post(`${server.url}/v1/messages`, { max_tokens: 8, messages: [{ role: "user", content: "hi" }] });
+			expect(reply.status).toBe(401);
+			expect(seen.at(-1)).toMatchObject({ model: "secret-model", requested: undefined });
+			expect(upstream.requests.some((entry) => JSON.stringify(entry.body ?? "").includes('"hi"'))).toBe(false);
 		} finally {
 			await upstream.close();
 		}

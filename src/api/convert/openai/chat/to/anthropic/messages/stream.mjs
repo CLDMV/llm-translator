@@ -188,7 +188,11 @@ export async function* stream(source, state, settings) {
 					}
 				});
 			}
-			if (chunk.usage) usage = chunk.usage;
+			if (chunk.usage) {
+				usage = chunk.usage;
+				// Kept for `send`, whose usage report wants the upstream's own counts rather than the numbers written for the client.
+				if (state) state.upstreamUsage = chunk.usage;
+			}
 			const choice = chunk.choices?.[0];
 			if (!choice) continue;
 			const delta = choice.delta ?? {};

@@ -63,6 +63,7 @@ const server = await api.server.start({
 	authorize: async (request) => {
 		const key = await keys.lookup(request.headers["x-api-key"]);
 		if (!key) return { ok: false, status: 401, message: "invalid key" };
+		if (request.method === "POST" && !request.route) return { ok: false, status: 400, message: "unroutable request" };
 		if (request.route && !key.models.includes(request.route.model)) return { ok: false, status: 403, message: "model not allowed" };
 		return { ok: true, context: { keyId: key.id } };
 	},
@@ -70,7 +71,7 @@ const server = await api.server.start({
 });
 ```
 
-`request` is `{ method, url, headers, body, front, route }`. `body` is the parsed body (`undefined` for `GET`). `route` is the result of `api.route(body)` (see below) when the body is an object with a `model`, otherwise `null`; a body that cannot be routed is passed with `route: null` and answered with the usual 400.
+`request` is `{ method, url, headers, body, front, route }`. `body` is the parsed body (`undefined` for `GET`). `route` is the result of `api.route(body)` (see below) for every object body, with or without a `model` (a body without one is routed like `request` routes it, which may substitute the only model an upstream serves). `route` is `null` only for a body that is not an object or cannot be routed; the normal handler then answers it with a 400. A hook that enforces a model allow-list should therefore refuse a `POST` whose `request.route` is `null`, as the example above does.
 
 | Return value                                | Result                                                      |
 | ------------------------------------------- | ----------------------------------------------------------- |
@@ -104,7 +105,7 @@ The default transport is built on `node:http` and applies no timeouts of its own
 
 ## Client disconnects
 
-When the client goes away the upstream request is aborted, so the GPU stops generating tokens nobody reads. This works while waiting for the upstream, while streaming, and after an early commit.
+When the client goes away the upstream request is aborted, so the GPU stops generating tokens nobody reads. This works while waiting for the upstream, while streaming, and after an early commit. A request whose client left before the route handler ran makes no upstream call and gets no `onUsage` call. Once an upstream call has been made, `onUsage` is called exactly once, also when the client left.
 
 ## Programmatic use
 
@@ -119,7 +120,7 @@ await server.close(); // one server
 await api.server.stop(); // every server started through this translator; open connections are closed, not waited for
 ```
 
-`start` options are `host`, `port`, `front`, `apiKey`, `bodyLimit` (default 64 MiB, large enough for images and PDFs), `logger` and `allowUnauthenticated`. `front` applies to that server only, so one translator can serve an Anthropic port and an OpenAI port at the same time; `api.status().front` keeps reporting the configured front.
+`start` options are `host`, `port`, `front`, `apiKey`, `bodyLimit` (default 64 MiB, large enough for images and PDFs), `logger`, `allowUnauthenticated`, `authorize` and `onUsage`. `front` applies to that server only, so one translator can serve an Anthropic port and an OpenAI port at the same time; `api.status().front` keeps reporting the configured front.
 
 ## Fastify plugin
 
@@ -186,15 +187,15 @@ const reply = await api.send(body, {
 
 The report:
 
-| Field                                                                                     | Meaning                                                                                                                                                                                       |
-| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` | Numbers, or `null` when unknown (never `0` for unknown). `input_tokens` excludes cached tokens. On the OpenAI front, cache creation is folded into `input_tokens`.                            |
-| `reported`                                                                                | `false` when the reply carried no usage; every token field is then `null`. An OpenAI-front stream carries usage only when the client sent `stream_options.include_usage`.                     |
-| `complete`                                                                                | `true` only when the reply finished normally.                                                                                                                                                 |
-| `reason`                                                                                  | `"done"`, `"aborted"` (signal aborted, or the consumer stopped iterating), `"error"` (stream failure, connection failure, conversion failure) or `"upstream_error"` (non-OK upstream status). |
-| `model`, `requested`, `upstream`, `front`, `stream`                                       | Model sent upstream, model the client asked for, upstream endpoint name, client protocol, and whether a stream was requested.                                                                 |
+| Field                                                                                     | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` | Numbers, or `null` when unknown (never `0` for unknown). `input_tokens` excludes cached tokens. A field the source did not carry stays `null`: for an upstream on the OpenAI protocol `cache_creation_input_tokens` is always `null` (cache creation is folded into `input_tokens`) and `cache_read_input_tokens` is `null` unless the upstream reported cached tokens. On the OpenAI front the numbers come from the OpenAI-shaped reply, so `cache_read_input_tokens` is `null` when no cached tokens were reported. |
+| `reported`                                                                                | `false` when the reply carried no usage; every token field is then `null`.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `complete`                                                                                | `true` only when the reply finished normally. A stream counts as finished only once its terminal marker was seen: `message_stop` (Anthropic front), `[DONE]` or a chunk with a `finish_reason` (OpenAI front). A stream that ends without it is reported with reason `error`.                                                                                                                                                                                                                                          |
+| `reason`                                                                                  | `"done"`, `"aborted"` (signal aborted, or the consumer stopped iterating), `"error"` (stream failure, connection failure, conversion failure) or `"upstream_error"` (non-OK upstream status).                                                                                                                                                                                                                                                                                                                          |
+| `model`, `requested`, `upstream`, `front`, `stream`                                       | Model sent upstream, model the client asked for, upstream endpoint name, client protocol, and whether a stream was requested.                                                                                                                                                                                                                                                                                                                                                                                          |
 
-A partial stream reports the usage seen so far (cumulative; the last values win). Counts are read from the client-protocol output, so converted and pass-through replies are reported the same way. Usage that is absent or all zero counts as not reported. An exception in `onUsage` is reported as a warning and never breaks the reply. When `send` throws (the caller aborted), `onUsage` is still called.
+A partial stream reports the usage seen so far (cumulative; the last values win). Counts are read from the client-protocol output, except for an Anthropic-front reply converted from an OpenAI-protocol upstream, where the upstream's own `usage` is used. On the OpenAI front the translator always asks the upstream for the final usage chunk of a stream, so the report is complete whatever the client sent; the client receives that chunk only when it sent `stream_options.include_usage`. Usage that is absent or all zero counts as not reported. An exception in `onUsage` is reported as a warning and never breaks the reply. When `send` throws (the caller aborted), `onUsage` is still called.
 
 - `api.sse.encode(event)` formats one frame, `api.sse.parse(source)` reads frames, `api.sse.ping(events, { interval })` adds pings to any event stream, and `api.sse.write(target, events)` pumps a stream into a writable with backpressure.
 - `api.error.build(status, message, { type, code, param })` creates an error reply in the front's shape for failures that originate in your server, such as authentication.

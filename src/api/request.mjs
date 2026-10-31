@@ -28,7 +28,7 @@ import * as images from "../lib/images.mjs";
  * Route a client request body (in the configured `front` protocol) to an upstream and convert it to that upstream's
  * protocol. Does no I/O.
  * @param {any} body - Client request body (Anthropic Messages or OpenAI Chat Completions, per `front`).
- * @param {any} [options] - `{ front, headers, clientHeaders, filter, images }`. `front` overrides the configured front for this call, `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback).
+ * @param {any} [options] - `{ front, headers, clientHeaders, filter, images, usage }`. `front` overrides the configured front for this call, `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback), `usage: true` (used by `send`) makes a streaming OpenAI-front request always ask the upstream for its final usage chunk.
  * @returns {Promise<{upstream: string, method: string, url: string, path: string, headers: Record<string,string>, body: any, state: any, images: {sent: boolean, retry: boolean, key: string}}>} The upstream request and the state `response`/`stream`/`error` need. `images` tells `send` whether the body carries images, whether a refusal may be retried without them and the key under which a refusal is remembered.
  */
 export async function request(body, options = {}) {
@@ -46,6 +46,14 @@ export async function request(body, options = {}) {
 		({ body: upstream, state: converted } = await convert.request(body, settings));
 	} else {
 		upstream = c.front === "openai" && (options.filter ?? settings.passthroughFilter === true) ? filterChatBody(body) : { ...body };
+	}
+	if (options.usage === true && stream && c.front === "openai") {
+		// Internal (used by `send`): always ask for the final usage chunk so usage can be metered; `send` hides it from clients that did not ask.
+		if (convert) converted.includeUsage = true;
+		else {
+			const given = upstream.stream_options && typeof upstream.stream_options === "object" ? upstream.stream_options : {};
+			upstream.stream_options = { ...given, include_usage: true };
+		}
 	}
 	if (text && !convert && c.front === "openai") upstream = images.strip(upstream);
 	upstream.model = model;
