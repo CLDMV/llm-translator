@@ -395,6 +395,26 @@ describe("usage helpers", () => {
 		});
 	});
 
+	it("warns with the value itself when onUsage throws something that is not an Error", async () => {
+		const lines = [];
+		const m = meter(
+			{ front: "anthropic", requested: null, model: null, upstream: null, stream: false },
+			() => {
+				throw "plain string";
+			},
+			(line) => lines.push(line)
+		);
+		m.finish("done");
+		const rejecting = meter(
+			{ front: "anthropic", requested: null, model: null, upstream: null, stream: false },
+			async () => Promise.reject("rejected string"),
+			(line) => lines.push(line)
+		);
+		rejecting.finish("done");
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(lines).toEqual(["onUsage threw: plain string", "onUsage rejected: rejected string"]);
+	});
+
 	it("the tracker forwards next/throw to the source and ignores non-object events", async () => {
 		const m = meter({ front: "anthropic", requested: null, model: null, upstream: null, stream: true }, undefined, () => {});
 		m.event("text");
