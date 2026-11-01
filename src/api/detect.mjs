@@ -33,6 +33,15 @@ export async function detect(options = {}) {
 	const c = capture(self, context);
 	const { status } = self;
 	const network = options.network !== false;
+	for (const driver of c.drivers) {
+		const fields = driver.info.fields;
+		if (fields !== undefined && !(Array.isArray(fields) && fields.every((field) => typeof field === "string"))) {
+			throw new TranslatorError(`Driver ${driver.name}: info().fields must be an array of field names`, {
+				code: "invalid_driver",
+				status: 500
+			});
+		}
+	}
 	const probe = { transport: c.state.transport, signal: options.signal, timeout: c.config.detectTimeout };
 	await Promise.all(c.state.endpoints.map((endpoint) => bind(c, endpoint, network, probe)));
 	return status();

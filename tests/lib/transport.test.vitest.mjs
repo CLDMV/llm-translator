@@ -207,6 +207,27 @@ describe("transport connect timeout", () => {
 		expect(settled).toBe(false);
 	});
 
+	test("for https the timer also covers the TLS handshake", async () => {
+		vi.useFakeTimers();
+		// TCP is connected (connecting is false) but the handshake has not finished.
+		const stalled = Object.assign(new EventEmitter(), { connecting: false });
+		const failing = transport("https://host.test/", { connectTimeout: 500 }, fake(stalled));
+		const rejected = expect(failing).rejects.toThrow("connect timeout after 500 ms");
+		stalled.emit("connect");
+		await vi.advanceTimersByTimeAsync(500);
+		await rejected;
+		const secure = Object.assign(new EventEmitter(), { connecting: true });
+		let settled = false;
+		transport("https://host.test/", { connectTimeout: 500 }, fake(secure)).then(
+			() => (settled = true),
+			() => (settled = true)
+		);
+		secure.emit("connect");
+		secure.emit("secureConnect");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(settled).toBe(false);
+	});
+
 	test("a real server that answers is not affected", async () => {
 		const res = await transport(`${base}/json`, { connectTimeout: 5000 });
 		expect(res.status).toBe(200);

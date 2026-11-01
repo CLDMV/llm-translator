@@ -177,7 +177,7 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 	 */
 	const attempt = async (first) => {
 		let sent = first;
-		let result = await call(transport, sent, options.signal, limits);
+		let result = await call(transport, sent, options.signal, limitsNow());
 		if (!result.ok && result.status === 400 && ((sent.images.sent && sent.images.retry) || (sent.tools.sent && sent.tools.retry))) {
 			// A text-only model, or a vLLM server without tool parsing, behind an OpenAI-protocol upstream: ask once more without what it
 			// refused. A refused image is remembered for the model; a refused tool list is not (the server may be restarted with the flags).
@@ -191,7 +191,7 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 			if (!("images" in retry || "tools" in retry)) return { upstream: sent, result, failure };
 			sent = await request(body, { ...ask, ...retry, endpoint: sent.upstream });
 			note(sent);
-			result = await call(transport, sent, options.signal, limits);
+			result = await call(transport, sent, options.signal, limitsNow());
 		}
 		return { upstream: sent, result };
 	};
@@ -201,6 +201,9 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 	let turn = 0;
 	// Timeouts apply only to endpoints that have pool mates to fail over to; a lone endpoint keeps the transport's no-timeout behaviour.
 	const limits = names.length > 1 ? captured.config.pool : null;
+	// The last untried endpoint has nothing to fail over to, so a slow first token must not become a 502 there: only the connect timeout applies.
+	const limitsNow = () =>
+		limits && { connectTimeout: limits.connectTimeout, headersTimeout: turn + 1 < names.length ? limits.headersTimeout : 0 };
 	// The endpoint whose in-flight slot this request holds.
 	let held = captured.endpoint(upstream.upstream);
 	const release = () => held.health.inflight--;

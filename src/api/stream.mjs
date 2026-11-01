@@ -36,6 +36,18 @@ function restore(data, model) {
 }
 
 /**
+ * Does a Chat Completions chunk end the answer: a choice with a `finish_reason`, or the usage-only chunk (`choices: []`)?
+ * Text a driver is still holding has to go out before it.
+ * @param {*} data - Chunk payload.
+ * @returns {boolean} True for a finish or usage-only chunk.
+ */
+function ends(data) {
+	return (
+		Boolean(data) && Array.isArray(data.choices) && (data.choices.length === 0 || data.choices.some((choice) => choice?.finish_reason))
+	);
+}
+
+/**
  * Convert an upstream SSE stream to client events: Anthropic events (`message_start`, `content_block_*`, ...) for the
  * Anthropic front, Chat Completions chunks followed by `"[DONE]"` for the OpenAI front. Pings are added by the SSE writer.
  * @param {ReadableStream | AsyncIterable<string | Uint8Array> | string} source - Upstream SSE bytes or text.
@@ -70,19 +82,29 @@ export function stream(source, state) {
 			settings
 		);
 	}
+	// A driver that can hold text back (it has `flush`) may still release some after the finish and usage chunks, so those two are kept
+	// back until the stream ends and go out after the released text: the answer is complete before it is finished.
+	const holding = Boolean(normalize && driver.flush);
 	return (async function* () {
+		const tail = [];
 		let closed = false;
 		for await (const message of messages(source)) {
 			if (message.data === "[DONE]") {
 				// Held text goes out before the sentinel.
 				for await (const held of flushed()) yield { data: restore(held.data, state.model) };
+				yield* tail.splice(0);
 				closed = true;
 				yield message;
 				continue;
 			}
 			const data = normalize ? await normalize(message.data, ctx) : message.data;
-			yield { ...message, data: restore(data, state.model) };
+			const out = { ...message, data: restore(data, state.model) };
+			if (holding && ends(data)) tail.push(out);
+			else yield out;
 		}
-		if (!closed) for await (const held of flushed()) yield { data: restore(held.data, state.model) };
+		if (!closed) {
+			for await (const held of flushed()) yield { data: restore(held.data, state.model) };
+			yield* tail;
+		}
 	})();
 }

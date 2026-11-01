@@ -334,6 +334,72 @@ describe("deepseek-legacy in a stream", () => {
 		expect(events.map((event) => event.data?.choices?.[0]?.delta?.content ?? "").join("")).toBe("<thi");
 	});
 
+	it("the OpenAI front gets held text before the finish and usage chunks, with and without [DONE]", async () => {
+		const usage = { ...base, choices: [], usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } };
+		const chunks = [frame({ reasoning_content: "r1" }), frame({ content: "" }), frame({}, "stop"), usage, frame({ content: "<" })];
+		const shape = (events) =>
+			events
+				.map((event) => {
+					if (event.data === "[DONE]") return "[DONE]";
+					const choice = event.data.choices[0];
+					if (!choice) return "usage";
+					return choice.finish_reason ?? choice.delta.reasoning_content ?? choice.delta.content;
+				})
+				.filter((entry) => entry !== "");
+		for (const tail of [["[DONE]"], []]) {
+			const transport = server(
+				{},
+				() => new Response(openaiSse([...chunks, ...tail]), { status: 200, headers: { "content-type": "text/event-stream" } })
+			);
+			const api = await make({ front: "openai", upstreams: [{ url: "http://llama.test", backend: "llamacpp" }], transport });
+			const reply = await api.send({
+				model: "qwen",
+				stream: true,
+				stream_options: { include_usage: true },
+				messages: [{ role: "user", content: "hi" }]
+			});
+			const events = await collect(reply.stream);
+			expect(shape(events)).toEqual(["r1", "<", "stop", "usage", ...tail]);
+			expect(await reply.usage).toMatchObject({ complete: tail.length > 0, input_tokens: 3, output_tokens: 2 });
+		}
+	});
+
+	it("keeps repetition_penalty and top_k through the pass-through filter, renaming the penalty for llama.cpp", async () => {
+		const bodies = [];
+		const transport = server(
+			{},
+			(init) => (
+				bodies.push(JSON.parse(init.body)),
+				{
+					body: {
+						id: "x",
+						object: "chat.completion",
+						created: 1,
+						model: "qwen",
+						choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+						usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
+					}
+				}
+			)
+		);
+		const api = await make({
+			front: "openai",
+			upstreams: [{ url: "http://llama.test", backend: "llamacpp" }],
+			transport,
+			settings: { passthroughFilter: true }
+		});
+		await api.send({
+			model: "qwen",
+			messages: [{ role: "user", content: "hi" }],
+			repetition_penalty: 1.2,
+			top_k: 5,
+			kv_transfer_params: {}
+		});
+		expect(bodies[0]).toMatchObject({ repeat_penalty: 1.2, top_k: 5 });
+		expect(bodies[0]).not.toHaveProperty("repetition_penalty");
+		expect(bodies[0]).not.toHaveProperty("kv_transfer_params");
+	});
+
 	it("flush releases nothing when nothing is held, inside a repeated block, or without state", async () => {
 		const api = await make({ upstreams: ["http://x.test"], detect: false });
 		const { flush, chunk } = api.driver.llamacpp;

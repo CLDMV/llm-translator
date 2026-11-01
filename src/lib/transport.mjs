@@ -19,7 +19,7 @@
  * It exists because the global `fetch` (undici) enforces a 300 second headers timeout and a 300 second body timeout,
  * which kill requests to slow local servers: vLLM sends its response headers together with the first token, and a
  * long prompt on a CPU or a busy GPU can take far longer than five minutes to produce one. This transport applies no
- * timeouts by default (the caller aborts through `signal`; `init.connectTimeout` opts in to a limit on the TCP connection), never follows redirects (so credentials in headers are never
+ * timeouts by default (the caller aborts through `signal`; `init.connectTimeout` opts in to a limit on the connection, including the TLS handshake for https), never follows redirects (so credentials in headers are never
  * replayed to another host; with `redirect: "error"` a redirect rejects instead of being returned) and does not
  * decompress (it asks for `identity`). Every request uses a fresh connection (no keep-alive pool), so a server that closed an
  * idle connection can never make the next request fail with a stale-socket reset.
@@ -66,9 +66,11 @@ export function transport(url, init = {}, modules = { http, https }) {
 		request.on("error", reject);
 		if (connectTimeout > 0) {
 			request.once("socket", (socket) => {
-				if (!socket.connecting) return;
+				// A TLS socket is only usable after the handshake, so for https the timer runs until `secureConnect`.
+				const secure = target.protocol === "https:";
+				if (!secure && !socket.connecting) return;
 				const timer = setTimeout(() => request.destroy(new Error(`connect timeout after ${connectTimeout} ms`)), connectTimeout);
-				socket.once("connect", () => clearTimeout(timer));
+				socket.once(secure ? "secureConnect" : "connect", () => clearTimeout(timer));
 				request.once("close", () => clearTimeout(timer));
 			});
 		}

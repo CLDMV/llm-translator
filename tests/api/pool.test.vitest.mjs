@@ -756,6 +756,28 @@ describe("review fixes", () => {
 			expect(calls("b")).toBe(1);
 		});
 
+		it("does not apply the headers timeout to the last endpoint left to try", async () => {
+			frozen();
+			let signal = "unset";
+			const { api, calls } = await farm(
+				{
+					a: hang,
+					b: (init) => ((signal = init.signal), new Promise((resolve) => setTimeout(() => resolve(answer("b")), 5000)))
+				},
+				{ pool: { headersTimeout: 1000 } }
+			);
+			const sending = api.send(hello);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(calls("b")).toBe(1);
+			await vi.advanceTimersByTimeAsync(5000);
+			const reply = await sending;
+			expect(reply.status).toBe(200);
+			expect(text(reply)).toBe("b");
+			expect(signal).toBeUndefined();
+			// The connect timeout still applies there.
+			expect(api.endpoint.status().endpoints[1]).toMatchObject({ healthy: true });
+		});
+
 		it("does not cap a reply once its headers have arrived", async () => {
 			frozen();
 			let signal;
