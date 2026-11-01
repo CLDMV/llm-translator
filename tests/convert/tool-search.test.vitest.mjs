@@ -136,13 +136,13 @@ describe("expand (default): deferred tools are offered once a tool_reference loa
 			call("t1", "ToolSearch"),
 			result("t1", [{ type: "image" }, { type: "tool_reference" }])
 		]);
-		expect(found).toEqual({ loaded: ["ToolSearch"], called: ["ToolSearch"], defined: new Map(), capped: false });
+		expect(found).toEqual({ loaded: ["ToolSearch"], searched: [], called: ["ToolSearch"], defined: new Map(), capped: false });
 	});
 
 	test("the wire name of a long tool name does not depend on whether it is offered", async () => {
 		const long = `mcp__${"x".repeat(80)}`;
 		const other = `mcp__${"x".repeat(80)}y`;
-		const defs = [tool("Read"), search, tool(long, { defer_loading: true }), tool(other, { defer_loading: true }), placeholder];
+		const defs = [tool("Read"), tool(long, { defer_loading: true }), tool(other, { defer_loading: true }), placeholder];
 		const before = await request({ model: "m", max_tokens: 1, tools: defs, messages: [ask("a")] });
 		const after = await request({
 			model: "m",
@@ -237,9 +237,19 @@ describe("trimmed history, repeated ids and bad definitions", () => {
 		expect(plain.state.toolSearch.stubbed).toEqual([]);
 	});
 
+	test("a tool that was only called and has since been removed from the request is not offered again", async () => {
+		const messages = [ask("a"), call("b1", "Bash", { command: "ls" }), result("b1", "ok"), call("t1", "NotebookEdit"), result("t1", "ok")];
+		const { body, state } = await request({ model: "m", max_tokens: 1, tools, messages });
+		expect(names(body)).toEqual(["Read", "ToolSearch"]);
+		expect(state.toolSearch.stubbed).toEqual([]);
+		// The same tool, loaded through tool search, is a different matter.
+		const searched = [...messages.slice(0, 3), call("t0", "ToolSearch", { query: "select:Bash" }), result("t0", "[cleared]")];
+		expect(names(await convert({ tools, messages: searched }))).toEqual(["Read", "ToolSearch", "Bash"]);
+	});
+
 	test("a tool_use id used by more than one call reads no results", async () => {
 		const messages = [ask("a"), call("x", "Bash"), call("x", "ToolSearch", { query: "q" }), result("x", fn("evil_tool"))];
-		expect(names(await convert({ tools, messages }))).not.toContain("evil_tool");
+		expect(names(await convert({ tools, messages }))).toEqual(["Read", "ToolSearch"]);
 		const reversed = [
 			ask("a"),
 			call("x", "ToolSearch", { query: "q" }),
@@ -247,7 +257,7 @@ describe("trimmed history, repeated ids and bad definitions", () => {
 			call("x", "Bash"),
 			result("x", fn("evil_tool"))
 		];
-		expect(names(await convert({ tools, messages: reversed }))).not.toContain("evil_tool");
+		expect(names(await convert({ tools, messages: reversed }))).toEqual(["Read", "ToolSearch"]);
 		expect(scan(messages).defined.size).toBe(0);
 	});
 
@@ -411,11 +421,11 @@ describe("plan()", () => {
 	const s = (extra) => resolve(extra);
 	test("passes typed tools through to be dropped by the converter, and ignores non-custom deferred flags", () => {
 		const typed = { type: "web_search_20250305", name: "web_search", defer_loading: true };
-		expect(plan([typed, tool("Read")], { loaded: [], called: [], defined: new Map() }, s(), undefined).offer).toEqual([
+		expect(plan([typed, tool("Read")], { loaded: [], searched: [], called: [], defined: new Map() }, s(), undefined).offer).toEqual([
 			typed,
 			tool("Read")
 		]);
-		const mixed = plan([typed, cron, search], { loaded: [], called: [], defined: new Map() }, s(), undefined);
+		const mixed = plan([typed, cron, search], { loaded: [], searched: [], called: [], defined: new Map() }, s(), undefined);
 		expect(mixed.offer).toEqual([typed, search]);
 	});
 	test("settings validate toolSearch", () => {

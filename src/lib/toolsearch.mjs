@@ -98,10 +98,11 @@ function selected(input) {
  * the name stays in `loaded`, and `plan` copes with the missing definition.
  * @param {any[]} messages - Anthropic messages.
  * @param {Set<string>} [known] - Names of the tools the request lists; their definitions are not kept (the listed one wins) and do not count against the cap.
- * @returns {{loaded: string[], called: string[], defined: Map<string, any>, capped: boolean}} Loaded names in order of first appearance, names the assistant called, the definitions found in results and whether `LIMITS.definitions` turned one away.
+ * @returns {{loaded: string[], searched: string[], called: string[], defined: Map<string, any>, capped: boolean}} Loaded names in order of first appearance, the names tool search itself loaded (selected, referenced or defined by a result; calling a tool is not evidence), names the assistant called, the definitions found in results and whether `LIMITS.definitions` turned one away.
  */
 export function scan(messages, known = new Set()) {
 	const loaded = [];
+	const searched = [];
 	const called = [];
 	const defined = new Map();
 	const calls = new Map();
@@ -109,6 +110,10 @@ export function scan(messages, known = new Set()) {
 	let capped = false;
 	const add = (name) => {
 		if (!loaded.includes(name)) loaded.push(name);
+	};
+	const search = (name) => {
+		add(name);
+		if (!searched.includes(name)) searched.push(name);
 	};
 	for (const message of messages) {
 		if (!Array.isArray(message?.content)) continue;
@@ -121,16 +126,16 @@ export function scan(messages, known = new Set()) {
 				if (seen.get(block.id) === 1) calls.set(block.id, block.name);
 				add(block.name);
 				if (!called.includes(block.name)) called.push(block.name);
-				if (block.name === SEARCH_TOOL) for (const name of selected(block.input)) add(name);
+				if (block.name === SEARCH_TOOL) for (const name of selected(block.input)) search(name);
 			} else if (block?.type === "tool_result") {
 				for (const inner of Array.isArray(block.content) ? block.content : []) {
-					if (inner?.type === "tool_reference" && typeof inner.tool_name === "string") add(inner.tool_name);
+					if (inner?.type === "tool_reference" && typeof inner.tool_name === "string") search(inner.tool_name);
 				}
 				if (calls.get(block.tool_use_id) !== SEARCH_TOOL) continue;
 				for (const match of textOf(block.content).matchAll(FUNCTION_LINE)) {
 					const tool = definition(match[1]);
 					if (!tool) continue;
-					add(tool.name);
+					search(tool.name);
 					if (known.has(tool.name) || defined.has(tool.name)) continue;
 					if (defined.size >= LIMITS.definitions) capped = true;
 					else defined.set(tool.name, tool);
@@ -138,7 +143,7 @@ export function scan(messages, known = new Set()) {
 			}
 		}
 	}
-	return { loaded, called, defined, capped };
+	return { loaded, searched, called, defined, capped };
 }
 
 /** Description of a tool whose definition was trimmed from the conversation. */
@@ -156,10 +161,10 @@ export const TRIMMED = "The definition of this tool was trimmed from the convers
  * A tool a `ToolSearch` result defined in text and that the request does not list is offered after the others (`expand` only).
  * `deferredTools: "drop"` leaves the deferred tools to the caller to drop and hides `ToolSearch`, which would have nothing to load.
  * @param {any[]} tools - Anthropic tools of the request.
- * @param {{loaded: string[], called: string[], defined: Map<string, any>}} found - Result of `scan`.
+ * @param {{loaded: string[], searched: string[], called: string[], defined: Map<string, any>}} found - Result of `scan`.
  * @param {{toolSearch: "expand" | "inline" | "native", deferredTools: "forward" | "drop"}} s - Settings.
  * @param {any} [choice] - The request's `tool_choice`.
- * A tool the conversation loaded whose definition is no longer anywhere (its `ToolSearch` result was trimmed) keeps `ToolSearch` offered so the
+ * A tool tool search loaded (selected, referenced or defined by a result) whose definition is no longer anywhere (its `ToolSearch` result was trimmed) keeps `ToolSearch` offered so the
  * model can search again, and one the assistant already called is offered with an empty object schema (`TRIMMED`) so its calls in the history
  * still map to a tool.
  * @returns {{offer: any[], loaded: string[], hidden: string[], stubbed: string[]}} Tools to convert, names of the deferred tools that are loaded, the names left out on purpose and the names of tools offered with a placeholder schema.
@@ -174,8 +179,9 @@ export function plan(tools, found, s, choice) {
 	let loaded = [];
 	let stubs = [];
 	const names = new Set(tools.map((tool) => tool.name));
-	// Loaded, but not in the request and no longer defined anywhere: the result that defined it was trimmed.
-	const lost = found.loaded.filter((name) => !names.has(name) && !found.defined.has(name));
+	// Loaded by tool search, but not in the request and no longer defined anywhere: the result that defined it was trimmed. A tool that was merely
+	// called and is absent from the request was removed by the client on purpose and is not offered.
+	const lost = found.searched.filter((name) => !names.has(name) && !found.defined.has(name));
 	// Loading on demand needs a client `ToolSearch` (or the placeholder that says Claude Code has one); without either, as with the server-side
 	// tool search of an SDK client, nothing could ever load the deferred tools, so they are offered at once.
 	const searchable = placeholder || tools.some((tool) => tool.name === SEARCH_TOOL);
