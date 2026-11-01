@@ -50,6 +50,15 @@ describe("recognising a missing tool parser", () => {
 	);
 });
 
+describe("the hint", () => {
+	it("suggests toolFallback only while it is off", () => {
+		expect(tools.hint(false)).toBe(tools.HINT);
+		expect(tools.HINT).toContain("toolFallback");
+		expect(tools.hint(true)).not.toContain("toolFallback");
+		expect(tools.hint(true)).toContain("--enable-auto-tool-choice");
+	});
+});
+
 describe("Chat Completions body helpers", () => {
 	it("detects and removes tools", () => {
 		const body = { model: "m", messages: [], tools: [{}], tool_choice: "auto", parallel_tool_calls: false, temperature: 1 };
@@ -197,7 +206,8 @@ describe("retrying without tools", () => {
 			try {
 				const again = await (await upstreamOf(stubborn, { toolFallback: true })).send(withTools);
 				expect(again.status).toBe(400);
-				expect(again.body.error.message).toContain(tools.HINT);
+				expect(again.body.error.message).toContain(tools.hint(true));
+				expect(again.body.error.message).not.toContain("toolFallback");
 				expect(chats(stubborn)).toHaveLength(2);
 			} finally {
 				await stubborn.close();

@@ -19,9 +19,20 @@
  * @module @cldmv/llm-translator/lib/tools
  */
 
+const RESTART =
+	"The vLLM server was started without tool-call parsing. Restart it with --enable-auto-tool-choice and --tool-call-parser <parser> (the parser depends on the model family)";
+
 /** Added to the error message the client receives when the upstream refuses tools for want of a tool parser. */
-export const HINT =
-	"The vLLM server was started without tool-call parsing. Restart it with --enable-auto-tool-choice and --tool-call-parser <parser> (the parser depends on the model family), or set the translator setting toolFallback to retry without tools.";
+export const HINT = `${RESTART}, or set the translator setting toolFallback to retry without tools.`;
+
+/**
+ * The hint for a refusal. When `toolFallback` is already on, suggesting it would be wrong (the retry has been spent), so only the restart advice remains.
+ * @param {boolean} toolFallback - Whether the `toolFallback` setting is on for the endpoint.
+ * @returns {string} Hint text.
+ */
+export function hint(toolFallback) {
+	return toolFallback ? `${RESTART}.` : HINT;
+}
 
 /**
  * Wordings seen from vLLM when a request carries tools but the server was started without tool parsing:
