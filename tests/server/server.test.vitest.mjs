@@ -426,6 +426,42 @@ describe("server (anthropic front)", () => {
 	});
 });
 
+describe("GET /v1/models/{id}", () => {
+	it("retrieves one model in the Anthropic shape, including ids with a slash, and answers 404 in the Anthropic error format", async () => {
+		const upstream = await fakeVllm({ models: ["qwen3-coder", "org/model"] });
+		try {
+			const api = await make({ upstreams: [upstream.url], aliases: { haiku: "qwen3-coder" } });
+			const server = await api.server.start({ port: 0 });
+			const one = await fetch(`${server.url}/v1/models/qwen3-coder`);
+			expect(one.status).toBe(200);
+			expect(await one.json()).toMatchObject({ type: "model", id: "qwen3-coder", display_name: "qwen3-coder", max_input_tokens: 32768 });
+			expect((await (await fetch(`${server.url}/v1/models/haiku`)).json()).id).toBe("haiku");
+			expect((await (await fetch(`${server.url}/v1/models/org/model`)).json()).id).toBe("org/model");
+			expect((await (await fetch(`${server.url}/v1/models/org%2Fmodel`)).json()).id).toBe("org/model");
+			const missing = await fetch(`${server.url}/v1/models/nope`);
+			expect(missing.status).toBe(404);
+			expect(await missing.json()).toEqual({ type: "error", error: { type: "not_found_error", message: "model: nope" } });
+			const empty = await fetch(`${server.url}/v1/models/`);
+			expect(empty.status).toBe(404);
+			expect((await empty.json()).type).toBe("error");
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("requires the api key like /v1/models", async () => {
+		const upstream = await fakeVllm();
+		try {
+			const api = await make({ upstreams: [upstream.url] });
+			const server = await api.server.start({ port: 0, apiKey: "secret" });
+			expect((await fetch(`${server.url}/v1/models/qwen3-coder`)).status).toBe(401);
+			expect((await fetch(`${server.url}/v1/models/qwen3-coder`, { headers: { "x-api-key": "secret" } })).status).toBe(200);
+		} finally {
+			await upstream.close();
+		}
+	});
+});
+
 describe("server (openai front)", () => {
 	it("serves chat completions, streaming with [DONE], models and rejects anthropic-only routes", async () => {
 		const upstream = await fakeVllm();
@@ -441,6 +477,13 @@ describe("server (openai front)", () => {
 			expect(streamed[0].data.object).toBe("chat.completion.chunk");
 			const models = await (await fetch(`${server.url}/v1/models`)).json();
 			expect(models).toMatchObject({ object: "list", data: [{ id: "qwen3-coder", object: "model" }] });
+			const one = await (await fetch(`${server.url}/v1/models/qwen3-coder`)).json();
+			expect(one).toMatchObject({ id: "qwen3-coder", object: "model", owned_by: "vllm" });
+			const missing = await fetch(`${server.url}/v1/models/nope`);
+			expect(missing.status).toBe(404);
+			expect(await missing.json()).toEqual({
+				error: { message: "The model 'nope' does not exist", type: "invalid_request_error", param: "model", code: "model_not_found" }
+			});
 			expect((await post(`${server.url}/v1/messages`, hello)).status).toBe(404);
 			expect((await post(`${server.url}/v1/messages/count_tokens`, hello)).status).toBe(404);
 			const unauthorized = await (

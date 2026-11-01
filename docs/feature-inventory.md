@@ -131,7 +131,7 @@ Source: Anthropic API inventory section 9.
 | ------ | -------------------------------------------------------------------------- | ------------------- | --------------- | ------------------------------------------------------------------------------- |
 | FI-083 | `POST /v1/messages/count_tokens`                                           | ANT-EP-count_tokens | implemented     | `api/token/count`                                                               |
 | FI-084 | `GET /v1/models`                                                           | ANT-EP-models       | implemented     | `api/model/list`                                                                |
-| FI-085 | `GET /v1/models/{id}` retrieval                                            | ANT-EP-models       | not implemented | Not routed Tracked: [#24](https://github.com/CLDMV/llm-translator/issues/24).   |
+| FI-085 | `GET /v1/models/{id}` retrieval                                            | ANT-EP-models       | implemented     | `api/model/get`, `lib/routes.mjs`                                               |
 | FI-086 | Message Batches (`/v1/messages/batches`)                                   | ANT-EP-batches      | not implemented | Not provided Tracked: [#25](https://github.com/CLDMV/llm-translator/issues/25). |
 | FI-087 | Files API (`/v1/files`)                                                    | ANT-EP-files        | not implemented | Not provided Tracked: [#17](https://github.com/CLDMV/llm-translator/issues/17). |
 | FI-088 | Skills, agents, sessions, memory stores, vaults, admin and compliance APIs | ANT §9              | out of scope    | Platform features with no local-server counterpart                              |

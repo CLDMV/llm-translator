@@ -80,6 +80,23 @@ describe("authorize (anthropic front)", () => {
 		}
 	});
 
+	it("runs for GET /v1/models/{id} like /v1/models: it sees the url, can refuse, and a refusal is not a 404", async () => {
+		const seen = [];
+		const { upstream, server } = await boot({
+			authorize: (request) => (seen.push(request), request.url.endsWith("secret") ? { ok: false, status: 403, message: "no" } : true)
+		});
+		try {
+			const allowed = await fetch(`${server.url}/v1/models/qwen3-coder`);
+			expect(allowed.status).toBe(200);
+			expect(seen[0]).toMatchObject({ method: "GET", url: "/v1/models/qwen3-coder", body: undefined, route: null });
+			const refused = await fetch(`${server.url}/v1/models/secret`);
+			expect(refused.status).toBe(403);
+			expect(await refused.json()).toEqual({ type: "error", error: { type: "permission_error", message: "no" } });
+		} finally {
+			await upstream.close();
+		}
+	});
+
 	it("treats a thrown or rejected hook as a 401 and logs the error", async () => {
 		for (const authorize of [
 			() => {

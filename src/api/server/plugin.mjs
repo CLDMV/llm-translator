@@ -23,8 +23,8 @@ import { register } from "../../lib/routes.mjs";
 import { resolve } from "../../lib/settings.mjs";
 
 /**
- * Fastify plugin. Anthropic front: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET|HEAD /`
- * and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `GET /v1/models`, `GET|HEAD /`. Responses stream as
+ * Fastify plugin. Anthropic front: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`,
+ * `GET|HEAD /` and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{id}`, `GET|HEAD /`. Responses stream as
  * `text/event-stream` with keep-alive pings; a client disconnect aborts the upstream request. Register it with
  * `app.register(api.server.plugin, { apiKey })`. `authorize(request)` (sync or async) runs after `apiKey` and the body parse and decides
  * with `true` / `{ ok: true, context }` or `false` / `{ ok: false, status, message }`; `onUsage(report, context)` receives each request's usage report.
@@ -56,6 +56,7 @@ export async function plugin(fastify, options = {}) {
 		route,
 		count: token.count,
 		list: model.list,
+		get: model.get,
 		build: error.build,
 		encode: sse.encode,
 		write: sse.write

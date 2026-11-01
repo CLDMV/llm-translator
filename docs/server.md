@@ -6,10 +6,10 @@ The translator can run as a standalone HTTP server, as a Fastify plugin inside a
 
 The server speaks one client protocol, the front, chosen with `front` (default `anthropic`).
 
-| Front       | Routes                                                                                                            |
-| ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET` and `HEAD` on `/` and `/api/hello` |
-| `openai`    | `POST /v1/chat/completions`, `GET /v1/models`, `GET` and `HEAD` on `/`                                            |
+| Front       | Routes                                                                                                                                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` and `/api/hello` |
+| `openai`    | `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/`                                            |
 
 Streaming replies use `content-type: text/event-stream`. Errors are always returned in the front's own error shape.
 
