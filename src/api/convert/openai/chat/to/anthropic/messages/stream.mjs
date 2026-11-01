@@ -58,6 +58,10 @@ export async function* stream(source, state, settings) {
 	let matchedStop = null;
 	let done = false;
 	let lastTool = 0;
+	// The server sends reasoning in its own field, so content is never split (as in the non-streaming conversion).
+	let ownReasoning = false;
+	// Set once a tool call had to wait for the think splitter to decide; later calls then wait too, so tool blocks keep their order.
+	let waitForSplit = false;
 	// True after reasoning and until the answer has its first visible character: leading whitespace is dropped.
 	let trimNext = false;
 	// Text and reasoning that arrives while a tool block is open waits until the tool blocks are done, because blocks stream one at a time.
@@ -142,11 +146,13 @@ export async function* stream(source, state, settings) {
 		if (entry === undefined) {
 			const name = call.function?.name ?? "";
 			const block = { type: "tool_use", id: anthropicToolId(call.id), name: restoreName(toolNames, name), input: {} };
-			entry = { state: s.toolStreaming === "buffer" ? "buffered" : "pending", sent: false, args: [], block };
+			if (splitter?.pending()) waitForSplit = true;
+			const buffer = s.toolStreaming === "buffer" || waitForSplit;
+			entry = { state: buffer ? "buffered" : "pending", sent: false, args: [], block };
 			tools.set(key, entry);
 			// Buffered calls wait for the end of the stream. Otherwise only one block can stream at a time: a call that starts
 			// while a tool block is open waits until it closes.
-			if (s.toolStreaming !== "buffer" && open?.kind !== "tool") {
+			if (!buffer && open?.kind !== "tool") {
 				entry.state = "open";
 				yield* begin("tool", block, entry);
 			}
@@ -196,9 +202,14 @@ export async function* stream(source, state, settings) {
 			const choice = chunk.choices?.[0];
 			if (!choice) continue;
 			const delta = choice.delta ?? {};
-			yield* piece("thinking", reasoningOf(delta));
+			const reasoning = reasoningOf(delta);
+			if (reasoning !== "" && !ownReasoning) {
+				ownReasoning = true;
+				if (splitter) yield* pieces(splitter.release());
+			}
+			yield* piece("thinking", reasoning);
 			if (typeof delta.content === "string" && delta.content !== "") {
-				if (splitter) yield* pieces(splitter.push(delta.content));
+				if (splitter && !ownReasoning) yield* pieces(splitter.push(delta.content));
 				else yield* piece("text", delta.content);
 			}
 			for (const call of delta.tool_calls ?? []) yield* toolCall(call);

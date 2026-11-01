@@ -79,7 +79,11 @@ export function splitThink(content, open = false) {
  * With `open` (see {@link splitThink}) nothing is emitted until the first `</think>` arrives, because only then is it known
  * that the content so far was reasoning; if the stream ends first, everything held is released as answer text.
  * @param {boolean} [open] - The output starts inside a thought.
- * @returns {{ push: (delta: string) => { reasoning: string, text: string }, end: () => { reasoning: string, text: string } }} Splitter.
+ *
+ * `release()` stops splitting: anything held is returned as text and all later content passes through as text (used once the server
+ * sends reasoning in its own field, when content is never split). `pending()` is true while, with `open`, it is not yet known whether
+ * the content so far is reasoning.
+ * @returns {{ push: (delta: string) => { reasoning: string, text: string }, end: () => { reasoning: string, text: string }, release: () => { reasoning: string, text: string }, pending: () => boolean }} Splitter.
  */
 export function createThinkSplitter(open = false) {
 	// "start": undecided; "think": inside the tag; "after": skipping whitespace after the close tag; "plain": passthrough;
@@ -146,7 +150,19 @@ export function createThinkSplitter(open = false) {
 		return { reasoning, text };
 	};
 
-	return { push: (delta) => step(delta, false), end: () => step("", true) };
+	const release = () => {
+		const text = held;
+		held = "";
+		mode = "plain";
+		return { reasoning: "", text };
+	};
+
+	return {
+		push: (delta) => step(delta, false),
+		end: () => step("", true),
+		release,
+		pending: () => open && (mode === "start" || mode === "implicit")
+	};
 }
 
 /**

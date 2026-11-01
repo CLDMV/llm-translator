@@ -15,6 +15,7 @@
 
 import { describe, expect, test } from "vitest";
 import { stream } from "../../src/api/convert/openai/chat/to/anthropic/messages/stream.mjs";
+import { response } from "../../src/api/convert/openai/chat/to/anthropic/messages/response.mjs";
 import { isOurs } from "../../src/lib/thinking.mjs";
 import { composeApi } from "../helpers/api.mjs";
 import { asyncOf, collect, openaiSse, readable, slices } from "../helpers/streams.mjs";
@@ -235,6 +236,91 @@ describe("reasoning", () => {
 		});
 		expect(deltas(events)).toEqual([{ type: "text_delta", text: "just text" }]);
 		expect(events.at(-1).event).toBe("message_stop");
+	});
+
+	test("thinkOpen: content is not split once the server sends reasoning in its own field", async () => {
+		const events = await run(
+			[
+				chunk({ reasoning_content: "r" }),
+				chunk({ content: "Answer mentions </th" }),
+				chunk({ content: "ink> tag" }),
+				chunk({}, {}, "stop")
+			],
+			undefined,
+			{ thinkOpen: true }
+		);
+		expect(deltas(events).filter((d) => d.type !== "signature_delta")).toEqual([
+			{ type: "thinking_delta", thinking: "r" },
+			{ type: "text_delta", text: "Answer mentions </th" },
+			{ type: "text_delta", text: "ink> tag" }
+		]);
+		const full = response(
+			{
+				choices: [
+					{ message: { role: "assistant", content: "Answer mentions </think> tag", reasoning_content: "r" }, finish_reason: "stop" }
+				]
+			},
+			undefined,
+			{ thinkOpen: true }
+		);
+		expect(full.content.map((b) => b.type)).toEqual(["thinking", "text"]);
+		expect(full.content[1].text).toBe("Answer mentions </think> tag");
+	});
+
+	test("thinkOpen: content held before reasoning arrives is released as text", async () => {
+		const events = await run(
+			[chunk({ content: "early " }), chunk({ reasoning_content: "r" }), chunk({ content: "late" }), chunk({}, {}, "stop")],
+			undefined,
+			{
+				thinkOpen: true
+			}
+		);
+		expect(
+			deltas(events)
+				.filter((d) => d.type === "text_delta")
+				.map((d) => d.text)
+		).toEqual(["early ", "late"]);
+	});
+
+	describe.each(["buffer", "stream"])("thinkOpen with toolStreaming %s", (toolStreaming) => {
+		const call = { index: 0, id: "call_1", type: "function", function: { name: "Read", arguments: '{"a":1}' } };
+		const blocks = (events) => events.filter((e) => e.event === "content_block_start").map((e) => e.data.content_block.type);
+
+		test.each([
+			["no close tag: text, then tool_use", [{ content: "just text" }, { tool_calls: [call] }], ["text", "tool_use"]],
+			[
+				"a close tag: thinking, text, tool_use",
+				[{ content: "plan</think>answer" }, { tool_calls: [call] }],
+				["thinking", "text", "tool_use"]
+			],
+			["tool call first: tool_use only", [{ tool_calls: [call] }, { content: "tail" }], ["text", "tool_use"]]
+		])("%s, as non-streaming", async (_name, deltasIn, expected) => {
+			const settings = { thinkOpen: true, toolStreaming };
+			const events = await run([...deltasIn.map((d) => chunk(d)), chunk({}, {}, "tool_calls")], undefined, settings);
+			expect(blocks(events)).toEqual(expected);
+			const content = deltasIn.map((d) => d.content ?? "").join("");
+			const toolCalls = deltasIn.flatMap((d) => d.tool_calls ?? []);
+			const full = response(
+				{ choices: [{ message: { role: "assistant", content, tool_calls: toolCalls }, finish_reason: "tool_calls" }] },
+				undefined,
+				settings
+			);
+			expect(full.content.map((b) => b.type)).toEqual(expected);
+		});
+
+		test("tool calls keep their order when an earlier one had to wait", async () => {
+			const second = { index: 1, id: "call_2", type: "function", function: { name: "Write", arguments: "{}" } };
+			const events = await run(
+				[chunk({ tool_calls: [call] }), chunk({ content: "x" }), chunk({ tool_calls: [second] }), chunk({}, {}, "tool_calls")],
+				undefined,
+				{ thinkOpen: true, toolStreaming }
+			);
+			expect(
+				events
+					.filter((e) => e.event === "content_block_start" && e.data.content_block.type === "tool_use")
+					.map((e) => e.data.content_block.name)
+			).toEqual(["Read", "Write"]);
+		});
 	});
 
 	test("an unterminated think block ends as reasoning only", async () => {
