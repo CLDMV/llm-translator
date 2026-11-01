@@ -19,7 +19,7 @@
  */
 import * as http from "../../../../lib/http.mjs";
 
-const FIELDS = ["model", "messages", "system", "tools", "tool_choice", "thinking"];
+const FIELDS = ["model", "messages", "system", "tools", "tool_choice", "thinking", "mcp_servers", "context_management"];
 
 /**
  * Count tokens with the Anthropic API.

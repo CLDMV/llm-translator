@@ -228,19 +228,43 @@ describe("a side the upstream did report is left alone", () => {
 		expect(await total.usage).toMatchObject({ reported: false, estimated: { input_tokens: 42, output_tokens: 5 } });
 	});
 
+	it("a reported 0 is real, not missing", async () => {
+		const openai = await (
+			await make({ upstreams: [vllm], transport: only({ prompt_tokens: 20, completion_tokens: 0 }), detect: false })
+		).send(ask);
+		expect(openai.body.usage).toMatchObject({ input_tokens: 20, output_tokens: 0 });
+		expect(await openai.usage).toMatchObject({ input_tokens: 20, output_tokens: 0, reported: true, estimated: null });
+		const zeroInput = await (
+			await make({ upstreams: [vllm], transport: only({ prompt_tokens: 0, completion_tokens: 9 }), detect: false })
+		).send(ask);
+		expect(zeroInput.body.usage).toMatchObject({ input_tokens: 0, output_tokens: 9 });
+		expect((await zeroInput.usage).estimated).toBeNull();
+		const claudeApi = await make({
+			front: "openai",
+			upstreams: [claude],
+			transport: route({ body: message({ input_tokens: 10, output_tokens: 0 }) }, tokenizer),
+			detect: false
+		});
+		const viaClaude = await claudeApi.send(askClaude);
+		expect(viaClaude.body.usage).toEqual({ prompt_tokens: 10, completion_tokens: 0, total_tokens: 10 });
+		expect((await viaClaude.usage).estimated).toBeNull();
+		const stream = await (
+			await make({
+				upstreams: [vllm],
+				transport: route(sse(openaiSse(frames({ prompt_tokens: 20, completion_tokens: 0 }))), tokenizer),
+				detect: false
+			})
+		).send({ ...ask, stream: true });
+		const events = await collect(stream.stream);
+		expect(events.find((event) => event.event === "message_delta").data.usage).toMatchObject({ input_tokens: 20, output_tokens: 0 });
+		expect((await stream.usage).estimated).toBeNull();
+	});
+
 	it("Anthropic front, stream: only the missing side of message_delta is estimated", async () => {
 		const frame = (usage) => sse(openaiSse(frames(usage)));
 		for (const [usage, expected, estimated] of [
-			[
-				{ prompt_tokens: 20, completion_tokens: 0 },
-				{ input_tokens: 20, output_tokens: OUTPUT },
-				{ input_tokens: null, output_tokens: OUTPUT }
-			],
-			[
-				{ prompt_tokens: 0, completion_tokens: 9 },
-				{ input_tokens: 42, output_tokens: 9 },
-				{ input_tokens: 42, output_tokens: null }
-			]
+			[{ prompt_tokens: 20 }, { input_tokens: 20, output_tokens: OUTPUT }, { input_tokens: null, output_tokens: OUTPUT }],
+			[{ completion_tokens: 9 }, { input_tokens: 42, output_tokens: 9 }, { input_tokens: 42, output_tokens: null }]
 		]) {
 			const api = await make({ upstreams: [vllm], transport: route(frame(usage), tokenizer), detect: false });
 			const reply = await api.send({ ...ask, stream: true });
@@ -265,7 +289,7 @@ describe("a side the upstream did report is left alone", () => {
 	});
 
 	it("OpenAI front, stream: only the missing side of the usage chunk is estimated", async () => {
-		const transport = route(sse(anthropicEvents({ input_tokens: 10, output_tokens: 0 })), tokenizer);
+		const transport = route(sse(anthropicEvents({ input_tokens: 10 })), tokenizer);
 		const api = await make({ front: "openai", upstreams: [claude], transport, detect: false });
 		const reply = await api.send({ ...askClaude, stream: true, stream_options: { include_usage: true } });
 		const events = await collect(reply.stream);
@@ -342,6 +366,19 @@ describe("OpenAI front, Anthropic upstream", () => {
 		expect(transport.calls.some((call) => call.url.endsWith("/count_tokens"))).toBe(false);
 		const input = estimate(sent(transport));
 		expect(await reply.usage).toMatchObject({ reported: false, estimated: { input_tokens: input, output_tokens: 5 } });
+	});
+
+	it("count_tokens also forwards mcp_servers and context_management on a native upstream", async () => {
+		const native = route({ body: message() }, tokenizer);
+		const direct = await make({ upstreams: [claude], transport: native, detect: false });
+		await direct.token.count({
+			...askClaude,
+			mcp_servers: [{ type: "url", url: "https://m.test", name: "m" }],
+			context_management: { edits: [] }
+		});
+		const forwarded = JSON.parse(native.calls.find((call) => call.url.endsWith("/count_tokens")).init.body);
+		expect(forwarded).toMatchObject({ mcp_servers: [{ name: "m" }], context_management: { edits: [] } });
+		expect(forwarded.max_tokens).toBeUndefined();
 	});
 
 	it("count_tokens is sent only the fields it accepts", async () => {

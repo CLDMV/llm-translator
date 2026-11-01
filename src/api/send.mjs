@@ -108,16 +108,18 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 	};
 	/**
 	 * Which sides of a converted reply's usage the upstream did not report, and so need an estimate (valid once the converter has read its reply).
-	 * A side counts as reported when it is non-zero; input includes cached tokens. Pass-through replies are never estimated.
+	 * A side counts as reported when its field is present (a real 0 stays 0); input includes cached tokens. A usage object that is absent, or
+	 * has every field absent or zero, counts as not reported at all (the meter's rule). Pass-through replies are never estimated.
 	 * @param {any} sent - Result of `request`.
 	 * @returns {{input: boolean, output: boolean}} True for each side that is missing.
 	 */
 	const gaps = (sent) => {
 		if (sent.state.native) return { input: false, output: false };
 		const counts = normalize(sent.state.front === "anthropic" ? "openai" : "folded", sent.state.convert?.upstreamUsage);
+		if (counts === null) return { input: true, output: true };
 		return {
-			input: !(counts?.input_tokens || counts?.cache_read_input_tokens || counts?.cache_creation_input_tokens),
-			output: !counts?.output_tokens
+			input: counts.input_tokens === null && counts.cache_read_input_tokens === null && counts.cache_creation_input_tokens === null,
+			output: counts.output_tokens === null
 		};
 	};
 	/**
