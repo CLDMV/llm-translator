@@ -24,6 +24,7 @@ import * as http from "../lib/http.mjs";
 import { filterChatBody } from "../lib/passthrough.mjs";
 import * as images from "../lib/images.mjs";
 import * as tools from "../lib/tools.mjs";
+import { warn } from "../lib/warn.mjs";
 
 /**
  * Route a client request body (in the configured `front` protocol) to an upstream and convert it to that upstream's
@@ -60,7 +61,13 @@ export async function request(body, options = {}) {
 	if (text && !convert && c.front === "openai") upstream = images.strip(upstream);
 	if (options.tools === false) upstream = tools.strip(upstream);
 	upstream.model = model;
-	if (driver.request) upstream = await driver.request(upstream, { endpoint, settings, state: converted });
+	if (driver.request)
+		upstream = await driver.request(upstream, {
+			endpoint,
+			settings,
+			state: converted,
+			warn: (message) => warn(c.config, c.state, message)
+		});
 	const path = endpoint.protocol === "openai.chat" ? driver.info.paths.chat : driver.info.paths.messages;
 	return {
 		upstream: endpoint.name,

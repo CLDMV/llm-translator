@@ -12,6 +12,7 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `anthropic`  | `anthropic.messages` | 20    | host `api.anthropic.com` (no network access)                                                |
 | `openai`     | `openai.chat`        | 30    | host `api.openai.com` (no network access)                                                   |
 | `llamacpp`   | `openai.chat`        | 40    | `GET /props` has llama-server fields, or `GET /v1/models` lists `owned_by: "llamacpp"`      |
+| `ollama`     | `openai.chat`        | 60    | `GET /api/version` returns a version                                                        |
 | `compatible` | `openai.chat`        | 100   | always; the fallback for LM Studio and other servers without a driver                       |
 
 A driver folder contains these files, all optional except `info`:
@@ -36,6 +37,7 @@ A driver folder contains these files, all optional except `info`:
 
 - vLLM: `GET /version` and `GET /v1/models` in parallel. Facts are `{ version, models, maxModelLen }`. After binding, when the resolved `inlineSystem` is still `auto`, `POST /tokenize` is called with `[system, user, system, user]`; success means the chat template tolerates inline system messages (`keep`), failure means they are folded into the neighbouring user turn (`user`). Unless `images` is configured, a one-token chat completion with a 1x1 image is also sent: a `400` saying the model is not multimodal sets `images: false` (so images and PDF page images become text notes instead of failing every request), success keeps `images: true`, and any other answer (including a timeout) leaves the default. Settings you configure yourself are never probed.
 - llama.cpp: `GET /props` (fields `default_generation_settings`, `total_slots` or `build_info`) and `GET /v1/models` (`owned_by: "llamacpp"`). Facts are `{ models, build, vision }`; `vision` comes from `modalities.vision` in newer builds and sets `images`.
+- Ollama: `GET /api/version` (and the shared `GET /v1/models` for the model list). Facts are `{ version, models }`.
 - OpenAI and Anthropic: a host-name check, no network.
 - Generic: `GET /v1/models` for reachability and the served model ids.
 
@@ -58,6 +60,16 @@ What the `llamacpp` driver changes compared with the generic one:
 - Tools need `--jinja`. A `400` that names `--jinja` is recognised like vLLM's missing tool parser: the client error gets a hint, and `toolFallback` retries without tools. See [decision D-41](decisions.md).
 
 llama-server also serves `/v1/messages` natively; the driver does not use it (separate issue, [#31](https://github.com/CLDMV/llm-translator/issues/31)). Nothing here has been run against a real `llama-server` yet: the detection fields, the `deepseek-legacy` shape and the refusal wordings come from the llama.cpp documentation and sources (tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70)).
+
+## Ollama (`/v1`)
+
+What the `ollama` driver changes compared with the generic one:
+
+- `tool_choice`, `n` and `logit_bias` are removed (Ollama's `/v1` does not implement them) and recorded in `state.dropped`. `top_k` and `parallel_tool_calls` are not sent, and `max_tokens` is the output cap field.
+- Images given by URL are replaced by a short text note and recorded as a drop (`image_url`): `/v1` takes base64 data URLs only, and the translator does not fetch URLs on a client's behalf (the same rule as for documents by URL). Base64 images, which is what Claude Code sends, pass through.
+- Ollama truncates prompts that exceed `num_ctx` without any error, and the default is small. The driver sets `contextWindow: 4096` and prints one warning per upstream the first time a request is estimated (four characters per token) to exceed it. Raise the real limit on the server (`OLLAMA_CONTEXT_LENGTH` or a Modelfile `num_ctx`) and set the upstream's `contextWindow` to match; `0` turns the warning off. See [decision D-42](decisions.md).
+
+Nothing here has been run against a real Ollama server yet; in particular the wording Ollama uses to refuse images on a text-only model is not in the `imageFallback` list (tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70)).
 
 ## Version-mapped settings for vLLM
 
