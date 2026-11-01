@@ -41,16 +41,14 @@ async function boot(server, config = {}) {
 }
 
 describe("authorize (anthropic front)", () => {
-	it("allows with true and with { ok: true }, and the request reaches the upstream", async () => {
-		for (const verdict of [true, { ok: true }]) {
-			const { upstream, server } = await boot({ authorize: () => verdict });
-			try {
-				const reply = await post(`${server.url}/v1/messages`, hello);
-				expect(reply.status).toBe(200);
-				expect((await reply.json()).type).toBe("message");
-			} finally {
-				await upstream.close();
-			}
+	it.each([true, { ok: true }])("allows with %j, and the request reaches the upstream", async (verdict) => {
+		const { upstream, server } = await boot({ authorize: () => verdict });
+		try {
+			const reply = await post(`${server.url}/v1/messages`, hello);
+			expect(reply.status).toBe(200);
+			expect((await reply.json()).type).toBe("message");
+		} finally {
+			await upstream.close();
 		}
 	});
 
