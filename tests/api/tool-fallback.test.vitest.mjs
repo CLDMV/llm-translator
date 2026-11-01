@@ -59,6 +59,14 @@ describe("the hint", () => {
 	});
 });
 
+describe("the hint without request state", () => {
+	it("falls back to the full hint", async () => {
+		const api = await make({ upstreams: [{ url: "http://vllm.test" }], detect: false });
+		const reply = await api.error(400, refusal());
+		expect(reply.body.error.message).toContain(tools.HINT);
+	});
+});
+
 describe("Chat Completions body helpers", () => {
 	it("detects and removes tools", () => {
 		const body = { model: "m", messages: [], tools: [{}], tool_choice: "auto", parallel_tool_calls: false, temperature: 1 };

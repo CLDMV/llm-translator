@@ -204,6 +204,80 @@ describe("retry without tools", () => {
 	});
 });
 
+describe("a side the upstream did report is left alone", () => {
+	const only = (usage) => route({ body: completion(usage) }, tokenizer);
+
+	it("Anthropic front, JSON: only output reported, only input reported, only a total reported", async () => {
+		const api = await make({ upstreams: [vllm], transport: only({ completion_tokens: 7 }), detect: false });
+		const out = await api.send(ask);
+		expect(out.body.usage).toMatchObject({ input_tokens: 42, output_tokens: 7 });
+		expect(await out.usage).toMatchObject({
+			input_tokens: null,
+			output_tokens: 7,
+			reported: true,
+			estimated: { input_tokens: 42, output_tokens: null }
+		});
+
+		const input = await (await make({ upstreams: [vllm], transport: only({ prompt_tokens: 20 }), detect: false })).send(ask);
+		expect(input.body.usage).toMatchObject({ input_tokens: 20, output_tokens: 5 });
+		expect(await input.usage).toMatchObject({ input_tokens: 20, output_tokens: null, estimated: { input_tokens: null, output_tokens: 5 } });
+
+		const total = await (await make({ upstreams: [vllm], transport: only({ total_tokens: 30 }), detect: false })).send(ask);
+		expect(total.body.usage.total_tokens).toBeUndefined();
+		expect(total.body.usage).toMatchObject({ input_tokens: 42, output_tokens: 5 });
+		expect(await total.usage).toMatchObject({ reported: false, estimated: { input_tokens: 42, output_tokens: 5 } });
+	});
+
+	it("Anthropic front, stream: only the missing side of message_delta is estimated", async () => {
+		const frame = (usage) => sse(openaiSse(frames(usage)));
+		for (const [usage, expected, estimated] of [
+			[
+				{ prompt_tokens: 20, completion_tokens: 0 },
+				{ input_tokens: 20, output_tokens: OUTPUT },
+				{ input_tokens: null, output_tokens: OUTPUT }
+			],
+			[
+				{ prompt_tokens: 0, completion_tokens: 9 },
+				{ input_tokens: 42, output_tokens: 9 },
+				{ input_tokens: 42, output_tokens: null }
+			]
+		]) {
+			const api = await make({ upstreams: [vllm], transport: route(frame(usage), tokenizer), detect: false });
+			const reply = await api.send({ ...ask, stream: true });
+			const events = await collect(reply.stream);
+			expect(events.find((event) => event.event === "message_delta").data.usage).toMatchObject(expected);
+			expect((await reply.usage).estimated).toEqual(estimated);
+		}
+	});
+
+	it("OpenAI front, JSON: prompt and completion are kept apart and the total follows", async () => {
+		const run = async (usage) => {
+			const transport = route({ body: message(usage) }, tokenizer);
+			const api = await make({ front: "openai", upstreams: [claude], transport, detect: false });
+			return await api.send(askClaude);
+		};
+		const inputOnly = await run({ input_tokens: 10 });
+		expect(inputOnly.body.usage).toEqual({ prompt_tokens: 10, completion_tokens: OUTPUT, total_tokens: 10 + OUTPUT });
+		expect(await inputOnly.usage).toMatchObject({ estimated: { input_tokens: null, output_tokens: OUTPUT } });
+		const outputOnly = await run({ output_tokens: 3 });
+		expect(outputOnly.body.usage).toEqual({ prompt_tokens: 77, completion_tokens: 3, total_tokens: 80 });
+		expect(await outputOnly.usage).toMatchObject({ estimated: { input_tokens: 77, output_tokens: null } });
+	});
+
+	it("OpenAI front, stream: only the missing side of the usage chunk is estimated", async () => {
+		const transport = route(sse(anthropicEvents({ input_tokens: 10, output_tokens: 0 })), tokenizer);
+		const api = await make({ front: "openai", upstreams: [claude], transport, detect: false });
+		const reply = await api.send({ ...askClaude, stream: true, stream_options: { include_usage: true } });
+		const events = await collect(reply.stream);
+		expect(events.find((event) => event.data?.choices?.length === 0).data.usage).toEqual({
+			prompt_tokens: 10,
+			completion_tokens: 5,
+			total_tokens: 15
+		});
+		expect((await reply.usage).estimated).toEqual({ input_tokens: null, output_tokens: 5 });
+	});
+});
+
 describe("OpenAI front, Anthropic upstream", () => {
 	it("JSON: prompt, completion and total tokens are estimated", async () => {
 		const transport = route({ body: message() }, tokenizer);
@@ -249,17 +323,43 @@ describe("OpenAI front, Anthropic upstream", () => {
 		expect(chunks.find((event) => event.data?.choices?.length === 0).data.usage).toMatchObject({ completion_tokens: 5 });
 	});
 
-	it("stream: the usage chunk is patched when the client asked for it, and estimated is reported either way", async () => {
-		for (const asked of [true, false]) {
-			const transport = route(sse(anthropicEvents({ input_tokens: 0, output_tokens: 0 })), tokenizer);
-			const api = await make({ front: "openai", upstreams: [claude], transport, detect: false });
-			const reply = await api.send({ ...askClaude, stream: true, ...(asked ? { stream_options: { include_usage: true } } : {}) });
-			const events = await collect(reply.stream);
-			const usageChunk = events.find((event) => event.data?.choices?.length === 0);
-			if (asked) expect(usageChunk.data.usage).toEqual({ prompt_tokens: 77, completion_tokens: 5, total_tokens: 82 });
-			else expect(usageChunk).toBeUndefined();
-			expect(await reply.usage).toMatchObject({ reported: false, estimated: { input_tokens: 77, output_tokens: 5 } });
-		}
+	it("stream: the usage chunk is patched when the client asked for it", async () => {
+		const transport = route(sse(anthropicEvents({ input_tokens: 0, output_tokens: 0 })), tokenizer);
+		const api = await make({ front: "openai", upstreams: [claude], transport, detect: false });
+		const reply = await api.send({ ...askClaude, stream: true, stream_options: { include_usage: true } });
+		const events = await collect(reply.stream);
+		const usageChunk = events.find((event) => event.data?.choices?.length === 0);
+		expect(usageChunk.data.usage).toEqual({ prompt_tokens: 77, completion_tokens: 5, total_tokens: 82 });
+		expect(await reply.usage).toMatchObject({ reported: false, estimated: { input_tokens: 77, output_tokens: 5 } });
+	});
+
+	it("stream: when the client will not see the usage the tokenizer is skipped, the character estimate is reported", async () => {
+		const transport = route(sse(anthropicEvents({ input_tokens: 0, output_tokens: 0 })), tokenizer);
+		const api = await make({ front: "openai", upstreams: [claude], transport, detect: false });
+		const reply = await api.send({ ...askClaude, stream: true });
+		const events = await collect(reply.stream);
+		expect(events.find((event) => event.data?.choices?.length === 0)).toBeUndefined();
+		expect(transport.calls.some((call) => call.url.endsWith("/count_tokens"))).toBe(false);
+		const input = estimate(sent(transport));
+		expect(await reply.usage).toMatchObject({ reported: false, estimated: { input_tokens: input, output_tokens: 5 } });
+	});
+
+	it("count_tokens is sent only the fields it accepts", async () => {
+		const transport = route({ body: message() }, tokenizer);
+		const api = await make({ front: "openai", upstreams: [claude], transport, detect: false });
+		await api.send({
+			model: "claude-sonnet-5",
+			temperature: 0.2,
+			top_p: 0.9,
+			max_tokens: 32,
+			messages: [
+				{ role: "system", content: "be brief" },
+				{ role: "user", content: "hi" }
+			],
+			tools: [{ type: "function", function: { name: "t", description: "d", parameters: { type: "object" } } }]
+		});
+		const counted = JSON.parse(transport.calls.find((call) => call.url.endsWith("/count_tokens")).init.body);
+		expect(Object.keys(counted).sort()).toEqual(["messages", "model", "system", "tools"]);
 	});
 });
 

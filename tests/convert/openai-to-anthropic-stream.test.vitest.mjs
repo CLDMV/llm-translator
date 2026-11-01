@@ -267,6 +267,16 @@ describe("reasoning", () => {
 		expect(full.content[1].text).toBe("Answer mentions </think> tag");
 	});
 
+	test("reasoning in its own field works with thinkTags off", async () => {
+		const events = await run([chunk({ reasoning_content: "r" }), chunk({ content: "a" }), chunk({}, {}, "stop")], undefined, {
+			thinkTags: false
+		});
+		expect(deltas(events).filter((d) => d.type !== "signature_delta")).toEqual([
+			{ type: "thinking_delta", thinking: "r" },
+			{ type: "text_delta", text: "a" }
+		]);
+	});
+
 	test("thinkOpen: content held before reasoning arrives is released as text", async () => {
 		const events = await run(
 			[chunk({ content: "early " }), chunk({ reasoning_content: "r" }), chunk({ content: "late" }), chunk({}, {}, "stop")],

@@ -19,15 +19,17 @@
  */
 import * as http from "../../../../lib/http.mjs";
 
+const FIELDS = ["model", "messages", "system", "tools", "tool_choice", "thinking"];
+
 /**
  * Count tokens with the Anthropic API.
  * @param {any} context - `{ endpoint, request, transport, signal, timeout }`.
  * @returns {Promise<number | null>} Token count, or null when the API did not answer.
  */
 export async function count({ endpoint, request, transport, signal, timeout }) {
-	const body = { ...request };
-	delete body.stream;
-	delete body.max_tokens;
+	// count_tokens rejects fields it does not know (sampling settings, max_tokens, stream), so send only the ones it accepts.
+	const body = {};
+	for (const field of FIELDS) if (request[field] !== undefined) body[field] = request[field];
 	const result = await http.json(transport, http.join(endpoint.url, "/v1/messages/count_tokens"), {
 		method: "POST",
 		headers: { "content-type": "application/json", "anthropic-version": "2023-06-01", ...http.headers(endpoint, "x-api-key") },

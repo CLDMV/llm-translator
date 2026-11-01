@@ -41,10 +41,12 @@ const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache
  * `null` (never 0 for unknown), `reported` is false when the upstream carried no usage, `complete` is true only for a reply that finished
  * normally and `reason` is `"done"`, `"aborted"`, `"error"` or `"upstream_error"`. A stream that ends early reports the usage seen so far.
  *
- * When a converted reply's upstream sent no usage, the client-protocol reply carries estimates instead of zeros: the server tokenizer's
- * count when the driver has one, else one token per four characters (what `token.count` uses) for the input, and one token per four
- * characters of generated text for the output. The report never presents them as real counts: its token fields stay `null`,
- * `reported` stays false and the estimates are in `estimated: { input_tokens, output_tokens }` (null when the upstream reported usage).
+ * When a converted reply's upstream did not report a side of the usage (input or output; all zero counts as not reported), the
+ * client-protocol reply carries an estimate for that side instead of zero: the server tokenizer's count when the driver has one (not
+ * for an OpenAI-front stream whose usage the client will not see), else one token per four characters (what `token.count` uses) for the
+ * input, and one token per four characters of generated text for the output. Real sides are left alone. The report never presents
+ * estimates as real counts: its token fields keep only what the upstream reported and the estimates are in
+ * `estimated: { input_tokens, output_tokens }` (null for a side that was reported, and null altogether when nothing was estimated).
  * On the Anthropic front a stream carries them in the final `message_delta`, because `message_start` is sent before the output is known.
  * Replies passed through without conversion are never altered.
  * @param {any} body - Client request body (per `front`).
@@ -105,30 +107,51 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 		else if (!sent.state.native) meter.source(() => sent.state.convert?.upstreamUsage, "folded");
 	};
 	/**
-	 * Whether a converted reply must carry estimates: the upstream reported no usage (valid once the converter has read its reply).
+	 * Which sides of a converted reply's usage the upstream did not report, and so need an estimate (valid once the converter has read its reply).
+	 * A side counts as reported when it is non-zero; input includes cached tokens. Pass-through replies are never estimated.
 	 * @param {any} sent - Result of `request`.
-	 * @returns {boolean} True when the upstream's usage is missing or all zero.
+	 * @returns {{input: boolean, output: boolean}} True for each side that is missing.
 	 */
-	const missing = (sent) =>
-		!sent.state.native && normalize(sent.state.front === "anthropic" ? "openai" : "folded", sent.state.convert?.upstreamUsage) === null;
+	const gaps = (sent) => {
+		if (sent.state.native) return { input: false, output: false };
+		const counts = normalize(sent.state.front === "anthropic" ? "openai" : "folded", sent.state.convert?.upstreamUsage);
+		return {
+			input: !(counts?.input_tokens || counts?.cache_read_input_tokens || counts?.cache_creation_input_tokens),
+			output: !counts?.output_tokens
+		};
+	};
 	/**
-	 * Input estimate for a request: the driver's tokenizer when it has one and answers, else the character estimate.
+	 * Input estimate for a request: the driver's tokenizer when it has one and answers, else the character estimate. The tokenizer
+	 * round trip is skipped when the client will not see the usage (an OpenAI-front stream that did not ask for it), so the end of the
+	 * stream is not delayed.
 	 * @param {any} sent - Result of `request`.
 	 * @returns {Promise<number>} Estimated prompt tokens.
 	 */
 	const input = async (sent) => {
 		const endpoint = captured.endpoint(sent.upstream);
 		const driver = captured.driver(endpoint);
-		const exact = driver.count
-			? await driver.count({
-					endpoint,
-					request: sent.body,
-					transport,
-					signal: options.signal,
-					timeout: captured.config.detectTimeout
-				})
-			: null;
+		const exact =
+			driver.count && !(hide && sent.state.stream)
+				? await driver.count({
+						endpoint,
+						request: sent.body,
+						transport,
+						signal: options.signal,
+						timeout: captured.config.detectTimeout
+					})
+				: null;
 		return exact ?? estimate(sent.body);
+	};
+	/**
+	 * The estimates for the missing sides, or null when there are none.
+	 * @param {any} sent - Result of `request`.
+	 * @param {number} characters - Generated characters.
+	 * @returns {Promise<{input_tokens: number | null, output_tokens: number | null} | null>} Counts, null for a side that was reported.
+	 */
+	const counts = async (sent, characters) => {
+		const gap = gaps(sent);
+		if (!gap.input && !gap.output) return null;
+		return { input_tokens: gap.input ? await input(sent) : null, output_tokens: gap.output ? output(characters) : null };
 	};
 	/**
 	 * Build the error reply for an upstream failure and settle the meter.
@@ -172,7 +195,7 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 		const client = upstream.state.native
 			? events
 			: estimating(meter.meta.front, events, {
-					missing: () => missing(upstream),
+					gaps: () => gaps(upstream),
 					input: () => input(upstream),
 					report: (counts) => meter.estimate(counts)
 				});
@@ -183,10 +206,10 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 		return fail(502, "The upstream returned a body that is not JSON", headers, upstream.state, "error");
 	}
 	const client = await response(parsed, upstream.state);
-	if (missing(upstream)) {
-		const counts = { input_tokens: await input(upstream), output_tokens: output(bodyLength(meter.meta.front, client)) };
-		client.usage = patch(meter.meta.front, client.usage, counts);
-		meter.estimate(counts);
+	const estimated = await counts(upstream, bodyLength(meter.meta.front, client));
+	if (estimated) {
+		client.usage = patch(meter.meta.front, client.usage, estimated);
+		meter.estimate(estimated);
 	}
 	meter.json(client);
 	meter.finish("done");

@@ -23,10 +23,12 @@
  * `null` (never 0 for unknown), `reported` is false when the upstream carried no usage, `complete` is true only for a reply that finished
  * normally and `reason` is `"done"`, `"aborted"`, `"error"` or `"upstream_error"`. A stream that ends early reports the usage seen so far.
  *
- * When a converted reply's upstream sent no usage, the client-protocol reply carries estimates instead of zeros: the server tokenizer's
- * count when the driver has one, else one token per four characters (what `token.count` uses) for the input, and one token per four
- * characters of generated text for the output. The report never presents them as real counts: its token fields stay `null`,
- * `reported` stays false and the estimates are in `estimated: { input_tokens, output_tokens }` (null when the upstream reported usage).
+ * When a converted reply's upstream did not report a side of the usage (input or output; all zero counts as not reported), the
+ * client-protocol reply carries an estimate for that side instead of zero: the server tokenizer's count when the driver has one (not
+ * for an OpenAI-front stream whose usage the client will not see), else one token per four characters (what `token.count` uses) for the
+ * input, and one token per four characters of generated text for the output. Real sides are left alone. The report never presents
+ * estimates as real counts: its token fields keep only what the upstream reported and the estimates are in
+ * `estimated: { input_tokens, output_tokens }` (null for a side that was reported, and null altogether when nothing was estimated).
  * On the Anthropic front a stream carries them in the final `message_delta`, because `message_start` is sent before the output is known.
  * Replies passed through without conversion are never altered.
  * @param {any} body - Client request body (per `front`).

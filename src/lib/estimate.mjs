@@ -96,19 +96,24 @@ export const output = (characters) => Math.max(1, tokens(characters));
 
 /**
  * Write estimated counts into a client-protocol usage object, replacing the zeros a converter wrote for usage the upstream did not carry.
+ * Only the sides present in `counts` (a number rather than null) are written; the other side keeps the real value the converter converted.
+ * On the OpenAI front `total_tokens` is then the sum of the final prompt and completion counts.
  * @param {"anthropic" | "openai"} front - Client protocol.
  * @param {any} usage - Client usage object (the converter's), or undefined.
- * @param {{ input_tokens: number, output_tokens: number }} counts - Estimates.
+ * @param {{ input_tokens: number | null, output_tokens: number | null }} counts - Estimates; null for a side that was reported.
  * @returns {any} A new usage object.
  */
 export function patch(front, usage, counts) {
-	if (front === "anthropic") return { ...usage, input_tokens: counts.input_tokens, output_tokens: counts.output_tokens };
-	return {
-		...usage,
-		prompt_tokens: counts.input_tokens,
-		completion_tokens: counts.output_tokens,
-		total_tokens: counts.input_tokens + counts.output_tokens
-	};
+	const out = { ...usage };
+	if (front === "anthropic") {
+		if (counts.input_tokens !== null) out.input_tokens = counts.input_tokens;
+		if (counts.output_tokens !== null) out.output_tokens = counts.output_tokens;
+		return out;
+	}
+	if (counts.input_tokens !== null) out.prompt_tokens = counts.input_tokens;
+	if (counts.output_tokens !== null) out.completion_tokens = counts.output_tokens;
+	out.total_tokens = (out.prompt_tokens ?? 0) + (out.completion_tokens ?? 0);
+	return out;
 }
 
 /**
@@ -117,7 +122,7 @@ export function patch(front, usage, counts) {
  * resolved when that event arrives (it may call the server's tokenizer), so a stream with real usage never pays for it.
  * @param {"anthropic" | "openai"} front - Client protocol.
  * @param {AsyncIterable<any>} events - Client events from the converter.
- * @param {{ missing: () => boolean, input: () => Promise<number>, report: (counts: { input_tokens: number, output_tokens: number }) => void }} hooks - `missing()` is true when the upstream reported nothing (valid once the converter reached its final usage), `input()` resolves the input estimate and `report(counts)` receives the estimates that were written.
+ * @param {{ gaps: () => { input: boolean, output: boolean }, input: () => Promise<number>, report: (counts: { input_tokens: number | null, output_tokens: number | null }) => void }} hooks - `gaps()` says which sides the upstream did not report (valid once the converter reached its final usage), `input()` resolves the input estimate and `report(counts)` receives the estimates that were written (null for a side that was real).
  * @returns {AsyncGenerator<any, void, undefined>} Equivalent events.
  */
 export async function* stream(front, events, hooks) {
@@ -127,8 +132,9 @@ export async function* stream(front, events, hooks) {
 		characters += eventLength(front, data);
 		const last =
 			front === "anthropic" ? data?.type === "message_delta" : Array.isArray(data?.choices) && data.choices.length === 0 && data.usage;
-		if (last && hooks.missing()) {
-			const counts = { input_tokens: await hooks.input(), output_tokens: output(characters) };
+		const gaps = last ? hooks.gaps() : null;
+		if (gaps && (gaps.input || gaps.output)) {
+			const counts = { input_tokens: gaps.input ? await hooks.input() : null, output_tokens: gaps.output ? output(characters) : null };
 			hooks.report(counts);
 			yield { ...item, data: { ...data, usage: patch(front, data.usage, counts) } };
 		} else {

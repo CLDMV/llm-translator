@@ -25,7 +25,7 @@
  * @property {number | null} cache_read_input_tokens - Prompt tokens served from cache, or null when unknown.
  * @property {number | null} cache_creation_input_tokens - Prompt tokens written to cache, or null when unknown.
  * @property {boolean} reported - True when the reply carried usage; false means every token field is null.
- * @property {{ input_tokens: number, output_tokens: number } | null} estimated - The estimates written into the client reply when the upstream reported no usage; null when the upstream reported usage or no estimate was made (pass-through replies, replies that failed first). Never mixed into the token fields.
+ * @property {{ input_tokens: number | null, output_tokens: number | null } | null} estimated - The estimates written into the client reply for the sides the upstream did not report (a side the upstream did report is null here); null when nothing was estimated (the upstream reported both sides, a pass-through reply, a reply that failed first). Never mixed into the token fields.
  * @property {boolean} complete - True only when the reply finished normally.
  * @property {"done" | "aborted" | "error" | "upstream_error"} reason - Why the report was produced.
  * @property {string | null} model - Model name sent upstream.
@@ -94,7 +94,7 @@ function usageChunk(data) {
  * @param {{front: "anthropic" | "openai", requested: string | null, model: string | null, upstream: string | null, stream: boolean}} meta - Request facts; `model` and `upstream` may be filled in later.
  * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
  * @param {(message: string) => void} warn - Receives a message when `onUsage` throws or rejects.
- * @returns {{meta: any, usage: Promise<UsageReport>, json: (body: any) => void, event: (data: any) => void, finish: (reason: UsageReport["reason"]) => void, estimate: (counts: {input_tokens: number, output_tokens: number}) => void, source: (read: () => any, protocol?: "openai" | "folded") => void, track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any}} Meter.
+ * @returns {{meta: any, usage: Promise<UsageReport>, json: (body: any) => void, event: (data: any) => void, finish: (reason: UsageReport["reason"]) => void, estimate: (counts: {input_tokens: number | null, output_tokens: number | null}) => void, source: (read: () => any, protocol?: "openai" | "folded") => void, track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any}} Meter.
  */
 export function meter(meta, onUsage, warn) {
 	/** @type {Record<string, number | null>} */
@@ -135,7 +135,7 @@ export function meter(meta, onUsage, warn) {
 		// A converter ends a broken stream with an in-band error event instead of throwing.
 		const outcome = reason === "done" && failed ? "error" : reason;
 		/** @type {any} */
-		const report = { ...seen, reported, estimated: reported ? null : estimated, complete: outcome === "done", reason: outcome, ...meta };
+		const report = { ...seen, reported, estimated, complete: outcome === "done", reason: outcome, ...meta };
 		settle(report);
 		try {
 			Promise.resolve(onUsage?.(report)).catch((cause) => warn(`onUsage rejected: ${cause?.message ?? cause}`));
@@ -181,7 +181,7 @@ export function meter(meta, onUsage, warn) {
 		finish,
 		/**
 		 * Record the estimates that were written into the client reply because the upstream reported no usage.
-		 * @param {{ input_tokens: number, output_tokens: number }} counts - Estimates.
+		 * @param {{ input_tokens: number | null, output_tokens: number | null }} counts - Estimates (null for a side that was reported).
 		 * @returns {void}
 		 */
 		estimate(counts) {

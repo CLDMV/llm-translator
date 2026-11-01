@@ -52,14 +52,16 @@ export declare function bodyLength(front: "anthropic" | "openai", body: any): nu
 export declare const output: (characters: number) => number;
 /**
  * Write estimated counts into a client-protocol usage object, replacing the zeros a converter wrote for usage the upstream did not carry.
+ * Only the sides present in `counts` (a number rather than null) are written; the other side keeps the real value the converter converted.
+ * On the OpenAI front `total_tokens` is then the sum of the final prompt and completion counts.
  * @param {"anthropic" | "openai"} front - Client protocol.
  * @param {any} usage - Client usage object (the converter's), or undefined.
- * @param {{ input_tokens: number, output_tokens: number }} counts - Estimates.
+ * @param {{ input_tokens: number | null, output_tokens: number | null }} counts - Estimates; null for a side that was reported.
  * @returns {any} A new usage object.
  */
 export declare function patch(front: "anthropic" | "openai", usage: any, counts: {
-    input_tokens: number;
-    output_tokens: number;
+    input_tokens: number | null;
+    output_tokens: number | null;
 }): any;
 /**
  * Pass a converted client stream through and, when the upstream reported no usage, write estimates into its final usage: the
@@ -67,14 +69,17 @@ export declare function patch(front: "anthropic" | "openai", usage: any, counts:
  * resolved when that event arrives (it may call the server's tokenizer), so a stream with real usage never pays for it.
  * @param {"anthropic" | "openai"} front - Client protocol.
  * @param {AsyncIterable<any>} events - Client events from the converter.
- * @param {{ missing: () => boolean, input: () => Promise<number>, report: (counts: { input_tokens: number, output_tokens: number }) => void }} hooks - `missing()` is true when the upstream reported nothing (valid once the converter reached its final usage), `input()` resolves the input estimate and `report(counts)` receives the estimates that were written.
+ * @param {{ gaps: () => { input: boolean, output: boolean }, input: () => Promise<number>, report: (counts: { input_tokens: number | null, output_tokens: number | null }) => void }} hooks - `gaps()` says which sides the upstream did not report (valid once the converter reached its final usage), `input()` resolves the input estimate and `report(counts)` receives the estimates that were written (null for a side that was real).
  * @returns {AsyncGenerator<any, void, undefined>} Equivalent events.
  */
 export declare function stream(front: "anthropic" | "openai", events: AsyncIterable<any>, hooks: {
-    missing: () => boolean;
+    gaps: () => {
+        input: boolean;
+        output: boolean;
+    };
     input: () => Promise<number>;
     report: (counts: {
-        input_tokens: number;
-        output_tokens: number;
+        input_tokens: number | null;
+        output_tokens: number | null;
     }) => void;
 }): AsyncGenerator<any, void, undefined>;

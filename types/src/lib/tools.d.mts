@@ -12,13 +12,14 @@
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
-/**
- * @fileoverview Tool-calling diagnostics for OpenAI-protocol upstreams: recognising vLLM's "tool parsing is not enabled" refusal,
- * the hint added to it and removing tools from a Chat Completions body.
- * @module @cldmv/llm-translator/lib/tools
- */
 /** Added to the error message the client receives when the upstream refuses tools for want of a tool parser. */
 export declare const HINT = "The vLLM server was started without tool-call parsing. Restart it with --enable-auto-tool-choice and --tool-call-parser <parser> (the parser depends on the model family), or set the translator setting toolFallback to retry without tools.";
+/**
+ * The hint for a refusal. When `toolFallback` is already on, suggesting it would be wrong (the retry has been spent), so only the restart advice remains.
+ * @param {boolean} toolFallback - Whether the `toolFallback` setting is on for the endpoint.
+ * @returns {string} Hint text.
+ */
+export declare function hint(toolFallback: boolean): string;
 /**
  * Does an upstream error message say the server has no tool parser configured?
  * @param {string} message - Upstream error message.
