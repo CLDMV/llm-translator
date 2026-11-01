@@ -47,7 +47,10 @@ export async function request(body, options = {}) {
 	if (convert) {
 		({ body: upstream, state: converted } = await convert.request(body, settings));
 	} else {
-		upstream = c.front === "openai" && (options.filter ?? settings.passthroughFilter === true) ? filterChatBody(body) : { ...body };
+		upstream =
+			c.front === "openai" && (options.filter ?? settings.passthroughFilter === true)
+				? filterChatBody(body, driver.info.fields)
+				: { ...body };
 	}
 	if (options.usage === true && stream && c.front === "openai") {
 		// Internal (used by `send`): always ask for the final usage chunk so usage can be metered; `send` hides it from clients that did not ask.

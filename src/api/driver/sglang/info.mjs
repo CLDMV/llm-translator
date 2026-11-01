@@ -20,7 +20,7 @@
 
 /**
  * Describe the SGLang driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
@@ -29,6 +29,7 @@ export function info() {
 		order: 50,
 		auth: "bearer",
 		probes: ["/get_server_info"],
+		fields: ["regex", "ebnf", "separate_reasoning"],
 		paths: { chat: "/v1/chat/completions", models: "/v1/models", serverInfo: "/get_server_info" }
 	};
 }

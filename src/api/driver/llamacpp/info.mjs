@@ -20,7 +20,7 @@
 
 /**
  * Describe the llama.cpp driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
@@ -29,6 +29,7 @@ export function info() {
 		order: 40,
 		auth: "bearer",
 		probes: ["/props"],
+		fields: ["repeat_penalty", "grammar"],
 		paths: { chat: "/v1/chat/completions", models: "/v1/models", props: "/props" }
 	};
 }

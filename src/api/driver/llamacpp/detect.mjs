@@ -19,9 +19,7 @@
  */
 import * as http from "../../../lib/http.mjs";
 import { modelsOf } from "../../../lib/models.mjs";
-
-/** Fields `llama-server` puts in its `/props` reply. */
-const PROPS = ["default_generation_settings", "total_slots", "build_info"];
+import { isLlamacppProps, objectOf } from "../../../lib/backends.mjs";
 
 /**
  * Probe an endpoint for `llama-server`.
@@ -30,9 +28,9 @@ const PROPS = ["default_generation_settings", "total_slots", "build_info"];
  */
 export async function detect(context) {
 	const [props, listing] = await Promise.all([http.probe(context, "/props"), http.probe(context, "/v1/models")]);
-	const body = props.ok && props.body !== null && typeof props.body === "object" ? props.body : {};
+	const body = objectOf(props);
 	const models = modelsOf(listing) ?? [];
-	if (!PROPS.some((field) => field in body) && !models.some((entry) => entry.owned_by === "llamacpp")) return null;
+	if (!isLlamacppProps(body) && !models.some((entry) => entry.owned_by === "llamacpp")) return null;
 	return {
 		models: models.map((entry) => entry.id),
 		build: typeof body.build_info === "string" ? body.build_info : undefined,

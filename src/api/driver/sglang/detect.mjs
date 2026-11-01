@@ -19,6 +19,7 @@
  */
 import * as http from "../../../lib/http.mjs";
 import { modelsOf } from "../../../lib/models.mjs";
+import { isSglangInfo, objectOf } from "../../../lib/backends.mjs";
 
 /**
  * Probe an endpoint for SGLang.
@@ -27,10 +28,9 @@ import { modelsOf } from "../../../lib/models.mjs";
  */
 export async function detect(context) {
 	const [info, listing] = await Promise.all([http.probe(context, "/get_server_info"), http.probe(context, "/v1/models")]);
-	const body = info.ok && info.body !== null && typeof info.body === "object" ? info.body : {};
+	const body = objectOf(info);
 	const models = modelsOf(listing) ?? [];
-	const known = typeof body.model_path === "string" || typeof body.tokenizer_path === "string";
-	if (!known && !models.some((entry) => entry.owned_by === "sglang")) return null;
+	if (!isSglangInfo(body) && !models.some((entry) => entry.owned_by === "sglang")) return null;
 	const text = (value) => (typeof value === "string" && value !== "" ? value : undefined);
 	return {
 		version: text(body.version),

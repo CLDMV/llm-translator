@@ -72,23 +72,22 @@ const VLLM = [
 	"structured_outputs"
 ];
 
-/** Documented llama.cpp and SGLang sampling and constraint extensions. */
-const OTHERS = ["repeat_penalty", "grammar", "regex", "ebnf", "separate_reasoning"];
-
-const ALLOWED = new Set([...STANDARD, ...VLLM, ...OTHERS]);
+const ALLOWED = new Set([...STANDARD, ...VLLM]);
 const STREAM_OPTIONS = new Set(["include_usage", "continuous_usage_stats"]);
 
 /**
  * Keep only known Chat Completions and documented vLLM extension fields, so an untrusted client cannot inject server-side
  * controls such as `kv_transfer_params`, `vllm_xargs`, `chat_template`, `cache_salt` or `priority`. `stream_options` is
- * reduced to the usage flags.
+ * reduced to the usage flags. A driver may allow more through `info().fields` (llama.cpp's `repeat_penalty` and `grammar`, SGLang's
+ * `regex`, `ebnf` and `separate_reasoning`), so such a field is forwarded only to the backend that understands it.
  * @param {any} body - Client request body.
+ * @param {string[]} [extra] - Extra field names the upstream's driver allows.
  * @returns {any} Filtered copy.
  */
-export function filterChatBody(body) {
+export function filterChatBody(body, extra = []) {
 	const out = {};
 	for (const [key, value] of Object.entries(body)) {
-		if (!ALLOWED.has(key)) continue;
+		if (!ALLOWED.has(key) && !extra.includes(key)) continue;
 		if (key === "stream_options") {
 			const kept = Object.fromEntries(Object.entries(value ?? {}).filter(([name]) => STREAM_OPTIONS.has(name)));
 			if (Object.keys(kept).length > 0) out.stream_options = kept;

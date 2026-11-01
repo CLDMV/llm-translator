@@ -18,7 +18,7 @@
  */
 /**
  * Describe the SGLang driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export declare function info(): {
     name: string;
@@ -26,5 +26,6 @@ export declare function info(): {
     order: number;
     auth: string;
     probes: string[];
+    fields: string[];
     paths: Record<string, string>;
 };

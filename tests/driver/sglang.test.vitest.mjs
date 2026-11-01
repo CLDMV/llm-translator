@@ -88,6 +88,23 @@ describe("sglang detection", () => {
 		expect(transport.calls).toHaveLength(0);
 	});
 
+	it("vLLM steps aside when the model list failed but SGLang or llama.cpp identify themselves", async () => {
+		const sglang = server({ "/version": { version: "0.5.2" }, "/get_server_info": INFO });
+		expect((await make({ upstreams: ["http://sg.test"], transport: sglang })).status().upstreams[0].driver).toBe("sglang");
+		const llama = server({ "/version": { version: "b6000" }, "/props": { total_slots: 1 } });
+		expect((await make({ upstreams: ["http://sg.test"], transport: llama })).status().upstreams[0].driver).toBe("llamacpp");
+		const unknown = server({ "/version": { version: "1.2.3" } });
+		expect((await make({ upstreams: ["http://sg.test"], transport: unknown })).status().upstreams[0].driver).toBe("vllm");
+	});
+
+	it("a real vLLM server (named in /v1/models) is never asked for the other backends' paths", async () => {
+		const vllm = server({ "/version": { version: "0.20.0" }, "/v1/models": models("vllm") });
+		await make({ upstreams: ["http://sg.test"], transport: vllm });
+		const paths = vllm.calls.map((call) => new URL(call.url).pathname);
+		expect(paths).not.toContain("/get_server_info");
+		expect(paths).not.toContain("/props");
+	});
+
 	it("is detected after vLLM and llama.cpp without extra sequential waits (each path once)", async () => {
 		const transport = server({ "/get_server_info": INFO, "/v1/models": models("sglang") });
 		await make({ upstreams: ["http://sg.test"], transport });
@@ -179,25 +196,44 @@ describe("sglang reasoning and tool streaming", () => {
 });
 
 describe("passthroughFilter and backend extensions", () => {
-	it("allows the documented SGLang and llama.cpp constraint fields and still drops server controls", () => {
-		const body = {
-			model: "m",
-			messages: [],
-			regex: "a+",
-			ebnf: "root ::= x",
-			separate_reasoning: false,
-			repeat_penalty: 1.1,
-			grammar: "root ::= x",
-			cache_salt: "s"
-		};
-		expect(filterChatBody(body)).toEqual({
-			model: "m",
-			messages: [],
-			regex: "a+",
-			ebnf: "root ::= x",
-			separate_reasoning: false,
-			repeat_penalty: 1.1,
-			grammar: "root ::= x"
-		});
+	const fields = {
+		regex: "a+",
+		ebnf: "root ::= x",
+		separate_reasoning: false,
+		repeat_penalty: 1.1,
+		grammar: "root ::= x",
+		cache_salt: "s"
+	};
+	const forwarded = async (upstream) => {
+		const transport = fakeTransport(() => ({
+			body: {
+				id: "c",
+				object: "chat.completion",
+				model: "m",
+				choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }]
+			}
+		}));
+		const api = await make({ front: "openai", upstreams: [upstream], transport, settings: { passthroughFilter: true } });
+		await api.send({ model: "m", messages: [{ role: "user", content: "hi" }], ...fields });
+		const sent = JSON.parse(transport.calls.find((call) => call.url.endsWith("/chat/completions")).init.body);
+		return Object.keys(sent)
+			.filter((key) => key in fields)
+			.sort();
+	};
+
+	it("forwards each backend's own constraint fields only, and never server controls", async () => {
+		expect(await forwarded({ url: "http://x.test", backend: "sglang" })).toEqual(["ebnf", "regex", "separate_reasoning"]);
+		expect(await forwarded({ url: "http://x.test", backend: "llamacpp" })).toEqual(["grammar", "repeat_penalty"]);
+		expect(await forwarded({ url: "http://x.test", backend: "compatible" })).toEqual([]);
+	});
+
+	it("strips them for api.openai.com and the other hosted drivers", async () => {
+		expect(await forwarded({ url: "https://api.openai.com" })).toEqual([]);
+		expect(await forwarded({ url: "https://api.deepseek.com" })).toEqual([]);
+	});
+
+	it("filterChatBody takes the driver's extra fields", () => {
+		expect(filterChatBody(fields, ["regex"])).toEqual({ regex: "a+" });
+		expect(filterChatBody(fields)).toEqual({});
 	});
 });
