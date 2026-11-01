@@ -24,6 +24,7 @@ import * as http from "../lib/http.mjs";
 import { filterChatBody } from "../lib/passthrough.mjs";
 import * as images from "../lib/images.mjs";
 import * as tools from "../lib/tools.mjs";
+import { LIMITS } from "../lib/toolsearch.mjs";
 import { warn } from "../lib/warn.mjs";
 
 /**
@@ -79,6 +80,13 @@ async function prepare(c, body, options, picked) {
 			producer: producerOf(endpoint),
 			budget: options.budget
 		}));
+		if (converted.toolSearch?.capped) {
+			warn(
+				c.config,
+				c.state,
+				`Tool search: more than ${LIMITS.definitions} tool definitions came back in ToolSearch results for ${endpoint.name}; the rest are not offered.`
+			);
+		}
 	} else {
 		upstream =
 			c.front === "openai" && (options.filter ?? settings.passthroughFilter === true)

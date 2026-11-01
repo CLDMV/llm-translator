@@ -78,8 +78,9 @@ export async function request(body, settings, context) {
 	// Every tool name is fitted in request order before anything else, whether or not the tool is offered, so a name's wire form never
 	// depends on which deferred tools happen to be loaded.
 	for (const tool of body.tools ?? []) if (tool.type === undefined || tool.type === "custom") fit(tool.name);
-	const offered = plan(body.tools ?? [], scan(body.messages), s, body.tool_choice);
-	state.toolSearch = { mode: s.toolSearch, loaded: offered.loaded, hidden: offered.hidden };
+	const found = scan(body.messages, new Set((body.tools ?? []).map((tool) => tool.name)));
+	const offered = plan(body.tools ?? [], found, s, body.tool_choice);
+	state.toolSearch = { mode: s.toolSearch, loaded: offered.loaded, hidden: offered.hidden, stubbed: offered.stubbed, capped: found.capped };
 
 	for (const key of Object.keys(body)) {
 		if (HANDLED.has(key) || SILENT.has(key)) continue;

@@ -26,9 +26,9 @@
 export declare const SEARCH_TOOL = "ToolSearch";
 /** The reserved deferred tool that is never offered. */
 export declare const PLACEHOLDER_TOOL = "DeferredToolPlaceholder";
-/** Limits on definitions read from `ToolSearch` result text, which the model's tools list is built from: count in a conversation, characters per definition, name, description and serialized schema. */
+/** Limits on definitions read from `ToolSearch` result text, which the model's tools list is built from: count in a conversation (only definitions of tools the request does not list count), characters per definition, name, description and serialized schema. */
 export declare const LIMITS: Readonly<{
-    definitions: 64;
+    definitions: 512;
     line: 131072;
     name: 256;
     description: 16384;
@@ -36,16 +36,22 @@ export declare const LIMITS: Readonly<{
 }>;
 /**
  * Find what the conversation has already loaded: tools named by `tool_reference` blocks, tools the assistant has called, tools a `ToolSearch`
- * call asked for by name (so a result that was cleared from a trimmed history does not unload them), and tools defined in `<function>` lines
- * of `ToolSearch` results. Only `ToolSearch` results are read, and none for a `tool_use` id that appears on more than one call, so no other
- * tool's output can add a tool. A definition that exists only in a result that was trimmed away is gone with it.
+ * call selected by name (`select:A,B`, so a result that was cleared from a trimmed history does not unload them), and tools defined in
+ * `<function>` lines of `ToolSearch` results. Only `ToolSearch` results are read, and none for a `tool_use` id that appears on more than one
+ * call, so no other tool's output can add a tool. A definition that exists only in a result that history trimming removed is gone with it:
+ * the name stays in `loaded`, and `plan` copes with the missing definition.
  * @param {any[]} messages - Anthropic messages.
- * @returns {{loaded: string[], defined: Map<string, any>}} Names in order of first appearance, and the definitions found in results.
+ * @param {Set<string>} [known] - Names of the tools the request lists; their definitions are not kept (the listed one wins) and do not count against the cap.
+ * @returns {{loaded: string[], called: string[], defined: Map<string, any>, capped: boolean}} Loaded names in order of first appearance, names the assistant called, the definitions found in results and whether `LIMITS.definitions` turned one away.
  */
-export declare function scan(messages: any[]): {
+export declare function scan(messages: any[], known?: Set<string>): {
     loaded: string[];
+    called: string[];
     defined: Map<string, any>;
+    capped: boolean;
 };
+/** Description of a tool whose definition was trimmed from the conversation. */
+export declare const TRIMMED = "The definition of this tool was trimmed from the conversation; use ToolSearch to see its parameters.";
 /**
  * Decide which tools a request offers.
  *
@@ -58,13 +64,17 @@ export declare function scan(messages: any[]): {
  * A tool a `ToolSearch` result defined in text and that the request does not list is offered after the others (`expand` only).
  * `deferredTools: "drop"` leaves the deferred tools to the caller to drop and hides `ToolSearch`, which would have nothing to load.
  * @param {any[]} tools - Anthropic tools of the request.
- * @param {{loaded: string[], defined: Map<string, any>}} found - Result of `scan`.
+ * @param {{loaded: string[], called: string[], defined: Map<string, any>}} found - Result of `scan`.
  * @param {{toolSearch: "expand" | "inline" | "native", deferredTools: "forward" | "drop"}} s - Settings.
  * @param {any} [choice] - The request's `tool_choice`.
- * @returns {{offer: any[], loaded: string[], hidden: string[]}} Tools to convert, names of the deferred tools that are loaded, and the names left out on purpose.
+ * A tool the conversation loaded whose definition is no longer anywhere (its `ToolSearch` result was trimmed) keeps `ToolSearch` offered so the
+ * model can search again, and one the assistant already called is offered with an empty object schema (`TRIMMED`) so its calls in the history
+ * still map to a tool.
+ * @returns {{offer: any[], loaded: string[], hidden: string[], stubbed: string[]}} Tools to convert, names of the deferred tools that are loaded, the names left out on purpose and the names of tools offered with a placeholder schema.
  */
 export declare function plan(tools: any[], found: {
     loaded: string[];
+    called: string[];
     defined: Map<string, any>;
 }, s: {
     toolSearch: "expand" | "inline" | "native";
@@ -73,4 +83,5 @@ export declare function plan(tools: any[], found: {
     offer: any[];
     loaded: string[];
     hidden: string[];
+    stubbed: string[];
 };

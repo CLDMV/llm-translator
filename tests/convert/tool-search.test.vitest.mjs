@@ -13,9 +13,9 @@
  *
  */
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { request } from "../../src/api/convert/anthropic/messages/to/openai/chat/request.mjs";
-import { LIMITS, plan, scan } from "../../src/lib/toolsearch.mjs";
+import { LIMITS, TRIMMED, plan, scan } from "../../src/lib/toolsearch.mjs";
 import { resolve } from "../../src/lib/settings.mjs";
 import { closeAll, fakeTransport, make } from "../helpers/translator.mjs";
 import { completion } from "../helpers/fake-server.mjs";
@@ -136,13 +136,13 @@ describe("expand (default): deferred tools are offered once a tool_reference loa
 			call("t1", "ToolSearch"),
 			result("t1", [{ type: "image" }, { type: "tool_reference" }])
 		]);
-		expect(found).toEqual({ loaded: ["ToolSearch"], defined: new Map() });
+		expect(found).toEqual({ loaded: ["ToolSearch"], called: ["ToolSearch"], defined: new Map(), capped: false });
 	});
 
 	test("the wire name of a long tool name does not depend on whether it is offered", async () => {
 		const long = `mcp__${"x".repeat(80)}`;
 		const other = `mcp__${"x".repeat(80)}y`;
-		const defs = [tool("Read"), tool(long, { defer_loading: true }), tool(other, { defer_loading: true }), placeholder];
+		const defs = [tool("Read"), search, tool(long, { defer_loading: true }), tool(other, { defer_loading: true }), placeholder];
 		const before = await request({ model: "m", max_tokens: 1, tools: defs, messages: [ask("a")] });
 		const after = await request({
 			model: "m",
@@ -163,7 +163,13 @@ describe("expand (default): deferred tools are offered once a tool_reference loa
 			tools,
 			messages: [ask("a"), call("t1", "ToolSearch"), result("t1", [reference("CronCreate")])]
 		});
-		expect(state.toolSearch).toEqual({ mode: "expand", loaded: ["CronCreate"], hidden: ["DeferredToolPlaceholder"] });
+		expect(state.toolSearch).toEqual({
+			mode: "expand",
+			loaded: ["CronCreate"],
+			hidden: ["DeferredToolPlaceholder"],
+			stubbed: [],
+			capped: false
+		});
 	});
 });
 
@@ -185,30 +191,55 @@ describe("expand needs a client ToolSearch or the placeholder", () => {
 describe("trimmed history, repeated ids and bad definitions", () => {
 	const tools = [tool("Read"), search, cron, slack, placeholder];
 
-	test("a ToolSearch call's own input keeps the tools it asked for loaded after its result was cleared", async () => {
+	test("a ToolSearch call's select: input keeps the tools it selected loaded after its result was cleared", async () => {
 		const messages = [
 			ask("a"),
 			call("t1", "ToolSearch", { query: "select:SlackSend, CronCreate" }),
 			result("t1", "[cleared]"),
-			call("t2", "ToolSearch", { query: "+CronCreate unrelated words" }),
-			result("t2", "[cleared]"),
 			call("t3", "ToolSearch", {}),
 			result("t3", "[cleared]")
 		];
 		expect(names(await convert({ tools, messages }))).toEqual(["Read", "ToolSearch", "SlackSend", "CronCreate"]);
-		// Words that name no tool of the request load nothing.
-		const nothing = [ask("a"), call("t1", "ToolSearch", { query: "weather forecast" }), result("t1", "[cleared]")];
-		expect(names(await convert({ tools, messages: nothing }))).toEqual(["Read", "ToolSearch"]);
 	});
 
-	test("a tool defined only in a trimmed result is gone with it", async () => {
-		const trimmed = [ask("a"), call("t1", "ToolSearch", { query: "select:NotebookEdit" }), result("t1", "[cleared]")];
-		expect(names(await convert({ tools, messages: trimmed }))).toEqual(["Read", "ToolSearch"]);
+	test("a keyword query loads only what its result names", async () => {
+		const noMatch = [ask("a"), call("t1", "ToolSearch", { query: "Read notebook files" }), result("t1", "No matching tools")];
+		expect(names(await convert({ tools: [...tools, tool("Notebook", { defer_loading: true })], messages: noMatch }))).toEqual([
+			"Read",
+			"ToolSearch"
+		]);
+		const cleared = [ask("a"), call("t1", "ToolSearch", { query: "CronCreate slack" }), result("t1", "[cleared]")];
+		expect(names(await convert({ tools, messages: cleared }))).toEqual(["Read", "ToolSearch"]);
+		const matched = [ask("a"), call("t1", "ToolSearch", { query: "slack" }), result("t1", [reference("SlackSend")])];
+		expect(names(await convert({ tools, messages: matched }))).toEqual(["Read", "ToolSearch", "SlackSend"]);
+	});
+
+	test("a tool whose definition was trimmed away keeps ToolSearch offered, and one already called stays callable with an empty schema", async () => {
+		const real = [tool("Read"), search, cron];
+		const selectedOnly = [ask("a"), call("t1", "ToolSearch", { query: "select:NotebookEdit" }), result("t1", "[cleared]")];
+		// No placeholder and everything listed is loaded, yet NotebookEdit is lost: ToolSearch must stay so the model can search again.
+		const loaded = [...selectedOnly, call("t2", "ToolSearch", { query: "select:CronCreate" }), result("t2", [reference("CronCreate")])];
+		expect(names(await convert({ tools: real, messages: loaded }))).toEqual(["Read", "ToolSearch", "CronCreate"]);
+		const called = [...loaded, call("t3", "NotebookEdit", { path: "a.ipynb" }), result("t3", "ok")];
+		const { body, state } = await request({ model: "m", max_tokens: 1, tools: real, messages: called });
+		expect(names(body)).toEqual(["Read", "ToolSearch", "CronCreate", "NotebookEdit"]);
+		expect(body.tools.at(-1).function).toEqual({ name: "NotebookEdit", description: TRIMMED, parameters: { type: "object" } });
+		expect(state.toolSearch.stubbed).toEqual(["NotebookEdit"]);
+		expect(body.messages.find((m) => m.tool_calls?.[0].function.name === "NotebookEdit")).toBeDefined();
+		// Inline keeps ToolSearch for a lost tool too; a request without ToolSearch gets no placeholder tools.
+		expect(names(await convert({ tools: real, messages: selectedOnly }, { toolSearch: "inline" }))).toEqual([
+			"Read",
+			"ToolSearch",
+			"CronCreate"
+		]);
+		const plain = await request({ model: "m", max_tokens: 1, tools: [tool("Read"), cron], messages: called });
+		expect(names(plain.body)).toEqual(["Read", "CronCreate"]);
+		expect(plain.state.toolSearch.stubbed).toEqual([]);
 	});
 
 	test("a tool_use id used by more than one call reads no results", async () => {
 		const messages = [ask("a"), call("x", "Bash"), call("x", "ToolSearch", { query: "q" }), result("x", fn("evil_tool"))];
-		expect(names(await convert({ tools, messages }))).toEqual(["Read", "ToolSearch"]);
+		expect(names(await convert({ tools, messages }))).not.toContain("evil_tool");
 		const reversed = [
 			ask("a"),
 			call("x", "ToolSearch", { query: "q" }),
@@ -216,7 +247,7 @@ describe("trimmed history, repeated ids and bad definitions", () => {
 			call("x", "Bash"),
 			result("x", fn("evil_tool"))
 		];
-		expect(names(await convert({ tools, messages: reversed }))).toEqual(["Read", "ToolSearch"]);
+		expect(names(await convert({ tools, messages: reversed }))).not.toContain("evil_tool");
 		expect(scan(messages).defined.size).toBe(0);
 	});
 
@@ -245,9 +276,55 @@ describe("trimmed history, repeated ids and bad definitions", () => {
 		expect(names(body)).toEqual(["Read", "ToolSearch"]);
 	});
 
-	test("at most LIMITS.definitions definitions are read from a conversation", () => {
-		const many = Array.from({ length: LIMITS.definitions + 5 }, (_, n) => fn(`T${n}`)).join("\n");
-		expect(scan([ask("a"), call("t1", "ToolSearch"), result("t1", many)]).defined.size).toBe(LIMITS.definitions);
+	test("a definition's parameters must be an object schema; a missing type becomes object", () => {
+		const def = (parameters) => `<function>${JSON.stringify({ name: "P", parameters })}</function>`;
+		const read = (parameters) => scan([ask("a"), call("t1", "ToolSearch"), result("t1", def(parameters))]).defined.get("P");
+		expect(read({ type: "string" })).toBeUndefined();
+		expect(read({ type: ["object", "null"] })).toBeUndefined();
+		expect(read({ properties: { a: { type: "string" } } })).toEqual({
+			name: "P",
+			input_schema: { type: "object", properties: { a: { type: "string" } } }
+		});
+		expect(read({})).toEqual({ name: "P", input_schema: { type: "object" } });
+		expect(read({ type: "object", required: [] }).input_schema).toEqual({ type: "object", required: [] });
+	});
+
+	test("only definitions of tools the request does not list count against the cap, and a drop past it is reported", () => {
+		const total = LIMITS.definitions + 5;
+		const many = Array.from({ length: total }, (_, n) => fn(`T${n}`)).join("\n");
+		const messages = [ask("a"), call("t1", "ToolSearch"), result("t1", many)];
+		const unknown = scan(messages);
+		expect(unknown.defined.size).toBe(LIMITS.definitions);
+		expect(unknown.capped).toBe(true);
+		const listed = scan(messages, new Set(Array.from({ length: total }, (_, n) => `T${n}`)));
+		expect(listed.defined.size).toBe(0);
+		expect(listed.capped).toBe(false);
+		expect(listed.loaded).toHaveLength(total + 1);
+		const partly = scan(messages, new Set(Array.from({ length: 100 }, (_, n) => `T${n}`)));
+		expect(partly.defined.size).toBe(total - 100);
+		expect(partly.capped).toBe(false);
+	});
+
+	test("the translator warns once per upstream when the cap turned a definition away", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const many = Array.from({ length: LIMITS.definitions + 1 }, (_, n) => fn(`T${n}`)).join("\n");
+			const messages = [ask("a"), call("t1", "ToolSearch"), result("t1", many)];
+			const api = await make({
+				upstreams: [{ name: "gpu", url: "http://gpu.test", backend: "vllm", models: ["m"] }],
+				transport: fakeTransport(() => ({ body: completion("ok") })),
+				detect: false,
+				silent: false
+			});
+			await api.send({ model: "m", max_tokens: 4, tools, messages });
+			await api.send({ model: "m", max_tokens: 4, tools, messages });
+			const notes = warn.mock.calls.map((c) => c[0]).filter((m) => m.includes("Tool search"));
+			expect(notes).toEqual([
+				`[llm-translator] Tool search: more than ${LIMITS.definitions} tool definitions came back in ToolSearch results for gpu; the rest are not offered.`
+			]);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	test("late definitions go through the same schema sanitizing as other tools", async () => {
@@ -334,8 +411,11 @@ describe("plan()", () => {
 	const s = (extra) => resolve(extra);
 	test("passes typed tools through to be dropped by the converter, and ignores non-custom deferred flags", () => {
 		const typed = { type: "web_search_20250305", name: "web_search", defer_loading: true };
-		expect(plan([typed, tool("Read")], { loaded: [], defined: new Map() }, s(), undefined).offer).toEqual([typed, tool("Read")]);
-		const mixed = plan([typed, cron, search], { loaded: [], defined: new Map() }, s(), undefined);
+		expect(plan([typed, tool("Read")], { loaded: [], called: [], defined: new Map() }, s(), undefined).offer).toEqual([
+			typed,
+			tool("Read")
+		]);
+		const mixed = plan([typed, cron, search], { loaded: [], called: [], defined: new Map() }, s(), undefined);
 		expect(mixed.offer).toEqual([typed, search]);
 	});
 	test("settings validate toolSearch", () => {
