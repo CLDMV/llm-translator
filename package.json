@@ -25,7 +25,7 @@
 	},
 	"sideEffects": false,
 	"engines": {
-		"node": ">=22.15.0"
+		"node": ">=22.22.0"
 	},
 	"main": "./dist/index.cjs",
 	"module": "./dist/index.mjs",
@@ -49,8 +49,7 @@
 	"files": [
 		"dist/",
 		"!dist/**/*.map",
-		"types/",
-		"!types/devcheck.d.mts"
+		"types/"
 	],
 	"repository": {
 		"type": "git",

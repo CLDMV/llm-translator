@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:01-07:00 (1792958341)
+ *	@Last modified time: 2026-11-01T09:42:17-08:00 (1793554937)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -26,6 +26,10 @@ export type TranslatorConfig = {
      * Client model name to upstream model name.
      */
     aliases?: Record<string, string>;
+    /**
+     * Endpoint pools: `{ strategy, backoff: { base, max }, models }` (see docs/settings.md).
+     */
+    pool?: import("./lib/pool.mjs").PoolConfig;
     /**
      * Global converter settings (see `lib/settings.mjs`).
      */
@@ -58,6 +62,7 @@ export type TranslatorConfig = {
  * @property {"anthropic" | "openai"} [front] Client protocol the translator speaks (default `"anthropic"`).
  * @property {Array<string | import("./lib/config.mjs").UpstreamConfig>} upstreams Upstream servers: `{ name, url, apiKey, headers, backend, models, default, settings, version }` (or a bare URL).
  * @property {Record<string, string>} [aliases] Client model name to upstream model name.
+ * @property {import("./lib/pool.mjs").PoolConfig} [pool] Endpoint pools: `{ strategy, backoff: { base, max }, models }` (see docs/settings.md).
  * @property {Record<string, any>} [settings] Global converter settings (see `lib/settings.mjs`).
  * @property {boolean} [detect] Probe `auto` upstreams at startup (default true).
  * @property {number} [detectTimeout] Probe timeout in ms (default 5000).

@@ -30,6 +30,14 @@ export type Settings = {
      */
     thinkTags: boolean;
     /**
+     * - With `thinkTags`: the output starts inside a thought because the chat template opens `<think>` in the generation prompt, so reasoning runs up to the first `</think>`. Without a `</think>` the content is plain text.
+     */
+    thinkOpen: boolean;
+    /**
+     * - Carry reasoning the upstream needs back across turns. OpenAI-protocol upstream: the provider's reasoning fields (`reasoning_content`, `reasoning`, `reasoning_details`) travel in the thinking block's `llmt:` signature and are restored on the next request. Anthropic-protocol upstream with an OpenAI client: thinking blocks and their signatures travel as `reasoning_details` items the client replays. Off by default; the DeepSeek driver turns it on.
+     */
+    reasoningRoundTrip: boolean;
+    /**
      * - How Anthropic `thinking` is requested from the server.
      */
     thinking: "chat_template_kwargs" | "reasoning_effort" | "none";
@@ -49,6 +57,10 @@ export type Settings = {
      * - Retry a request once without images when an OpenAI-protocol upstream answers 400 that the model does not accept images, and remember that for the endpoint and model until the process ends.
      */
     imageFallback: boolean;
+    /**
+     * - Retry a request once without tools when an OpenAI-protocol upstream answers 400 that tool parsing is not enabled (vLLM started without `--enable-auto-tool-choice` and `--tool-call-parser`). Off by default: the request then runs without tools, which silently changes what the model can do.
+     */
+    toolFallback: boolean;
     /**
      * - How `document` blocks are handled.
      */
@@ -72,9 +84,13 @@ export type Settings = {
      */
     toolSchema: "pass" | "sanitize";
     /**
-     * - Forward `defer_loading` tools as plain function tools or drop them.
+     * - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
      */
     deferredTools: "forward" | "drop";
+    /**
+     * - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
+     */
+    toolSearch: "expand" | "inline" | "native";
     /**
      * - Prefix `is_error` tool results with `[error] `.
      */
@@ -128,6 +144,10 @@ export type Settings = {
      */
     passthroughFilter: boolean;
     /**
+     * - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
+     */
+    contextWindow: number;
+    /**
      * - `max_tokens` used when an OpenAI request has none (Anthropic requires one).
      */
     defaultMaxTokens: number;
@@ -139,16 +159,20 @@ export type Settings = {
  * @property {boolean} stripBillingHeader - Remove the `x-anthropic-billing-header` system block.
  * @property {"reasoning"|"reasoning_content"} reasoningField - Field used when SENDING reasoning to an OpenAI-style server (reading accepts both).
  * @property {boolean} thinkTags - Parse a leading `<think>...</think>` in content as reasoning.
+ * @property {boolean} thinkOpen - With `thinkTags`: the output starts inside a thought because the chat template opens `<think>` in the generation prompt, so reasoning runs up to the first `</think>`. Without a `</think>` the content is plain text.
+ * @property {boolean} reasoningRoundTrip - Carry reasoning the upstream needs back across turns. OpenAI-protocol upstream: the provider's reasoning fields (`reasoning_content`, `reasoning`, `reasoning_details`) travel in the thinking block's `llmt:` signature and are restored on the next request. Anthropic-protocol upstream with an OpenAI client: thinking blocks and their signatures travel as `reasoning_details` items the client replays. Off by default; the DeepSeek driver turns it on.
  * @property {"chat_template_kwargs"|"reasoning_effort"|"none"} thinking - How Anthropic `thinking` is requested from the server.
  * @property {boolean} thinkingBudget - Send `thinking_token_budget` for `thinking.type = "enabled"`.
  * @property {boolean} effort - Map `output_config.effort` to `reasoning_effort`.
  * @property {boolean} images - The model accepts images. When false images are replaced by a text note.
  * @property {boolean} imageFallback - Retry a request once without images when an OpenAI-protocol upstream answers 400 that the model does not accept images, and remember that for the endpoint and model until the process ends.
+ * @property {boolean} toolFallback - Retry a request once without tools when an OpenAI-protocol upstream answers 400 that tool parsing is not enabled (vLLM started without `--enable-auto-tool-choice` and `--tool-call-parser`). Off by default: the request then runs without tools, which silently changes what the model can do.
  * @property {"extract"|"note"|"error"} documents - How `document` blocks are handled.
  * @property {((block: object, ctx: object) => Promise<object[]>|object[])|null} documentConverter - Override for `document` conversion; returns Anthropic content blocks.
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
- * @property {"forward"|"drop"} deferredTools - Forward `defer_loading` tools as plain function tools or drop them.
+ * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
+ * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
  * @property {boolean} toolErrors - Prefix `is_error` tool results with `[error] `.
  * @property {"max_completion_tokens"|"max_tokens"} maxTokensField - Field used for the output cap.
  * @property {boolean} streamUsage - Request `stream_options.include_usage` on streamed requests.
@@ -162,6 +186,7 @@ export type Settings = {
  * @property {"buffer"|"stream"} toolStreaming - OpenAI to Anthropic streams: `buffer` holds each tool call until its arguments are complete and emits one whole `tool_use` block (text and thinking keep streaming and appear before the block); `stream` forwards argument fragments incrementally and holds text that arrives meanwhile until the tool blocks are done.
  * @property {boolean} effortPassthrough - vLLM driver: send `xhigh` and `max` reasoning effort unchanged instead of clamping them to `high`.
  * @property {boolean} passthroughFilter - Restrict bodies forwarded from the OpenAI front to an OpenAI-protocol upstream to standard Chat Completions fields plus documented vLLM extensions. Off in the library; the server turns it on unless set to false.
+ * @property {number} contextWindow - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
  * @property {number} defaultMaxTokens - `max_tokens` used when an OpenAI request has none (Anthropic requires one).
  */
 /** @type {Readonly<Settings>} */

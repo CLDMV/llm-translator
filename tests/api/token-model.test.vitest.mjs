@@ -82,6 +82,59 @@ describe("token.count", () => {
 	});
 });
 
+describe("model.get", () => {
+	it("retrieves a served model and an alias in the Anthropic shape", async () => {
+		const server = await fakeVllm({ models: ["qwen3-coder"] });
+		try {
+			const api = await make({ upstreams: [server.url], aliases: { haiku: "qwen3-coder" } });
+			expect(await api.model.get("qwen3-coder")).toEqual({
+				type: "model",
+				id: "qwen3-coder",
+				display_name: "qwen3-coder",
+				created_at: new Date(1700000000 * 1000).toISOString(),
+				max_input_tokens: 32768
+			});
+			expect((await api.model.get("haiku")).id).toBe("haiku");
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("retrieves a model in the OpenAI shape", async () => {
+		const server = await fakeVllm();
+		try {
+			const api = await make({ front: "openai", upstreams: [server.url] });
+			expect(await api.model.get("qwen3-coder")).toEqual({
+				id: "qwen3-coder",
+				object: "model",
+				created: 1700000000,
+				owned_by: "vllm",
+				max_model_len: 32768
+			});
+			expect((await api.model.get("qwen3-coder", { front: "anthropic" })).type).toBe("model");
+		} finally {
+			await server.close();
+		}
+	});
+
+	it("throws a 404 TranslatorError for an unknown id, worded for the front", async () => {
+		const server = await fakeVllm();
+		try {
+			const api = await make({ upstreams: [server.url] });
+			await expect(api.model.get("nope")).rejects.toMatchObject({
+				name: "TranslatorError",
+				status: 404,
+				code: "model_not_found",
+				param: "model",
+				message: "model: nope"
+			});
+			await expect(api.model.get("nope", { front: "openai" })).rejects.toMatchObject({ message: "The model 'nope' does not exist" });
+		} finally {
+			await server.close();
+		}
+	});
+});
+
 describe("model.list", () => {
 	it("lists vLLM's models in the Anthropic shape with aliases and context size", async () => {
 		const server = await fakeVllm({ models: ["qwen3-coder", "llama"] });

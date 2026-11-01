@@ -20,6 +20,16 @@
 import * as http from "./http.mjs";
 
 /**
+ * The usable entries of a `/v1/models` reply.
+ * @param {{ok: boolean, body: any}} result - Outcome of the request.
+ * @returns {{id: string, created?: number, owned_by?: string, max_model_len?: number}[] | null} Models, or null when the reply is not a model list.
+ */
+export function modelsOf(result) {
+	if (!result.ok || !Array.isArray(result.body?.data)) return null;
+	return result.body.data.filter((entry) => entry && typeof entry.id === "string");
+}
+
+/**
  * Fetch and normalize the models an upstream reports.
  * @param {any} context - `{ endpoint, transport, signal, timeout, auth, extraHeaders }`.
  * @returns {Promise<{id: string, created?: number, owned_by?: string, max_model_len?: number}[] | null>} Models, or null when the upstream did not answer with a model list.
@@ -31,6 +41,5 @@ export async function fetchModels({ endpoint, transport, signal, timeout, auth, 
 		signal,
 		timeout
 	});
-	if (!result.ok || !Array.isArray(result.body?.data)) return null;
-	return result.body.data.filter((entry) => entry && typeof entry.id === "string");
+	return modelsOf(result);
 }

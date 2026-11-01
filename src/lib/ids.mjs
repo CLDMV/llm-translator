@@ -53,6 +53,14 @@ export function completionId() {
 }
 
 /**
+ * OpenAI style tool-call id, for upstream tool calls that carry none.
+ * @returns {string} `call_...` id.
+ */
+export function callId() {
+	return `call_${random()}`;
+}
+
+/**
  * Make a tool-call id valid for Anthropic (`[a-zA-Z0-9_-]+`). Valid ids pass through unchanged, invalid characters
  * (for example kimi's `functions.name:0`) become `_`, and a missing or empty id is replaced by a fresh one. The
  * mapping is deterministic so a tool call and its later tool result agree.

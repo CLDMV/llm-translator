@@ -41,16 +41,14 @@ async function boot(server, config = {}) {
 }
 
 describe("authorize (anthropic front)", () => {
-	it("allows with true and with { ok: true }, and the request reaches the upstream", async () => {
-		for (const verdict of [true, { ok: true }]) {
-			const { upstream, server } = await boot({ authorize: () => verdict });
-			try {
-				const reply = await post(`${server.url}/v1/messages`, hello);
-				expect(reply.status).toBe(200);
-				expect((await reply.json()).type).toBe("message");
-			} finally {
-				await upstream.close();
-			}
+	it.each([true, { ok: true }])("allows with %j, and the request reaches the upstream", async (verdict) => {
+		const { upstream, server } = await boot({ authorize: () => verdict });
+		try {
+			const reply = await post(`${server.url}/v1/messages`, hello);
+			expect(reply.status).toBe(200);
+			expect((await reply.json()).type).toBe("message");
+		} finally {
+			await upstream.close();
 		}
 	});
 
@@ -77,6 +75,23 @@ describe("authorize (anthropic front)", () => {
 			} finally {
 				await upstream.close();
 			}
+		}
+	});
+
+	it("runs for GET /v1/models/{id} like /v1/models: it sees the url, can refuse, and a refusal is not a 404", async () => {
+		const seen = [];
+		const { upstream, server } = await boot({
+			authorize: (request) => (seen.push(request), request.url.endsWith("secret") ? { ok: false, status: 403, message: "no" } : true)
+		});
+		try {
+			const allowed = await fetch(`${server.url}/v1/models/qwen3-coder`);
+			expect(allowed.status).toBe(200);
+			expect(seen[0]).toMatchObject({ method: "GET", url: "/v1/models/qwen3-coder", body: undefined, route: null });
+			const refused = await fetch(`${server.url}/v1/models/secret`);
+			expect(refused.status).toBe(403);
+			expect(await refused.json()).toEqual({ type: "error", error: { type: "permission_error", message: "no" } });
+		} finally {
+			await upstream.close();
 		}
 	});
 

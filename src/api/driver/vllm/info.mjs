@@ -18,9 +18,11 @@
  * @module @cldmv/llm-translator/driver/vllm
  */
 
+import { VLLM_FIELDS } from "../../../lib/passthrough.mjs";
+
 /**
  * Describe the vLLM driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
@@ -28,6 +30,7 @@ export function info() {
 		protocol: "openai.chat",
 		order: 10,
 		auth: "bearer",
+		fields: VLLM_FIELDS,
 		paths: { chat: "/v1/chat/completions", models: "/v1/models", tokenize: "/tokenize", version: "/version" }
 	};
 }

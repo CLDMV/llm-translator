@@ -40,6 +40,7 @@ export function collect(driverApi) {
 			request: driver.request,
 			response: driver.response,
 			chunk: driver.chunk,
+			flush: driver.flush,
 			error: driver.error,
 			count: driver.token?.count,
 			list: driver.model?.list

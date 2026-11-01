@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:01-07:00 (1792958341)
+ *	@Last modified time: 2026-11-01T09:42:17-08:00 (1793554937)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -30,25 +30,12 @@ import { load } from "./lib/pdf.mjs";
 import { transport } from "./lib/transport.mjs";
 import { warn } from "./lib/warn.mjs";
 
-// Development environment check. devcheck.mjs lives at the repo root and exists only in
-// a source checkout; it is never published, so the import is allowed to fail. tsup keeps
-// the specifier external, so dist/index.mjs imports the same root file. It runs inside an
-// async function rather than as a top-level await: index.cjs loads this module through
-// Node's synchronous require(esm), which rejects any module graph containing top-level
-// await (ERR_REQUIRE_ASYNC_MODULE).
-(async () => {
-	try {
-		await import("../devcheck.mjs");
-	} catch {
-		// ignore - devcheck.mjs is not published
-	}
-})();
-
 /**
  * @typedef {object} TranslatorConfig
  * @property {"anthropic" | "openai"} [front] Client protocol the translator speaks (default `"anthropic"`).
  * @property {Array<string | import("./lib/config.mjs").UpstreamConfig>} upstreams Upstream servers: `{ name, url, apiKey, headers, backend, models, default, settings, version }` (or a bare URL).
  * @property {Record<string, string>} [aliases] Client model name to upstream model name.
+ * @property {import("./lib/pool.mjs").PoolConfig} [pool] Endpoint pools: `{ strategy, backoff: { base, max }, models }` (see docs/settings.md).
  * @property {Record<string, any>} [settings] Global converter settings (see `lib/settings.mjs`).
  * @property {boolean} [detect] Probe `auto` upstreams at startup (default true).
  * @property {number} [detectTimeout] Probe timeout in ms (default 5000).
@@ -71,6 +58,7 @@ export async function createTranslator(config) {
 		servers: new Set(),
 		warned: new Set(),
 		textOnly: new Set(),
+		cursors: new Map(),
 		front: undefined
 	};
 	const pdf = await load();

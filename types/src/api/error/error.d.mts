@@ -15,7 +15,7 @@
 /**
  * Convert an upstream error reply into `{ status, headers, body }` in the client protocol. Context-window overflows
  * become Anthropic's "prompt is too long: N tokens > MAX maximum" (which triggers Claude Code's compaction); status codes
- * map 1:1; `retry-after` is kept.
+ * map 1:1; `retry-after` is kept. A 400 that says the server has no tool parser (vLLM without `--enable-auto-tool-choice` and `--tool-call-parser`) gets a hint naming the missing flags.
  * @param {number} status - Upstream HTTP status.
  * @param {*} upstreamBody - Parsed upstream error body (object or text).
  * @param {Record<string,string>} [headers] - Lowercase upstream response headers.

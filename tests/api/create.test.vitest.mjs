@@ -222,6 +222,12 @@ describe("detection", () => {
 		expect(status.upstreams[0].driver).toBe("compatible");
 	});
 
+	it.each(["badfields", "badfieldtypes"])("rejects a driver whose info().fields is not an array of names (%s)", async (name) => {
+		const api = await make({ upstreams: ["http://a.test"], transport: fakeTransport(() => ({ body: { data: [] } })) });
+		await api.slothlet.api.add(["driver", name], new URL(`../fixtures/driver/${name}`, import.meta.url).pathname);
+		await expect(api.detect()).rejects.toMatchObject({ code: "invalid_driver", message: expect.stringContaining(`Driver ${name}`) });
+	});
+
 	it("detects the hosted OpenAI and Anthropic APIs by host without network access", async () => {
 		const transport = fakeTransport(() => ({ status: 500 }));
 		const api = await make({

@@ -18,21 +18,31 @@
  * @module @cldmv/llm-translator/driver/vllm
  */
 import * as http from "../../../lib/http.mjs";
+import { isLlamacppProps, isSglangInfo, objectOf } from "../../../lib/backends.mjs";
+
+/** `owned_by` values of other backends that also answer `/version`. */
+const OTHERS = new Set(["sglang", "llamacpp"]);
 
 /**
  * Probe an endpoint for vLLM.
- * @param {any} context - `{ endpoint, transport, signal, timeout }`.
- * @returns {Promise<any | null>} Facts `{ version, models, maxModelLen }`, or null when the endpoint is not vLLM.
+ * @param {any} context - `{ endpoint, transport, signal, timeout, probes }`.
+ * @returns {Promise<any | null>} Facts `{ version, models, maxModelLen }`, or null when the endpoint is not vLLM (or is SGLang or llama.cpp, which also answer `/version`).
  */
-export async function detect({ endpoint, transport, signal, timeout }) {
-	const options = { method: "GET", headers: http.headers(endpoint), signal, timeout };
-	const [versionResult, modelsResult] = await Promise.all([
-		http.json(transport, http.join(endpoint.url, "/version"), options),
-		http.json(transport, http.join(endpoint.url, "/v1/models"), options)
-	]);
+export async function detect({ endpoint, transport, signal, timeout, probes }) {
+	const context = { endpoint, transport, signal, timeout, probes };
+	const [versionResult, modelsResult] = await Promise.all([http.probe(context, "/version"), http.probe(context, "/v1/models")]);
 	const version = typeof versionResult.body?.version === "string" ? versionResult.body.version : undefined;
 	const models = Array.isArray(modelsResult.body?.data) ? modelsResult.body.data : [];
-	if (!version && !models.some((entry) => entry?.owned_by === "vllm")) return null;
+	// SGLang also answers `/version`; its model list names it, so it is not taken for vLLM.
+	if (models.some((entry) => OTHERS.has(entry?.owned_by))) return null;
+	const owned = models.some((entry) => entry?.owned_by === "vllm");
+	if (!version && !owned) return null;
+	// A server that answers `/version` but does not say it is vLLM may be SGLang or llama.cpp whose model list failed. Only then are their
+	// identifying paths asked for, so a real vLLM server (which names itself in `/v1/models`) is never sent an extra request.
+	if (!owned) {
+		const [sglang, llamacpp] = await Promise.all([http.probe(context, "/get_server_info"), http.probe(context, "/props")]);
+		if (isSglangInfo(objectOf(sglang)) || isLlamacppProps(objectOf(llamacpp))) return null;
+	}
 	return {
 		version,
 		models: models.map((entry) => entry.id),

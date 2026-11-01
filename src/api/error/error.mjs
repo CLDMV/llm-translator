@@ -20,13 +20,14 @@
 import { context, self } from "../../lib/runtime.mjs";
 import { capture } from "../../lib/capture.mjs";
 import * as upstream from "../../lib/upstream-error.mjs";
+import * as tools from "../../lib/tools.mjs";
 
 const KEEP = ["retry-after", "x-should-retry"];
 
 /**
  * Convert an upstream error reply into `{ status, headers, body }` in the client protocol. Context-window overflows
  * become Anthropic's "prompt is too long: N tokens > MAX maximum" (which triggers Claude Code's compaction); status codes
- * map 1:1; `retry-after` is kept.
+ * map 1:1; `retry-after` is kept. A 400 that says the server has no tool parser (vLLM without `--enable-auto-tool-choice` and `--tool-call-parser`) gets a hint naming the missing flags.
  * @param {number} status - Upstream HTTP status.
  * @param {*} upstreamBody - Parsed upstream error body (object or text).
  * @param {Record<string,string>} [headers] - Lowercase upstream response headers.
@@ -43,6 +44,8 @@ export default async function error(status, upstreamBody, headers = {}, state) {
 	if (state?.unserved === true && status === 404) {
 		info.message += ` The model "${state.model}" is not served by any configured upstream; map it to a served model with "aliases".`;
 	}
+	if (status === 400 && tools.refused(info.message))
+		info.message += ` ${tools.hint(endpoint ? c.settings(endpoint).toolFallback : false, info.message)}`;
 	const rendered = upstream.render(c.front, status, info, { native: state?.native === true });
 	const out = { "content-type": "application/json" };
 	for (const name of KEEP) {

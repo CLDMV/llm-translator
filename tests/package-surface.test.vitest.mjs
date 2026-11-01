@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T14:46:00-07:00 (1793483160)
+ *	@Last modified time: 2026-11-01T13:20:33-08:00 (1793568033)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -41,7 +41,7 @@ describe("package surface", () => {
 	it("declares the bin, the optional fastify peer and the node floor", () => {
 		expect(pkg.bin["llm-translator"]).toBe("./dist/bin/llm-translator.mjs");
 		expect(pkg.peerDependenciesMeta.fastify.optional).toBe(true);
-		expect(pkg.engines.node).toBe(">=22.15.0");
+		expect(pkg.engines.node).toBe(">=22.22.0");
 	});
 
 	it("the composed api exposes the documented leaves", async () => {
@@ -61,6 +61,7 @@ describe("package surface", () => {
 					"convert",
 					"detect",
 					"driver",
+					"endpoint",
 					"error",
 					"model",
 					"request",

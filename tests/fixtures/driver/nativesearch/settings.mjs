@@ -1,0 +1,18 @@
+/**
+ *
+ *	@Project: @cldmv/llm-translator
+ *	@Filename: /tests/fixtures/driver/nativesearch/settings.mjs
+ *	@Date: 2026-10-25T12:18:46-07:00 (1792955926)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-10-25T12:59:03-07:00 (1792958343)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+/** @returns {object} A server that renders tool_reference parts itself. */
+export function settings() {
+	return { toolSearch: "native" };
+}

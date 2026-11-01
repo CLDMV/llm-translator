@@ -63,7 +63,7 @@ Lines, statements, functions and branches are all at 100% and enforced on every 
 
 ### Requirements
 
-- Node.js 22.15 or newer
+- Node.js 22.22 or newer
 - Fastify 5, only for the server and the Fastify plugin (an optional peer dependency)
 
 ### Install
@@ -100,7 +100,7 @@ if (reply.stream) for await (const { event, data } of reply.stream) console.log(
 
 // Where would a request go, and what did it cost? (see docs/server.md)
 const { upstream, model } = api.route({ model: "claude-opus-5-5" }); // no I/O
-const { input_tokens, output_tokens, reported } = await reply.usage; // or send(body, { onUsage })
+const { input_tokens, output_tokens, reported, estimated } = await reply.usage; // or send(body, { onUsage }); `estimated` holds the guesses written into the client reply when the upstream sent no usage
 ```
 
 ### Server and Claude Code
@@ -120,7 +120,7 @@ Then point Claude Code at it with `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`. Th
 
 ## 📚 Configuration
 
-`createTranslator(config)` takes `front`, `upstreams` (URLs or objects with `url`, `apiKey`, `backend`, `models`, `default` and `settings`), `aliases`, global `settings`, `detect` and a custom `transport`. The CLI reads the same keys from flags, `LLM_TRANSLATOR_*` environment variables and a JSON file, in that order of precedence.
+`createTranslator(config)` takes `front`, `upstreams` (URLs or objects with `url`, `apiKey`, `backend`, `models`, `default` and `settings`), `aliases`, global `settings`, `pool` (failover and load balancing between upstreams that serve the same model, see [docs/server.md](https://github.com/CLDMV/llm-translator/blob/master/docs/server.md#endpoint-pools-failover-and-load-balancing)), `detect` and a custom `transport`. The CLI reads the same keys from flags, `LLM_TRANSLATOR_*` environment variables and a JSON file, in that order of precedence.
 
 Settings tune how the converters map one protocol onto the other (`inlineSystem`, `images`, `imageFallback`, `toolStreaming`, `pingInterval` and more); they are resolved per upstream from defaults, probed values, driver defaults and your overrides. The full table is in [docs/settings.md](https://github.com/CLDMV/llm-translator/blob/master/docs/settings.md).
 

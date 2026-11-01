@@ -90,6 +90,7 @@ describe("send usage reporting, Anthropic front", () => {
 			cache_read_input_tokens: 8,
 			cache_creation_input_tokens: null,
 			reported: true,
+			estimated: null,
 			complete: true,
 			reason: "done",
 			model: "qwen3-coder",
@@ -462,7 +463,8 @@ describe("route", () => {
 			protocol: "openai.chat",
 			backend: "vllm",
 			native: false,
-			unserved: false
+			unserved: false,
+			pool: ["upstream-0"]
 		});
 		expect(api.route({ model: "claude-sonnet-5" })).toMatchObject({ upstream: "claude", protocol: "anthropic.messages", native: true });
 		expect(api.route({ model: "nonexistent" })).toMatchObject({ unserved: true });

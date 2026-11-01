@@ -240,7 +240,7 @@ function verdictOf(value) {
  * Register the routes for one front on a Fastify instance.
  * @param {any} fastify - Fastify instance (usually an encapsulated plugin scope).
  * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage }`.
- * @param {any} captured - Captured translator parts `{ front, interval, filter, send, route, count, list, build, encode, write }`; `front` applies to this instance only.
+ * @param {any} captured - Captured translator parts `{ front, interval, filter, send, route, count, list, get, build, encode, write }`; `front` applies to this instance only.
  * @returns {void}
  */
 export function register(fastify, options, captured) {
@@ -252,7 +252,8 @@ export function register(fastify, options, captured) {
 		send: (body, extra) => captured.send(body, { ...extra, front, filter }),
 		route: (body) => captured.route(body, { front }),
 		count: (body, extra) => captured.count(body, { ...extra, front }),
-		list: (extra) => captured.list({ ...extra, front })
+		list: (extra) => captured.list({ ...extra, front }),
+		get: (id, extra) => captured.get(id, { ...extra, front })
 	};
 	const keys = [options.apiKey ?? []].flat().filter(Boolean);
 	const bodyLimit = options.bodyLimit ?? BODY_LIMIT;
@@ -328,6 +329,12 @@ export function register(fastify, options, captured) {
 		const controller = new AbortController();
 		reply.raw.on("close", () => controller.abort());
 		return api.list({ signal: controller.signal });
+	});
+	// A wildcard, because model ids can contain slashes (`org/model`); the router has already decoded it.
+	fastify.get("/v1/models/*", async (request, reply) => {
+		const controller = new AbortController();
+		reply.raw.on("close", () => controller.abort());
+		return api.get(request.params["*"], { signal: controller.signal });
 	});
 
 	const url = api.front === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
