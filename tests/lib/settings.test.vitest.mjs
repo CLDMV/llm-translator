@@ -83,6 +83,13 @@ describe("settings", () => {
 		expect(() => resolve({ thinkOpen: "yes" })).toThrow(/Invalid setting thinkOpen/);
 	});
 
+	test("pdf.scale must be a positive number", () => {
+		expect(resolve({ pdf: { scale: 2 } }).pdf.scale).toBe(2);
+		for (const scale of [0, -1, Infinity, NaN, "2"]) {
+			expect(() => resolve({ pdf: { scale } })).toThrow(/Invalid setting pdf\.scale/);
+		}
+	});
+
 	test("rejects invalid enumerated values", () => {
 		expect(() => resolve({ inlineSystem: "sideways" })).toThrow(/Invalid setting inlineSystem/);
 		try {

@@ -144,5 +144,13 @@ export function resolve(...layers) {
 			});
 		}
 	}
+	// unpdf 2 throws on a render scale of 0, so catch a bad value here with the setting's name.
+	if (!(Number.isFinite(out.pdf.scale) && out.pdf.scale > 0)) {
+		throw new TranslatorError(`Invalid setting pdf.scale: ${JSON.stringify(out.pdf.scale)} (expected a positive number)`, {
+			code: "invalid_setting",
+			status: 500,
+			details: { key: "pdf.scale" }
+		});
+	}
 	return out;
 }
