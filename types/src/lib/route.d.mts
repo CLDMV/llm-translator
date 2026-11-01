@@ -41,10 +41,10 @@ export declare function pick(config: any, endpoints: any[], model: string | unde
  * Validate a client request body and resolve where it goes. Shared by `request` and `route` so both always agree.
  * @param {any} c - Captured translator parts (`capture`).
  * @param {any} body - Client request body.
- * @param {{endpoint?: string, advance?: boolean}} [options] - `endpoint` forces one pool member by name (used for failover); `advance` moves the round robin cursor (`request` does, `route` does not).
+ * @param {{endpoint?: string, advance?: boolean}} [options] - `endpoint` forces one pool member by name (used for failover; it must still serve the model, else `endpoint_not_in_pool`); `advance` moves the round robin cursor (`request` does, `route` does not).
  * @returns {{endpoint: any, model: string, requested: string | undefined, unserved: boolean, convert: any, pool: any[]}} The chosen endpoint, the model name sent
  * upstream, the model the client asked for, whether no endpoint serves it, the converters (null for a native pass-through) and the pool in try order.
- * @throws {TranslatorError} `invalid_body` when the body is not a JSON object.
+ * @throws {TranslatorError} `invalid_body` when the body is not a JSON object, `endpoint_not_in_pool` when a forced endpoint no longer serves the model.
  */
 export declare function resolve(c: any, body: any, options?: {
     endpoint?: string;

@@ -19,6 +19,11 @@ export declare const BACKOFF: Readonly<{
     base: 1000;
     max: 60000;
 }>;
+/** Default timeouts in ms for a request to an endpoint that has pool mates (0 disables). Connect is short because a dead host is the common failure; headers is off because a server may legitimately take minutes to prefill a long prompt before it sends any header. */
+export declare const TIMEOUTS: Readonly<{
+    connect: 10000;
+    headers: 0;
+}>;
 export type PoolConfig = {
     /**
      * Default strategy (default `"failover"`).
@@ -32,6 +37,14 @@ export type PoolConfig = {
         max?: number;
     };
     /**
+     * Milliseconds to wait for the TCP connection of a request to an endpoint with pool mates (default `10000`, `0` disables). Needs the default transport.
+     */
+    connectTimeout?: number;
+    /**
+     * Milliseconds to wait for the response headers of such a request (default `0`, off). Once the headers have arrived nothing caps the body.
+     */
+    headersTimeout?: number;
+    /**
      * Strategy per model, keyed by the model name after aliases.
      */
     models?: Record<string, "failover" | "round_robin" | "least_busy">;
@@ -41,6 +54,8 @@ export type PoolConfig = {
  * @typedef {object} PoolConfig
  * @property {"failover" | "round_robin" | "least_busy"} [strategy] Default strategy (default `"failover"`).
  * @property {{base?: number, max?: number}} [backoff] Backoff in ms for a failing endpoint (defaults `1000` and `60000`).
+ * @property {number} [connectTimeout] Milliseconds to wait for the TCP connection of a request to an endpoint with pool mates (default `10000`, `0` disables). Needs the default transport.
+ * @property {number} [headersTimeout] Milliseconds to wait for the response headers of such a request (default `0`, off). Once the headers have arrived nothing caps the body.
  * @property {Record<string, "failover" | "round_robin" | "least_busy">} [models] Strategy per model, keyed by the model name after aliases.
  */
 /**
@@ -60,8 +75,8 @@ export declare function health(): {
 /**
  * Validate and normalize the `pool` config.
  * @param {PoolConfig | undefined} raw - Raw config.
- * @returns {{strategy: string, backoff: {base: number, max: number}, models: Record<string, string>}} Normalized config.
- * @throws {TranslatorError} `INVALID_CONFIG` for an unknown strategy or a bad backoff.
+ * @returns {{strategy: string, backoff: {base: number, max: number}, connectTimeout: number, headersTimeout: number, models: Record<string, string>}} Normalized config.
+ * @throws {TranslatorError} `INVALID_CONFIG` for an unknown strategy, a bad backoff or a bad timeout.
  */
 export declare function normalize(raw?: PoolConfig | undefined): {
     strategy: string;
@@ -69,6 +84,8 @@ export declare function normalize(raw?: PoolConfig | undefined): {
         base: number;
         max: number;
     };
+    connectTimeout: number;
+    headersTimeout: number;
     models: Record<string, string>;
 };
 /**

@@ -61,18 +61,33 @@ export function pick(config, endpoints, model, state, advance = false) {
  * Validate a client request body and resolve where it goes. Shared by `request` and `route` so both always agree.
  * @param {any} c - Captured translator parts (`capture`).
  * @param {any} body - Client request body.
- * @param {{endpoint?: string, advance?: boolean}} [options] - `endpoint` forces one pool member by name (used for failover); `advance` moves the round robin cursor (`request` does, `route` does not).
+ * @param {{endpoint?: string, advance?: boolean}} [options] - `endpoint` forces one pool member by name (used for failover; it must still serve the model, else `endpoint_not_in_pool`); `advance` moves the round robin cursor (`request` does, `route` does not).
  * @returns {{endpoint: any, model: string, requested: string | undefined, unserved: boolean, convert: any, pool: any[]}} The chosen endpoint, the model name sent
  * upstream, the model the client asked for, whether no endpoint serves it, the converters (null for a native pass-through) and the pool in try order.
- * @throws {TranslatorError} `invalid_body` when the body is not a JSON object.
+ * @throws {TranslatorError} `invalid_body` when the body is not a JSON object, `endpoint_not_in_pool` when a forced endpoint no longer serves the model.
  */
 export function resolve(c, body, options = {}) {
 	if (!body || typeof body !== "object" || Array.isArray(body)) {
 		throw new TranslatorError("The request body must be a JSON object", { code: "invalid_body", status: 400 });
 	}
 	const picked = pick(c.config, c.state.endpoints, body.model, c.state, options.advance === true);
-	const forced = options.endpoint === undefined ? undefined : picked.pool.find((entry) => entry.name === options.endpoint);
-	const endpoint = forced ?? picked.endpoint;
-	const pool = forced ? [forced] : picked.pool;
+	if (options.endpoint !== undefined) {
+		const forced = picked.pool.find((entry) => entry.name === options.endpoint);
+		if (!forced) {
+			throw new TranslatorError(`Endpoint ${options.endpoint} no longer serves ${picked.model}`, {
+				code: "endpoint_not_in_pool",
+				status: 500
+			});
+		}
+		return {
+			endpoint: forced,
+			model: picked.model,
+			requested: body.model,
+			unserved: picked.unserved,
+			convert: c.converters(forced),
+			pool: [forced]
+		};
+	}
+	const { endpoint, pool } = picked;
 	return { endpoint, model: picked.model, requested: body.model, unserved: picked.unserved, convert: c.converters(endpoint), pool };
 }

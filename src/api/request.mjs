@@ -30,15 +30,33 @@ import { warn } from "../lib/warn.mjs";
  * Route a client request body (in the configured `front` protocol) to an upstream and convert it to that upstream's
  * protocol. Does no I/O.
  * @param {any} body - Client request body (Anthropic Messages or OpenAI Chat Completions, per `front`).
- * @param {any} [options] - `{ front, headers, clientHeaders, filter, images, usage }`. `front` overrides the configured front for this call, `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback), `endpoint` sends to that member of the model's pool (used for failover; default: the first in the pool's order, which advances a round robin), `tools: false` sends the request without tools (used by the tool fallback), `usage: true` (used by `send`) makes a streaming OpenAI-front request always ask the upstream for its final usage chunk.
+ * @param {any} [options] - `{ front, headers, clientHeaders, filter, images, usage }`. `front` overrides the configured front for this call, `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback), `endpoint` sends to that member of the model's pool (used for failover; default: the first in the pool's order), `hold: true` (used by `send`) advances a round robin and takes the chosen endpoint's in-flight slot, which the caller then releases, `tools: false` sends the request without tools (used by the tool fallback), `usage: true` (used by `send`) makes a streaming OpenAI-front request always ask the upstream for its final usage chunk.
  * @returns {Promise<{upstream: string, method: string, url: string, path: string, headers: Record<string,string>, body: any, state: any, pool: string[], images: {sent: boolean, retry: boolean, key: string}, tools: {sent: boolean, retry: boolean}}>} The upstream request and the state `response`/`stream`/`error` need. `pool` lists the names of the endpoints serving the model in the order they are tried (`upstream` is the first); `images` tells `send` whether the body carries images, whether a refusal may be retried without them and the key under which a refusal is remembered; `tools` tells it whether the body carries tools and whether a tool-parser refusal may be retried without them.
  */
 export async function request(body, options = {}) {
 	const c = capture(self, context, options.front);
-	const { endpoint, model, unserved, convert, pool } = resolve(c, body, {
-		endpoint: options.endpoint,
-		advance: options.endpoint === undefined
-	});
+	const picked = resolve(c, body, { endpoint: options.endpoint, advance: options.hold === true && options.endpoint === undefined });
+	if (options.hold !== true) return prepare(c, body, options, picked);
+	// `send` takes the in-flight slot of the chosen endpoint here, in the same synchronous step as the pick, so concurrent requests see it.
+	picked.endpoint.health.inflight++;
+	try {
+		return await prepare(c, body, options, picked);
+	} catch (cause) {
+		picked.endpoint.health.inflight--;
+		throw cause;
+	}
+}
+
+/**
+ * Convert the client body for the chosen endpoint and describe the upstream call (the part of `request` after the pick).
+ * @param {any} c - Captured translator parts.
+ * @param {any} body - Client request body.
+ * @param {any} options - The `request` options.
+ * @param {any} picked - Result of `resolve`.
+ * @returns {Promise<any>} The `request` result.
+ */
+async function prepare(c, body, options, picked) {
+	const { endpoint, model, unserved, convert, pool } = picked;
 	const driver = c.driver(endpoint);
 	const key = `${endpoint.name}\n${model}`;
 	// A refusal remembered earlier in this process, or an explicit `images: false`, sends the request without images.

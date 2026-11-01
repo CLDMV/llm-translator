@@ -177,7 +177,7 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 	 */
 	const attempt = async (first) => {
 		let sent = first;
-		let result = await call(transport, sent, options.signal);
+		let result = await call(transport, sent, options.signal, limits);
 		if (!result.ok && result.status === 400 && ((sent.images.sent && sent.images.retry) || (sent.tools.sent && sent.tools.retry))) {
 			// A text-only model, or a vLLM server without tool parsing, behind an OpenAI-protocol upstream: ask once more without what it
 			// refused. A refused image is remembered for the model; a refused tool list is not (the server may be restarted with the flags).
@@ -191,27 +191,28 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 			if (!("images" in retry || "tools" in retry)) return { upstream: sent, result, failure };
 			sent = await request(body, { ...ask, ...retry, endpoint: sent.upstream });
 			note(sent);
-			result = await call(transport, sent, options.signal);
+			result = await call(transport, sent, options.signal, limits);
 		}
 		return { upstream: sent, result };
 	};
-	let upstream = await request(body, ask);
+	// `send` takes the in-flight slot when the endpoint is picked (see `request`), so concurrent requests see each other.
+	let upstream = await request(body, { ...ask, hold: true });
 	const names = upstream.pool;
 	let turn = 0;
+	// Timeouts apply only to endpoints that have pool mates to fail over to; a lone endpoint keeps the transport's no-timeout behaviour.
+	const limits = names.length > 1 ? captured.config.pool : null;
 	// The endpoint whose in-flight slot this request holds.
-	let held = null;
+	let held = captured.endpoint(upstream.upstream);
 	const release = () => held.health.inflight--;
 	let result;
 	let failure;
 	try {
 		for (;;) {
-			const endpoint = captured.endpoint(upstream.upstream);
-			held = endpoint;
-			endpoint.health.inflight++;
+			const endpoint = held;
 			endpoint.health.requests++;
 			note(upstream);
-			// Only a connection error or a 5xx before the first byte of the reply moves on to the next endpoint of the pool; 4xx, the abort
-			// of the caller and anything that happens once the reply has started never do.
+			// Only a connection error (or timeout) or a 5xx before the first byte of the reply moves on to the next endpoint of the pool; 4xx,
+			// the abort of the caller and anything that happens once the reply has started never do.
 			let reason = null;
 			try {
 				({ upstream, result, failure } = await attempt(upstream));
@@ -227,14 +228,27 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 				break;
 			}
 			pool.failed(captured.config, endpoint, reason);
-			if (turn + 1 >= names.length || options.signal?.aborted) {
+			// The next endpoint that still serves the model (the pool is recomputed per request, so a member may have dropped out meanwhile).
+			let next = null;
+			while (next === null && !options.signal?.aborted && turn + 1 < names.length) {
+				try {
+					next = await request(body, { ...ask, endpoint: names[++turn], hold: true });
+				} catch (cause) {
+					if (!(cause instanceof TranslatorError) || cause.code !== "endpoint_not_in_pool") throw cause;
+				}
+			}
+			if (next === null) {
 				// Nothing left to try: the last endpoint's failure is the reply.
 				if (result === undefined) throw failure;
 				break;
 			}
-			await result?.body?.cancel();
-			const next = await request(body, { ...ask, endpoint: names[++turn] });
+			try {
+				await result?.body?.cancel?.();
+			} catch {
+				// A body that cannot be cancelled is dropped; failover goes on.
+			}
 			release();
+			held = captured.endpoint(next.upstream);
 			upstream = next;
 		}
 	} catch (cause) {
@@ -274,28 +288,45 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 }
 
 /**
- * One upstream call; connection failures become `upstream_unreachable`.
+ * One upstream call; connection failures and timeouts become `upstream_unreachable`.
  * @param {Function} transport - Fetch-compatible transport.
  * @param {any} upstream - Result of `request`.
  * @param {AbortSignal | undefined} signal - Abort signal.
+ * @param {{connectTimeout: number, headersTimeout: number} | null} [limits] - Pool timeouts in ms (0 is off), or null for none.
  * @returns {Promise<Response>} Upstream response.
  */
-async function call(transport, upstream, signal) {
+async function call(transport, upstream, signal, limits = null) {
+	let timer;
+	let late = false;
+	let guarded = signal;
+	if (limits && limits.headersTimeout > 0) {
+		// Aborts the request when no response headers arrive in time; the timer stops at the headers, so the body is never capped.
+		const timeout = new AbortController();
+		guarded = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
+		timer = setTimeout(() => {
+			late = true;
+			timeout.abort();
+		}, limits.headersTimeout);
+	}
 	try {
 		return await transport(upstream.url, {
 			method: upstream.method,
 			headers: upstream.headers,
 			body: JSON.stringify(upstream.body),
-			signal,
-			redirect: "error"
+			signal: guarded,
+			redirect: "error",
+			...(limits && limits.connectTimeout > 0 ? { connectTimeout: limits.connectTimeout } : {})
 		});
 	} catch (cause) {
 		if (signal?.aborted) throw cause;
-		throw new TranslatorError(`Could not reach the upstream (${upstream.upstream}): ${cause.message}`, {
+		const why = late ? `no response headers within ${limits.headersTimeout} ms` : cause.message;
+		throw new TranslatorError(`Could not reach the upstream (${upstream.upstream}): ${why}`, {
 			code: "upstream_unreachable",
 			status: 502,
 			details: { cause }
 		});
+	} finally {
+		clearTimeout(timer);
 	}
 }
 

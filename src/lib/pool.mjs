@@ -25,11 +25,16 @@ export const STRATEGIES = Object.freeze(["failover", "round_robin", "least_busy"
 /** Default backoff in ms: the first failure skips the endpoint for `base`, each further failure doubles it up to `max`. */
 export const BACKOFF = Object.freeze({ base: 1000, max: 60000 });
 
+/** Default timeouts in ms for a request to an endpoint that has pool mates (0 disables). Connect is short because a dead host is the common failure; headers is off because a server may legitimately take minutes to prefill a long prompt before it sends any header. */
+export const TIMEOUTS = Object.freeze({ connect: 10000, headers: 0 });
+
 /**
  * Pool config as the translator accepts it.
  * @typedef {object} PoolConfig
  * @property {"failover" | "round_robin" | "least_busy"} [strategy] Default strategy (default `"failover"`).
  * @property {{base?: number, max?: number}} [backoff] Backoff in ms for a failing endpoint (defaults `1000` and `60000`).
+ * @property {number} [connectTimeout] Milliseconds to wait for the TCP connection of a request to an endpoint with pool mates (default `10000`, `0` disables). Needs the default transport.
+ * @property {number} [headersTimeout] Milliseconds to wait for the response headers of such a request (default `0`, off). Once the headers have arrived nothing caps the body.
  * @property {Record<string, "failover" | "round_robin" | "least_busy">} [models] Strategy per model, keyed by the model name after aliases.
  */
 
@@ -44,8 +49,8 @@ export function health() {
 /**
  * Validate and normalize the `pool` config.
  * @param {PoolConfig | undefined} raw - Raw config.
- * @returns {{strategy: string, backoff: {base: number, max: number}, models: Record<string, string>}} Normalized config.
- * @throws {TranslatorError} `INVALID_CONFIG` for an unknown strategy or a bad backoff.
+ * @returns {{strategy: string, backoff: {base: number, max: number}, connectTimeout: number, headersTimeout: number, models: Record<string, string>}} Normalized config.
+ * @throws {TranslatorError} `INVALID_CONFIG` for an unknown strategy, a bad backoff or a bad timeout.
  */
 export function normalize(raw = {}) {
 	const bad = (message) => new TranslatorError(`pool: ${message}`, { code: "INVALID_CONFIG", status: 500 });
@@ -60,7 +65,15 @@ export function normalize(raw = {}) {
 	if (!(Number.isFinite(base) && base > 0) || !(Number.isFinite(max) && max >= base)) {
 		throw bad("backoff.base must be a positive number of ms and backoff.max at least backoff.base");
 	}
-	return { strategy, backoff: { base, max }, models };
+	const connectTimeout = raw.connectTimeout ?? TIMEOUTS.connect;
+	const headersTimeout = raw.headersTimeout ?? TIMEOUTS.headers;
+	for (const name of ["connectTimeout", "headersTimeout"]) {
+		const value = name === "connectTimeout" ? connectTimeout : headersTimeout;
+		if (typeof value !== "number" || !(Number.isFinite(value) && value >= 0)) {
+			throw bad(`${name} must be a number of ms, 0 or more (got ${JSON.stringify(value)})`);
+		}
+	}
+	return { strategy, backoff: { base, max }, connectTimeout, headersTimeout, models };
 }
 
 /**

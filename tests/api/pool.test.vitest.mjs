@@ -652,3 +652,255 @@ describe("pools across detected drivers", () => {
 		expect(api.endpoint.status().endpoints[0]).toMatchObject({ healthy: true, errors: 0 });
 	});
 });
+
+describe("review fixes", () => {
+	it("least busy spreads concurrent requests: the slot is taken when the endpoint is picked", async () => {
+		let release;
+		const gate = new Promise((resolve) => (release = resolve));
+		const { api, calls } = await farm(
+			{
+				a: async () => (await gate, answer("a")),
+				b: async () => (await gate, answer("b"))
+			},
+			{ pool: { strategy: "least_busy" } }
+		);
+		const sends = [1, 2, 3, 4].map(() => api.send(hello));
+		await vi.waitFor(() => expect(calls("a") + calls("b")).toBe(4));
+		expect([calls("a"), calls("b")]).toEqual([2, 2]);
+		expect(api.endpoint.status().endpoints.map((entry) => entry.inflight)).toEqual([2, 2]);
+		release();
+		const replies = await Promise.all(sends);
+		await Promise.all(replies.map((reply) => reply.usage));
+		expect(api.endpoint.status().endpoints.map((entry) => entry.inflight)).toEqual([0, 0]);
+	});
+
+	it("moves the slot to the next endpoint on failover and gives it back when the request cannot be built", async () => {
+		let release;
+		const gate = new Promise((resolve) => (release = resolve));
+		const { api } = await farm(
+			{ a: () => refusal("a broke", 500), b: async () => (await gate, answer("b")) },
+			{ pool: { strategy: "least_busy" }, settings: { unknownFields: "error" } }
+		);
+		const sending = api.send(hello);
+		await vi.waitFor(() => expect(api.endpoint.status().endpoints[1].inflight).toBe(1));
+		expect(api.endpoint.status().endpoints[0].inflight).toBe(0);
+		release();
+		await (
+			await sending
+		).usage;
+		expect(api.endpoint.status().endpoints.map((entry) => entry.inflight)).toEqual([0, 0]);
+		// A body the converter rejects fails inside request(); the slot taken at the pick is returned.
+		const bad = await api.send({ ...hello, mystery_field: 1 });
+		expect(bad.status).toBe(400);
+		expect(api.endpoint.status().endpoints.map((entry) => entry.inflight)).toEqual([0, 0]);
+	});
+
+	it("advances a round robin only in send: request(), token.count() and route() leave it alone", async () => {
+		const { api } = await farm({ a: () => answer("a"), b: () => answer("b") }, { pool: { strategy: "round_robin" } });
+		await api.request(hello);
+		await api.token.count(hello);
+		api.route(hello);
+		expect(api.route(hello).upstream).toBe("a");
+		expect(text(await api.send(hello))).toBe("a");
+		expect(text(await api.send(hello))).toBe("b");
+	});
+
+	describe("timeouts", () => {
+		const frozen = () => vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+		const hang = (init) =>
+			new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(new Error("socket hang up")), { once: true }));
+
+		it("defaults to a 10s connect timeout and no headers timeout, only for endpoints with pool mates", async () => {
+			const pooled = await farm({ a: () => answer("a"), b: () => answer("b") });
+			await pooled.api.send(hello);
+			expect(pooled.transport.calls[0].init.connectTimeout).toBe(10000);
+			expect(pooled.transport.calls[0].init.signal).toBeUndefined();
+			const lone = await farm({ a: () => answer("a") });
+			await lone.api.send(hello);
+			expect(lone.transport.calls[0].init).not.toHaveProperty("connectTimeout");
+			expect(lone.transport.calls[0].init.signal).toBeUndefined();
+			const off = await farm({ a: () => answer("a"), b: () => answer("b") }, { pool: { connectTimeout: 0 } });
+			await off.api.send(hello);
+			expect(off.transport.calls[0].init).not.toHaveProperty("connectTimeout");
+		});
+
+		it("fails over from an endpoint that accepts the connection and never answers", async () => {
+			frozen();
+			const { api, calls } = await farm({ a: hang, b: () => answer("b") }, { pool: { headersTimeout: 5000 } });
+			const sending = api.send(hello);
+			await vi.advanceTimersByTimeAsync(4999);
+			expect(calls("b")).toBe(0);
+			await vi.advanceTimersByTimeAsync(1);
+			const reply = await sending;
+			expect(text(reply)).toBe("b");
+			expect((await reply.usage).upstream).toBe("b");
+			const first = api.endpoint.status().endpoints[0];
+			expect(first).toMatchObject({ healthy: false, failures: 1 });
+			expect(first.lastError).toBe("Could not reach the upstream (a): no response headers within 5000 ms");
+		});
+
+		it("fails over from a hung endpoint when the caller also passed a signal, but not when the caller aborts", async () => {
+			frozen();
+			const { api, calls } = await farm({ a: hang, b: () => answer("b") }, { pool: { headersTimeout: 1000 } });
+			const sending = api.send(hello, { signal: new AbortController().signal });
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(text(await sending)).toBe("b");
+			const aborting = new AbortController();
+			const { api: second, calls: secondCalls } = await farm({ a: hang, b: () => answer("b") }, { pool: { headersTimeout: 1000 } });
+			const pending = second.send(hello, { signal: aborting.signal });
+			const rejected = expect(pending).rejects.toThrow("socket hang up");
+			await vi.advanceTimersByTimeAsync(10);
+			aborting.abort();
+			await rejected;
+			expect(secondCalls("b")).toBe(0);
+			expect(calls("b")).toBe(1);
+		});
+
+		it("does not cap a reply once its headers have arrived", async () => {
+			frozen();
+			let signal;
+			const { api } = await farm(
+				{
+					a: (init) => (
+						(signal = init.signal),
+						new Response(new ReadableStream({ start() {} }), { status: 200, headers: { "content-type": "text/event-stream" } })
+					),
+					b: () => answer("b")
+				},
+				{ pool: { headersTimeout: 1000 } }
+			);
+			await api.send({ ...hello, stream: true });
+			await vi.advanceTimersByTimeAsync(600_000);
+			expect(signal.aborted).toBe(false);
+			expect(api.endpoint.status().endpoints[0]).toMatchObject({ healthy: true, inflight: 1 });
+		});
+
+		it("rejects bad timeouts", async () => {
+			await expect(farm({ a: () => answer("a") }, { pool: { connectTimeout: -1 } })).rejects.toThrow(/connectTimeout must be a number/);
+			await expect(farm({ a: () => answer("a") }, { pool: { headersTimeout: "1s" } })).rejects.toThrow(/headersTimeout must be a number/);
+			const { api } = await farm({ a: () => answer("a") }, { pool: { connectTimeout: 5, headersTimeout: 6 } });
+			expect(api.endpoint.status()).toMatchObject({ connectTimeout: 5, headersTimeout: 6 });
+		});
+	});
+
+	describe("failover against odd bodies and a changing pool", () => {
+		it("goes on when the failed reply's body has no cancel, or cannot be cancelled", async () => {
+			const plain = { ok: false, status: 503, headers: new Headers(), body: {} };
+			const throwing = { ok: false, status: 503, headers: new Headers(), body: { cancel: () => Promise.reject(new Error("locked")) } };
+			for (const failed of [plain, throwing]) {
+				const { api } = await farm({ a: () => failed, b: () => answer("b") });
+				expect(text(await api.send(hello))).toBe("b");
+			}
+		});
+
+		it("skips pool members that dropped out meanwhile and returns the last failure when none is left", async () => {
+			const gone = new Set();
+			/** Three auto-detected endpoints; `a` fails after making the endpoints in `drop` stop serving `m` and re-running detection. */
+			const trio = async (drop) => {
+				let api;
+				const transport = fakeTransport(async (url) => {
+					const name = host(url);
+					if (new URL(url).pathname === "/v1/models") {
+						return { body: { object: "list", data: gone.has(name) ? [] : [{ id: "m", object: "model" }] } };
+					}
+					if (new URL(url).pathname !== "/v1/chat/completions") return { status: 404, body: { error: "not found" } };
+					if (name === "a") {
+						for (const other of drop) gone.add(other);
+						await api.detect();
+						return refusal("a broke", 503);
+					}
+					return answer(name);
+				});
+				api = await make({ upstreams: ["a", "b", "c"].map((name) => ({ name, url: `http://${name}.test` })), transport });
+				return { api, transport };
+			};
+			const chats = (transport) => transport.calls.filter((entry) => entry.url.includes("chat")).map((entry) => host(entry.url));
+			const first = await trio(["b"]);
+			expect(text(await first.api.send(hello))).toBe("c");
+			expect(chats(first.transport)).toEqual(["a", "c"]);
+			gone.clear();
+			const second = await trio(["b", "c"]);
+			const reply = await second.api.send(hello);
+			expect(reply.status).toBe(503);
+			expect(reply.body.error.message).toBe("a broke");
+			expect(chats(second.transport)).toEqual(["a"]);
+		});
+
+		it("returns the error when the next endpoint cannot be built for, and gives every slot back", async () => {
+			const transport = fakeTransport((url) => (host(url) === "a" ? refusal("a broke", 503) : answer("b")));
+			const api = await make({
+				upstreams: [
+					{ name: "a", url: "http://a.test", backend: "vllm", models: ["m"] },
+					{ name: "b", url: "http://b.test", backend: "vllm", models: ["m"], settings: { unknownFields: "error" } }
+				],
+				transport,
+				detect: false
+			});
+			const reply = await api.send({ ...hello, mystery_field: 1 });
+			expect(reply.status).toBe(400);
+			expect(reply.body.error.message).toMatch(/mystery_field/);
+			expect(api.endpoint.status().endpoints.map((entry) => entry.inflight)).toEqual([0, 0]);
+		});
+
+		it("request() refuses a forced endpoint that does not serve the model", async () => {
+			const { api } = await farm({ a: () => answer("a"), b: () => answer("b") });
+			await expect(api.request(hello, { endpoint: "zzz" })).rejects.toMatchObject({ code: "endpoint_not_in_pool" });
+		});
+	});
+});
+
+describe("pools across drivers with different passthrough fields and stream flushing", () => {
+	const chat = { model: "m", max_tokens: 8, messages: [{ role: "user", content: "hi" }], min_p: 0.1 };
+	const frame = (delta, finish = null) => ({
+		id: "c",
+		object: "chat.completion.chunk",
+		created: 1,
+		model: "m",
+		choices: [{ index: 0, delta, finish_reason: finish }]
+	});
+	const sse = (frames) =>
+		new Response(frames.map((entry) => `data: ${typeof entry === "string" ? entry : JSON.stringify(entry)}\n\n`).join(""), {
+			status: 200,
+			headers: { "content-type": "text/event-stream" }
+		});
+
+	it("filters the forwarded body per endpoint: the failover target gets the fields its own driver allows", async () => {
+		const transport = fakeTransport((url) => (host(url) === "a" ? refusal("a broke", 503) : answer("b")));
+		const api = await make({
+			front: "openai",
+			upstreams: [
+				{ name: "a", url: "http://a.test", backend: "vllm", models: ["m"] },
+				{ name: "b", url: "http://b.test", backend: "openai", models: ["m"] }
+			],
+			transport,
+			detect: false,
+			settings: { passthroughFilter: true }
+		});
+		const reply = await api.send(chat);
+		expect(reply.status).toBe(200);
+		const bodies = transport.calls.map((entry) => JSON.parse(entry.init.body));
+		expect(bodies[0].min_p).toBe(0.1);
+		expect(bodies[1]).not.toHaveProperty("min_p");
+		expect((await reply.usage).upstream).toBe("b");
+	});
+
+	it("flushes the failover target's held text at the end of its stream and reports it as complete", async () => {
+		const transport = fakeTransport((url) =>
+			host(url) === "a" ? refusal("a broke", 503) : sse([frame({ reasoning_content: "r1" }), frame({ content: "<thi" }), frame({}, "stop")])
+		);
+		const api = await make({
+			front: "openai",
+			upstreams: [
+				{ name: "a", url: "http://a.test", backend: "vllm", models: ["m"] },
+				{ name: "b", url: "http://b.test", backend: "llamacpp", models: ["m"] }
+			],
+			transport,
+			detect: false
+		});
+		const reply = await api.send({ ...chat, stream: true });
+		const events = await collect(reply.stream);
+		expect(events.map((event) => event.data?.choices?.[0]?.delta?.content ?? "").join("")).toBe("<thi");
+		expect(await reply.usage).toMatchObject({ upstream: "b", stream: true, front: "openai" });
+		expect(api.endpoint.status().endpoints.map((entry) => entry.inflight)).toEqual([0, 0]);
+	});
+});
