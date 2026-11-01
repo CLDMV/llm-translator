@@ -84,9 +84,13 @@ export type Settings = {
      */
     toolSchema: "pass" | "sanitize";
     /**
-     * - Forward `defer_loading` tools as plain function tools or drop them.
+     * - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
      */
     deferredTools: "forward" | "drop";
+    /**
+     * - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch`; `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
+     */
+    toolSearch: "expand" | "inline" | "native";
     /**
      * - Prefix `is_error` tool results with `[error] `.
      */
@@ -167,7 +171,8 @@ export type Settings = {
  * @property {((block: object, ctx: object) => Promise<object[]>|object[])|null} documentConverter - Override for `document` conversion; returns Anthropic content blocks.
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
- * @property {"forward"|"drop"} deferredTools - Forward `defer_loading` tools as plain function tools or drop them.
+ * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
+ * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch`; `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
  * @property {boolean} toolErrors - Prefix `is_error` tool results with `[error] `.
  * @property {"max_completion_tokens"|"max_tokens"} maxTokensField - Field used for the output cap.
  * @property {boolean} streamUsage - Request `stream_options.include_usage` on streamed requests.

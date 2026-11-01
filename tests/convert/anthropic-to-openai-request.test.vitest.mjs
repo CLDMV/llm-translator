@@ -38,7 +38,10 @@ describe("captured Claude Code traffic", () => {
 		expect(typeof body.messages[1].content).toBe("string");
 		expect(body.messages[1].content).toContain("<system-reminder>");
 		expect(body.messages[1].content.trimEnd().endsWith("</system-reminder>")).toBe(true);
-		expect(body.tools).toHaveLength(12);
+		// The reserved DeferredToolPlaceholder is never offered; ToolSearch stays, because Claude Code holds tools it did not send.
+		expect(body.tools).toHaveLength(11);
+		expect(body.tools.map((t) => t.function.name)).toContain("ToolSearch");
+		expect(body.tools.map((t) => t.function.name)).not.toContain("DeferredToolPlaceholder");
 		expect(body.tools[0]).toMatchObject({ type: "function", function: { name: expect.any(String), parameters: { type: "object" } } });
 		expect(body.tools[0].function.parameters.$schema).toBeDefined();
 		expect(body).not.toHaveProperty("metadata");
@@ -582,11 +585,13 @@ describe("tools", () => {
 		expect(await convert(base({ tools: [] }))).not.toHaveProperty("tools");
 	});
 
-	test("deferred tools are forwarded as plain tools or dropped", async () => {
-		const tools = [tool("Placeholder", { defer_loading: true }), tool("Real")];
-		const forwarded = await convert(base({ tools }));
-		expect(forwarded.tools.map((t) => t.function.name)).toEqual(["Placeholder", "Real"]);
-		expect(JSON.stringify(forwarded)).not.toContain("defer_loading");
+	test("deferred tools are offered once loaded, offered up front by inline, or dropped", async () => {
+		const tools = [tool("Placeholder", { defer_loading: true }), tool("Second", { defer_loading: true }), tool("Real")];
+		const hidden = await convert(base({ tools }));
+		expect(hidden.tools.map((t) => t.function.name)).toEqual(["Real"]);
+		const inlined = await convert(base({ tools }), { toolSearch: "inline" });
+		expect(inlined.tools.map((t) => t.function.name)).toEqual(["Placeholder", "Second", "Real"]);
+		expect(JSON.stringify(inlined)).not.toContain("defer_loading");
 		const dropped = await request(base({ tools }), { deferredTools: "drop" });
 		expect(dropped.body.tools.map((t) => t.function.name)).toEqual(["Real"]);
 		expect(dropped.state.dropped).toEqual(["deferred_tools"]);

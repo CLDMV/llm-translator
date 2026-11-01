@@ -24,6 +24,7 @@ import { sanitize } from "../../../../../../../lib/schema.mjs";
 import { NOTE } from "../../../../../../../lib/images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
 import { createBudget, unsign } from "../../../../../../../lib/thinking.mjs";
+import { plan, scan } from "../../../../../../../lib/toolsearch.mjs";
 
 const HANDLED = new Set([
 	"model",
@@ -74,6 +75,11 @@ export async function request(body, settings, context) {
 	// Names the producer of the reply this request answers (signed into reasoning data) and the one a signature must match to be restored.
 	if (context?.producer !== undefined) state.producer = context.producer;
 	const fit = createNameFitter({ max: 64, map: state.toolNames });
+	// Every tool name is fitted in request order before anything else, whether or not the tool is offered, so a name's wire form never
+	// depends on which deferred tools happen to be loaded.
+	for (const tool of body.tools ?? []) if (tool.type === undefined || tool.type === "custom") fit(tool.name);
+	const offered = plan(body.tools ?? [], scan(body.messages), s, body.tool_choice);
+	state.toolSearch = { mode: s.toolSearch, loaded: offered.loaded, hidden: offered.hidden };
 
 	for (const key of Object.keys(body)) {
 		if (HANDLED.has(key) || SILENT.has(key)) continue;
@@ -116,7 +122,7 @@ export async function request(body, settings, context) {
 		}
 	}
 
-	const tools = convertTools(body.tools ?? [], s, state, fit);
+	const tools = convertTools(offered.offer, s, state, fit);
 	if (tools.length > 0) {
 		out.tools = tools;
 		const choice = convertToolChoice(body.tool_choice, s, state, fit);
@@ -233,7 +239,17 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 				return [{ type: "text", text: `[Search result: ${block.title ?? ""} (${block.source ?? ""})]\n${body}` }];
 			}
 			case "tool_reference":
-				return [{ type: "text", text: `[Tool reference: ${block.tool_name}]` }];
+				// `native`: the server understands the part. Otherwise the model is told in words; a tool that was expanded into the tools list
+				// is "loaded", anything else could not be and stays a plain reference.
+				if (s.toolSearch === "native") return [{ type: "tool_reference", tool_name: block.tool_name }];
+				return [
+					{
+						type: "text",
+						text: state.toolSearch.loaded.includes(block.tool_name)
+							? `[Tool loaded: ${block.tool_name}]`
+							: `[Tool reference: ${block.tool_name}]`
+					}
+				];
 			default:
 				unsupported(state, s, `block:${block.type}`);
 				return [];
@@ -262,12 +278,13 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 				for (const c of asBlocks(block.content)) inner.push(...(await toParts(c, block.tool_use_id)));
 				const texts = inner.filter((p) => p.type === "text").map((p) => p.text);
 				const images = inner.filter((p) => p.type === "image_url");
-				let content = texts.join("\n");
+				let content = inner.some((p) => p.type === "tool_reference") ? inner.filter((p) => p.type !== "image_url") : texts.join("\n");
 				if (images.length > 0) {
 					toolParts.push({ type: "text", text: `Image output of tool call ${block.tool_use_id}:` }, ...images);
 					if (content === "") content = "(image output attached in the next message)";
 				}
-				if (block.is_error === true && s.toolErrors) content = `[error] ${content}`;
+				if (block.is_error === true && s.toolErrors)
+					content = typeof content === "string" ? `[error] ${content}` : [{ type: "text", text: "[error]" }, ...content];
 				out.push({ role: "tool", tool_call_id: block.tool_use_id, content });
 			}
 			const all = [...toolParts, ...parts];
@@ -449,7 +466,12 @@ function convertTools(tools, s, state, fit) {
 		const fn = { name: fit(tool.name), parameters: s.toolSchema === "sanitize" ? sanitize(schema) : schema };
 		if (tool.description !== undefined) fn.description = tool.description;
 		if (tool.strict !== undefined) fn.strict = tool.strict;
-		out.push({ type: "function", function: fn });
+		// `native` keeps the flag for a server that understands it.
+		out.push(
+			tool.defer_loading === true && s.toolSearch === "native"
+				? { type: "function", function: fn, defer_loading: true }
+				: { type: "function", function: fn }
+		);
 	}
 	return out;
 }
