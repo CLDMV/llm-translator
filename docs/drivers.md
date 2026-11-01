@@ -11,12 +11,13 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `vllm`       | `openai.chat`        | 10    | `GET /version` returns a version, or `GET /v1/models` lists a model with `owned_by: "vllm"` |
 | `anthropic`  | `anthropic.messages` | 20    | host `api.anthropic.com` (no network access)                                                |
 | `openai`     | `openai.chat`        | 30    | host `api.openai.com` (no network access)                                                   |
-| `compatible` | `openai.chat`        | 100   | always; the fallback for llama.cpp, SGLang, Ollama, LM Studio and similar servers           |
+| `llamacpp`   | `openai.chat`        | 40    | `GET /props` has llama-server fields, or `GET /v1/models` lists `owned_by: "llamacpp"`      |
+| `compatible` | `openai.chat`        | 100   | always; the fallback for LM Studio and other servers without a driver                       |
 
 A driver folder contains these files, all optional except `info`:
 
-- `info.mjs`: `info() → { name, protocol, order, auth, headers?, paths }`. `auth` is `"bearer"` or `"x-api-key"`, `headers` are sent on every request (the Anthropic driver adds `anthropic-version`), `paths` names the chat or messages path.
-- `detect.mjs`: `detect({ endpoint, transport, signal, timeout }) → facts | null`. Return `null` for "not this backend". A thrown error counts as no match.
+- `info.mjs`: `info() → { name, protocol, order, auth, headers?, probes?, paths }`. `auth` is `"bearer"` or `"x-api-key"`, `headers` are sent on every request (the Anthropic driver adds `anthropic-version`), `paths` names the chat or messages path, and `probes` lists the GET paths `detect` will ask for (see Detection).
+- `detect.mjs`: `detect({ endpoint, transport, signal, timeout, probes }) → facts | null`. Return `null` for "not this backend". A thrown error counts as no match. Ask for paths with `http.probe(context, path)` (from `lib/http.mjs`) so a path another driver already fetched is not fetched again.
 - `settings.mjs`: `settings(facts) → partial settings`.
 - `probe.mjs`: `probe({ endpoint, transport, facts, ... }) → partial settings`, for checks that need a request (vLLM uses it for inline system messages).
 - `request.mjs`, `response.mjs`, `chunk.mjs`, `error.mjs`: normalizers in the upstream protocol. `request(body, ctx)` and `response(body, ctx)` get the converted body, `chunk(chunk, ctx)` gets each parsed streaming chunk, `error(status, body, ctx)` gets an error body before it is rendered for the client.
@@ -26,6 +27,7 @@ A driver folder contains these files, all optional except `info`:
 
 `createTranslator` binds every upstream during creation. Upstreams with `backend: "auto"` (the default) are probed with the drivers in `info().order`; the first driver whose `detect` returns facts wins. The generic `compatible` driver always matches, so detection cannot fail outright. If the server did not answer at all, `compatible` is bound with `facts.reachable === false` and one warning is printed (unless `silent`).
 
+- Detection costs the slowest probe, not their sum. Host-name drivers need no network. At the first driver that declares `probes`, the paths of every remaining driver are requested in parallel, and each path is requested once per upstream and shared (`GET /v1/models` is fetched once for vLLM, llama.cpp and the generic driver). A server that matches an earlier driver, vLLM first, is never asked for the later drivers' paths.
 - Set `backend: "vllm"` (or any driver name) on an upstream to skip detection and all probing for it. `version` can be supplied so version-mapped settings still apply.
 - Set `detect: false` on the translator to skip every request. Auto upstreams are then bound to `compatible`.
 - `await api.detect()` re-probes at any time and returns the same report as `api.status()`.
@@ -33,6 +35,7 @@ A driver folder contains these files, all optional except `info`:
 ### What each probe does
 
 - vLLM: `GET /version` and `GET /v1/models` in parallel. Facts are `{ version, models, maxModelLen }`. After binding, when the resolved `inlineSystem` is still `auto`, `POST /tokenize` is called with `[system, user, system, user]`; success means the chat template tolerates inline system messages (`keep`), failure means they are folded into the neighbouring user turn (`user`). Unless `images` is configured, a one-token chat completion with a 1x1 image is also sent: a `400` saying the model is not multimodal sets `images: false` (so images and PDF page images become text notes instead of failing every request), success keeps `images: true`, and any other answer (including a timeout) leaves the default. Settings you configure yourself are never probed.
+- llama.cpp: `GET /props` (fields `default_generation_settings`, `total_slots` or `build_info`) and `GET /v1/models` (`owned_by: "llamacpp"`). Facts are `{ models, build, vision }`; `vision` comes from `modalities.vision` in newer builds and sets `images`.
 - OpenAI and Anthropic: a host-name check, no network.
 - Generic: `GET /v1/models` for reachability and the served model ids.
 
@@ -43,6 +46,18 @@ Only the vLLM driver probes image support at startup. For every other OpenAI-pro
 ### vLLM started without tool parsing
 
 A vLLM server started without `--enable-auto-tool-choice` and `--tool-call-parser <parser>` answers every request that carries tools with HTTP 400, `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set`. The translator recognises the message by those flag names and appends a hint to the error the client receives (in the Anthropic or OpenAI error shape): the server needs the two flags, and the parser depends on the model family. Set `toolFallback: true` to retry such a request once without tools instead; the retry applies to OpenAI-protocol upstreams, streaming and non-streaming alike, and is not remembered between requests. See [decision D-39](decisions.md).
+
+## llama.cpp (`llama-server`)
+
+What the `llamacpp` driver changes compared with the generic one:
+
+- `reasoningField: "reasoning_content"`, `maxTokensField: "max_tokens"`, `topK: true`, `prefill: "none"`, `thinking: "chat_template_kwargs"` (thinking toggles need `--jinja`), and `images` from `/props` when the build reports `modalities.vision`.
+- Requests with tools get `parallel_tool_calls: true` (llama-server leaves parallel calls off unless asked; the converter only ever sends `false`) unless the client disabled them or `parallelToolCalls` is off. vLLM's `repetition_penalty` is renamed `repeat_penalty`.
+- Tool calls without an `id`, streamed or not, get a generated `call_...` id. The Anthropic front already invented ids for them; the OpenAI front now receives them too.
+- Reasoning formats: `--reasoning-format deepseek` returns `reasoning_content` and `none` leaves `<think>` tags in `content`, both read as before. `deepseek-legacy` does both, so a leading `<think>...</think>` is cut from `content` when `reasoning_content` already carries it.
+- Tools need `--jinja`. A `400` that names `--jinja` is recognised like vLLM's missing tool parser: the client error gets a hint, and `toolFallback` retries without tools. See [decision D-41](decisions.md).
+
+llama-server also serves `/v1/messages` natively; the driver does not use it (separate issue, [#31](https://github.com/CLDMV/llm-translator/issues/31)). Nothing here has been run against a real `llama-server` yet: the detection fields, the `deepseek-legacy` shape and the refusal wordings come from the llama.cpp documentation and sources (tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70)).
 
 ## Version-mapped settings for vLLM
 

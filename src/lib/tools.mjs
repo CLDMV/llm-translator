@@ -25,21 +25,28 @@ const RESTART =
 /** Added to the error message the client receives when the upstream refuses tools for want of a tool parser. */
 export const HINT = `${RESTART}, or set the translator setting toolFallback to retry without tools.`;
 
+const JINJA =
+	"The llama.cpp server was started without --jinja, which tool calls need. Restart it with --jinja (the model's chat template must support tools)";
+
 /**
  * The hint for a refusal. When `toolFallback` is already on, suggesting it would be wrong (the retry has been spent), so only the restart advice remains.
+ * A refusal that names `--jinja` is llama.cpp's and gets its own advice.
  * @param {boolean} toolFallback - Whether the `toolFallback` setting is on for the endpoint.
+ * @param {string} [message] - The upstream error message being hinted.
  * @returns {string} Hint text.
  */
-export function hint(toolFallback) {
-	return toolFallback ? `${RESTART}.` : HINT;
+export function hint(toolFallback, message = "") {
+	const advice = /--jinja\b/i.test(message) ? JINJA : RESTART;
+	return toolFallback ? `${advice}.` : `${advice}, or set the translator setting toolFallback to retry without tools.`;
 }
 
 /**
- * Wordings seen from vLLM when a request carries tools but the server was started without tool parsing:
- * `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set` (current releases), and variants that name only one of the flags.
+ * Wordings seen when a request carries tools but the server was started without tool parsing:
+ * vLLM's `"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set` (current releases), variants that name only one of the flags,
+ * and llama.cpp's `tools param requires --jinja flag`.
  * Matched on the flag names rather than the full sentence so a reworded message still counts.
  */
-const REFUSED = [/--enable-auto-tool-choice\b/i, /--tool-call-parser\b/i];
+const REFUSED = [/--enable-auto-tool-choice\b/i, /--tool-call-parser\b/i, /--jinja\b/i];
 
 /**
  * Does an upstream error message say the server has no tool parser configured?

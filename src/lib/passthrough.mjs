@@ -72,7 +72,10 @@ const VLLM = [
 	"structured_outputs"
 ];
 
-const ALLOWED = new Set([...STANDARD, ...VLLM]);
+/** Documented llama.cpp and SGLang sampling and constraint extensions. */
+const OTHERS = ["repeat_penalty", "grammar", "regex", "ebnf", "separate_reasoning"];
+
+const ALLOWED = new Set([...STANDARD, ...VLLM, ...OTHERS]);
 const STREAM_OPTIONS = new Set(["include_usage", "continuous_usage_stats"]);
 
 /**

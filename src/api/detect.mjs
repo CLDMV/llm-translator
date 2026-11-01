@@ -21,6 +21,7 @@ import { context, self } from "../lib/runtime.mjs";
 import { capture } from "../lib/capture.mjs";
 import { TranslatorError } from "../lib/errors.mjs";
 import { warn } from "../lib/warn.mjs";
+import * as http from "../lib/http.mjs";
 
 /**
  * Bind every endpoint to a driver. `backend: "auto"` endpoints are probed (drivers tried in `info().order`, the generic
@@ -58,8 +59,17 @@ async function bind(c, endpoint, network, probe) {
 		}
 		facts = { version: endpoint.version };
 	} else if (network) {
-		for (const candidate of c.drivers) {
-			facts = await detectWith(candidate, { endpoint, ...probe });
+		// Paths are fetched once per endpoint and shared between drivers (see `http.probe`). Host-name drivers need no network. At the
+		// first driver that probes, the paths every remaining driver declares in `info().probes` are requested together, so detection
+		// costs the slowest probe, not their sum, and a server that matches an earlier driver is never asked for them.
+		const context = { endpoint, ...probe, probes: new Map() };
+		let fetched = false;
+		for (const [index, candidate] of c.drivers.entries()) {
+			if (!fetched && candidate.info.probes?.length > 0) {
+				fetched = true;
+				for (const later of c.drivers.slice(index)) for (const path of later.info.probes ?? []) http.probe(context, path);
+			}
+			facts = await detectWith(candidate, context);
 			if (facts) {
 				driver = candidate;
 				break;

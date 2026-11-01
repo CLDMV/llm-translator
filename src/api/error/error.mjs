@@ -44,7 +44,8 @@ export default async function error(status, upstreamBody, headers = {}, state) {
 	if (state?.unserved === true && status === 404) {
 		info.message += ` The model "${state.model}" is not served by any configured upstream; map it to a served model with "aliases".`;
 	}
-	if (status === 400 && tools.refused(info.message)) info.message += ` ${tools.hint(endpoint ? c.settings(endpoint).toolFallback : false)}`;
+	if (status === 400 && tools.refused(info.message))
+		info.message += ` ${tools.hint(endpoint ? c.settings(endpoint).toolFallback : false, info.message)}`;
 	const rendered = upstream.render(c.front, status, info, { native: state?.native === true });
 	const out = { "content-type": "application/json" };
 	for (const name of KEEP) {

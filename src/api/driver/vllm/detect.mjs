@@ -19,19 +19,21 @@
  */
 import * as http from "../../../lib/http.mjs";
 
+/** `owned_by` values of other backends that also answer `/version`. */
+const OTHERS = new Set(["sglang", "llamacpp"]);
+
 /**
  * Probe an endpoint for vLLM.
- * @param {any} context - `{ endpoint, transport, signal, timeout }`.
+ * @param {any} context - `{ endpoint, transport, signal, timeout, probes }`.
  * @returns {Promise<any | null>} Facts `{ version, models, maxModelLen }`, or null when the endpoint is not vLLM.
  */
-export async function detect({ endpoint, transport, signal, timeout }) {
-	const options = { method: "GET", headers: http.headers(endpoint), signal, timeout };
-	const [versionResult, modelsResult] = await Promise.all([
-		http.json(transport, http.join(endpoint.url, "/version"), options),
-		http.json(transport, http.join(endpoint.url, "/v1/models"), options)
-	]);
+export async function detect({ endpoint, transport, signal, timeout, probes }) {
+	const context = { endpoint, transport, signal, timeout, probes };
+	const [versionResult, modelsResult] = await Promise.all([http.probe(context, "/version"), http.probe(context, "/v1/models")]);
 	const version = typeof versionResult.body?.version === "string" ? versionResult.body.version : undefined;
 	const models = Array.isArray(modelsResult.body?.data) ? modelsResult.body.data : [];
+	// SGLang also answers `/version`; its model list names it, so it is not taken for vLLM.
+	if (models.some((entry) => OTHERS.has(entry?.owned_by))) return null;
 	if (!version && !models.some((entry) => entry?.owned_by === "vllm")) return null;
 	return {
 		version,

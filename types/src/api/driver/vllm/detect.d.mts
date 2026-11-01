@@ -14,7 +14,7 @@
  */
 /**
  * Probe an endpoint for vLLM.
- * @param {any} context - `{ endpoint, transport, signal, timeout }`.
+ * @param {any} context - `{ endpoint, transport, signal, timeout, probes }`.
  * @returns {Promise<any | null>} Facts `{ version, models, maxModelLen }`, or null when the endpoint is not vLLM.
  */
-export declare function detect({ endpoint, transport, signal, timeout }: any): Promise<any | null>;
+export declare function detect({ endpoint, transport, signal, timeout, probes }: any): Promise<any | null>;

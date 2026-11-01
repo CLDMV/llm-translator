@@ -91,7 +91,7 @@ test("a translator composed from dist/api converts, streams and serves", async (
 	const { createTranslator } = require(path.join(dist, "index.cjs"));
 	const api = await createTranslator({ upstreams: [{ url: "http://vllm.test", backend: "vllm" }], detect: false, silent: true, transport });
 	try {
-		assert.deepEqual(Object.keys(api.driver).sort(), ["anthropic", "compatible", "openai", "vllm"]);
+		assert.deepEqual(Object.keys(api.driver).sort(), ["anthropic", "compatible", "llamacpp", "openai", "vllm"]);
 		assert.equal(api.status().upstreams[0].driver, "vllm");
 
 		const body = { model: "m", max_tokens: 16, messages: [{ role: "user", content: "hi" }] };

@@ -38,6 +38,20 @@ export declare function isLoopback(host: string): boolean;
  */
 export declare function headers(endpoint: any, auth?: string, extra?: Record<string, string>): Record<string, string>;
 /**
+ * GET a path of the endpoint for detection. Within one detection pass (`context.probes` is a shared `Map`) each path is requested
+ * once and every driver that asks for it gets the same result, so a path fetched for one backend (for example `/v1/models`) is
+ * not fetched again for the next. Never rejects; treat the result as read-only.
+ * @param {any} context - `{ endpoint, transport, signal, timeout, probes? }`.
+ * @param {string} path - Path starting with `/`.
+ * @returns {Promise<{ok: boolean, status: number, body: any, error?: Error}>} Outcome (see `json`).
+ */
+export declare function probe({ endpoint, transport, signal, timeout, probes }: any, path: string): Promise<{
+    ok: boolean;
+    status: number;
+    body: any;
+    error?: Error;
+}>;
+/**
  * Convert a fetch `Headers` object (or plain object) to a lowercase plain object.
  * @param {Headers | Record<string,string> | undefined} source - Header source.
  * @returns {Record<string,string>} Plain header map.

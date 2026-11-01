@@ -16,10 +16,12 @@
 export declare const HINT = "The vLLM server was started without tool-call parsing. Restart it with --enable-auto-tool-choice and --tool-call-parser <parser> (the parser depends on the model family), or set the translator setting toolFallback to retry without tools.";
 /**
  * The hint for a refusal. When `toolFallback` is already on, suggesting it would be wrong (the retry has been spent), so only the restart advice remains.
+ * A refusal that names `--jinja` is llama.cpp's and gets its own advice.
  * @param {boolean} toolFallback - Whether the `toolFallback` setting is on for the endpoint.
+ * @param {string} [message] - The upstream error message being hinted.
  * @returns {string} Hint text.
  */
-export declare function hint(toolFallback: boolean): string;
+export declare function hint(toolFallback: boolean, message?: string): string;
 /**
  * Does an upstream error message say the server has no tool parser configured?
  * @param {string} message - Upstream error message.
