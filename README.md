@@ -63,7 +63,7 @@ Lines, statements, functions and branches are all at 100% and enforced on every 
 
 ### Requirements
 
-- Node.js 22.15 or newer
+- Node.js 22.22 or newer
 - Fastify 5, only for the server and the Fastify plugin (an optional peer dependency)
 
 ### Install
