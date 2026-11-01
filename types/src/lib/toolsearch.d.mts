@@ -42,12 +42,13 @@ export declare const LIMITS: Readonly<{
  * the name stays in `loaded`, and `plan` copes with the missing definition.
  * @param {any[]} messages - Anthropic messages.
  * @param {Set<string>} [known] - Names of the tools the request lists; their definitions are not kept (the listed one wins) and do not count against the cap.
- * @returns {{loaded: string[], searched: string[], called: string[], defined: Map<string, any>, capped: boolean}} Loaded names in order of first appearance, the names tool search itself loaded (selected, referenced or defined by a result; calling a tool is not evidence), names the assistant called, the definitions found in results and whether `LIMITS.definitions` turned one away.
+ * @returns {{loaded: string[], searched: string[], called: string[], failed: string[], defined: Map<string, any>, capped: boolean}} Loaded names in order of first appearance, the names tool search itself loaded (selected, referenced or defined by a result; calling a tool is not evidence), names the assistant called, those of them whose every call came back as an error, the definitions found in results and whether `LIMITS.definitions` turned one away.
  */
 export declare function scan(messages: any[], known?: Set<string>): {
     loaded: string[];
     searched: string[];
     called: string[];
+    failed: string[];
     defined: Map<string, any>;
     capped: boolean;
 };
@@ -58,14 +59,14 @@ export declare const TRIMMED = "The definition of this tool was trimmed from the
  *
  * - `expand`: tools without `defer_loading` in request order, then the deferred tools the conversation has loaded (or `tool_choice` names), in
  *   the order they were first loaded, so the list only ever grows at its end. `ToolSearch` is offered while there is something left to load.
- * - `inline`: every tool except the placeholder, in request order; `ToolSearch` is offered only when the placeholder shows that Claude Code holds
+ * - `inline`: every tool except the placeholder, in request order, then the tools a `ToolSearch` result defined in text; `ToolSearch` is offered only when the placeholder shows that Claude Code holds
  *   tools whose definitions it did not send. `expand` behaves like `inline` when the request has neither a `ToolSearch` nor the placeholder.
  * - `native`: every tool as sent; the server is expected to understand `defer_loading` and `tool_reference`.
  *
  * A tool a `ToolSearch` result defined in text and that the request does not list is offered after the others (`expand` only).
  * `deferredTools: "drop"` leaves the deferred tools to the caller to drop and hides `ToolSearch`, which would have nothing to load.
  * @param {any[]} tools - Anthropic tools of the request.
- * @param {{loaded: string[], searched: string[], called: string[], defined: Map<string, any>}} found - Result of `scan`.
+ * @param {{loaded: string[], searched: string[], called: string[], failed: string[], defined: Map<string, any>}} found - Result of `scan`.
  * @param {{toolSearch: "expand" | "inline" | "native", deferredTools: "forward" | "drop"}} s - Settings.
  * @param {any} [choice] - The request's `tool_choice`.
  * A tool tool search loaded (selected, referenced or defined by a result) whose definition is no longer anywhere (its `ToolSearch` result was trimmed) keeps `ToolSearch` offered so the
@@ -77,6 +78,7 @@ export declare function plan(tools: any[], found: {
     loaded: string[];
     searched: string[];
     called: string[];
+    failed: string[];
     defined: Map<string, any>;
 }, s: {
     toolSearch: "expand" | "inline" | "native";

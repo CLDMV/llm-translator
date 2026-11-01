@@ -32,6 +32,9 @@ export const PLACEHOLDER_TOOL = "DeferredToolPlaceholder";
 
 const FUNCTION_LINE = /<function>([\s\S]*?)<\/function>/g;
 
+/** What a result that history trimming emptied out reads like (`[cleared]`, `[removed]`, `(truncated)`, ...); a real answer such as "No matching deferred tools found" does not. */
+const CLEARED = /\b(?:clear(?:ed)?|trimmed|removed|truncated|omitted|elided|pruned)\b/i;
+
 /** Limits on definitions read from `ToolSearch` result text, which the model's tools list is built from: count in a conversation (only definitions of tools the request does not list count), characters per definition, name, description and serialized schema. */
 export const LIMITS = Object.freeze({ definitions: 512, line: 131072, name: 256, description: 16384, schema: 65536 });
 
@@ -77,8 +80,22 @@ function definition(json) {
 }
 
 /**
- * Tool names a `ToolSearch` call selected: the entries of a `select:A,B` query. A keyword query selects nothing by itself; the tools its result
- * names (`tool_reference` blocks, `<function>` lines) are what it loaded.
+ * Was a `ToolSearch` result emptied by history trimming rather than answered? It names no tool (no `tool_reference`, no `<function>` line) and is
+ * empty or a short note that reads like a removal.
+ * @param {any} content - `tool_result` content.
+ * @returns {boolean} True for a cleared result.
+ */
+function cleared(content) {
+	if (Array.isArray(content) && content.some((inner) => inner?.type === "tool_reference")) return false;
+	const text = textOf(content).trim();
+	if (new RegExp(FUNCTION_LINE.source).test(text)) return false;
+	return text === "" || (text.length <= 200 && CLEARED.test(text));
+}
+
+/**
+ * Tool names a `ToolSearch` call selected: the entries of a `select:A,B` query. They count as loaded only when the call's result is missing or
+ * cleared, or names them; an answer that names nothing ("No matching deferred tools found") means the names do not exist. A keyword query selects
+ * nothing by itself; the tools its result names (`tool_reference` blocks, `<function>` lines) are what it loaded.
  * @param {any} input - The `tool_use` input.
  * @returns {string[]} Names.
  */
@@ -98,7 +115,7 @@ function selected(input) {
  * the name stays in `loaded`, and `plan` copes with the missing definition.
  * @param {any[]} messages - Anthropic messages.
  * @param {Set<string>} [known] - Names of the tools the request lists; their definitions are not kept (the listed one wins) and do not count against the cap.
- * @returns {{loaded: string[], searched: string[], called: string[], defined: Map<string, any>, capped: boolean}} Loaded names in order of first appearance, the names tool search itself loaded (selected, referenced or defined by a result; calling a tool is not evidence), names the assistant called, the definitions found in results and whether `LIMITS.definitions` turned one away.
+ * @returns {{loaded: string[], searched: string[], called: string[], failed: string[], defined: Map<string, any>, capped: boolean}} Loaded names in order of first appearance, the names tool search itself loaded (selected, referenced or defined by a result; calling a tool is not evidence), names the assistant called, those of them whose every call came back as an error, the definitions found in results and whether `LIMITS.definitions` turned one away.
  */
 export function scan(messages, known = new Set()) {
 	const loaded = [];
@@ -107,6 +124,8 @@ export function scan(messages, known = new Set()) {
 	const defined = new Map();
 	const calls = new Map();
 	const seen = new Map();
+	const results = new Map();
+	const worked = new Set();
 	let capped = false;
 	const add = (name) => {
 		if (!loaded.includes(name)) loaded.push(name);
@@ -117,7 +136,10 @@ export function scan(messages, known = new Set()) {
 	};
 	for (const message of messages) {
 		if (!Array.isArray(message?.content)) continue;
-		for (const block of message.content) if (block?.type === "tool_use") seen.set(block.id, (seen.get(block.id) ?? 0) + 1);
+		for (const block of message.content) {
+			if (block?.type === "tool_use") seen.set(block.id, (seen.get(block.id) ?? 0) + 1);
+			else if (block?.type === "tool_result" && !results.has(block.tool_use_id)) results.set(block.tool_use_id, block);
+		}
 	}
 	for (const message of messages) {
 		if (!Array.isArray(message?.content)) continue;
@@ -126,7 +148,12 @@ export function scan(messages, known = new Set()) {
 				if (seen.get(block.id) === 1) calls.set(block.id, block.name);
 				add(block.name);
 				if (!called.includes(block.name)) called.push(block.name);
-				if (block.name === SEARCH_TOOL) for (const name of selected(block.input)) search(name);
+				// A call without an error result, or still without any result, shows the tool exists.
+				if (results.get(block.id)?.is_error !== true) worked.add(block.name);
+				if (block.name === SEARCH_TOOL) {
+					const answer = seen.get(block.id) === 1 ? results.get(block.id) : undefined;
+					if (!answer || cleared(answer.content)) for (const name of selected(block.input)) search(name);
+				}
 			} else if (block?.type === "tool_result") {
 				for (const inner of Array.isArray(block.content) ? block.content : []) {
 					if (inner?.type === "tool_reference" && typeof inner.tool_name === "string") search(inner.tool_name);
@@ -143,7 +170,7 @@ export function scan(messages, known = new Set()) {
 			}
 		}
 	}
-	return { loaded, searched, called, defined, capped };
+	return { loaded, searched, called, failed: called.filter((name) => !worked.has(name)), defined, capped };
 }
 
 /** Description of a tool whose definition was trimmed from the conversation. */
@@ -154,14 +181,14 @@ export const TRIMMED = "The definition of this tool was trimmed from the convers
  *
  * - `expand`: tools without `defer_loading` in request order, then the deferred tools the conversation has loaded (or `tool_choice` names), in
  *   the order they were first loaded, so the list only ever grows at its end. `ToolSearch` is offered while there is something left to load.
- * - `inline`: every tool except the placeholder, in request order; `ToolSearch` is offered only when the placeholder shows that Claude Code holds
+ * - `inline`: every tool except the placeholder, in request order, then the tools a `ToolSearch` result defined in text; `ToolSearch` is offered only when the placeholder shows that Claude Code holds
  *   tools whose definitions it did not send. `expand` behaves like `inline` when the request has neither a `ToolSearch` nor the placeholder.
  * - `native`: every tool as sent; the server is expected to understand `defer_loading` and `tool_reference`.
  *
  * A tool a `ToolSearch` result defined in text and that the request does not list is offered after the others (`expand` only).
  * `deferredTools: "drop"` leaves the deferred tools to the caller to drop and hides `ToolSearch`, which would have nothing to load.
  * @param {any[]} tools - Anthropic tools of the request.
- * @param {{loaded: string[], searched: string[], called: string[], defined: Map<string, any>}} found - Result of `scan`.
+ * @param {{loaded: string[], searched: string[], called: string[], failed: string[], defined: Map<string, any>}} found - Result of `scan`.
  * @param {{toolSearch: "expand" | "inline" | "native", deferredTools: "forward" | "drop"}} s - Settings.
  * @param {any} [choice] - The request's `tool_choice`.
  * A tool tool search loaded (selected, referenced or defined by a result) whose definition is no longer anywhere (its `ToolSearch` result was trimmed) keeps `ToolSearch` offered so the
@@ -190,10 +217,13 @@ export function plan(tools, found, s, choice) {
 	} else if (s.toolSearch === "native") {
 		hide.clear();
 	} else {
-		if (searchable) stubs = found.called.filter((name) => lost.includes(name));
+		if (searchable) stubs = found.called.filter((name) => lost.includes(name) && !found.failed.includes(name));
 		if (s.toolSearch === "inline" || !searchable) {
 			if (!placeholder && lost.length === 0) hide.add(SEARCH_TOOL);
-			loaded = real.map((tool) => tool.name);
+			// Inline offers everything known: the deferred tools of the request and the tools a ToolSearch result defined in text.
+			const late = [...found.defined.values()].filter((tool) => !names.has(tool.name));
+			offer = [...tools, ...late];
+			loaded = [...real, ...late].map((tool) => tool.name);
 		} else {
 			const wanted = new Set(found.loaded);
 			if (choice?.type === "tool") wanted.add(choice.name);

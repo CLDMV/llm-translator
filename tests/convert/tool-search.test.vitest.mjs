@@ -136,7 +136,7 @@ describe("expand (default): deferred tools are offered once a tool_reference loa
 			call("t1", "ToolSearch"),
 			result("t1", [{ type: "image" }, { type: "tool_reference" }])
 		]);
-		expect(found).toEqual({ loaded: ["ToolSearch"], searched: [], called: ["ToolSearch"], defined: new Map(), capped: false });
+		expect(found).toEqual({ loaded: ["ToolSearch"], searched: [], called: ["ToolSearch"], failed: [], defined: new Map(), capped: false });
 	});
 
 	test("the wire name of a long tool name does not depend on whether it is offered", async () => {
@@ -235,6 +235,43 @@ describe("trimmed history, repeated ids and bad definitions", () => {
 		const plain = await request({ model: "m", max_tokens: 1, tools: [tool("Read"), cron], messages: called });
 		expect(names(plain.body)).toEqual(["Read", "CronCreate"]);
 		expect(plain.state.toolSearch.stubbed).toEqual([]);
+	});
+
+	test("a selected name counts only when its result is missing, cleared or names it: a misspelling is not a tool", async () => {
+		const miss = (result_) => [ask("a"), call("t1", "ToolSearch", { query: "select:Wrtie,SlackSend" }), ...result_];
+		const noMatch = miss([result("t1", "No matching deferred tools found")]);
+		expect(names(await convert({ tools, messages: noMatch }))).toEqual(["Read", "ToolSearch"]);
+		// The model then tries the name anyway and is told there is no such tool: no stub, however often that is repeated.
+		const tried = [
+			...noMatch,
+			call("t2", "Wrtie"),
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "t2", is_error: true, content: "no such tool" }] }
+		];
+		const { body, state } = await request({ model: "m", max_tokens: 1, tools, messages: tried });
+		expect(names(body)).toEqual(["Read", "ToolSearch"]);
+		expect(state.toolSearch.stubbed).toEqual([]);
+		// A result that names only some of them loads only those.
+		expect(names(await convert({ tools, messages: miss([result("t1", [reference("SlackSend")])]) }))).toEqual([
+			"Read",
+			"ToolSearch",
+			"SlackSend"
+		]);
+		// A missing or cleared result counts them all (the answer is gone, not negative).
+		expect(names(await convert({ tools, messages: miss([]) }))).toEqual(["Read", "ToolSearch", "SlackSend"]);
+		for (const gone of ["", "[cleared]", "(result removed)", "Tool result truncated"]) {
+			expect(names(await convert({ tools, messages: miss([result("t1", gone)]) }))).toEqual(["Read", "ToolSearch", "SlackSend"]);
+		}
+	});
+
+	test("a lost tool that was called and always failed gets no stub, one that worked at least once does", async () => {
+		const failing = (id) => ({ role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: true, content: "nope" }] });
+		const base = [ask("a"), call("t1", "ToolSearch", { query: "select:NotebookEdit" }), result("t1", "[cleared]")];
+		const errors = [...base, call("t2", "NotebookEdit"), failing("t2"), call("t3", "NotebookEdit"), failing("t3")];
+		expect((await request({ model: "m", max_tokens: 1, tools, messages: errors })).state.toolSearch.stubbed).toEqual([]);
+		const mixed = [...errors, call("t4", "NotebookEdit"), result("t4", "ok")];
+		expect((await request({ model: "m", max_tokens: 1, tools, messages: mixed })).state.toolSearch.stubbed).toEqual(["NotebookEdit"]);
+		const pending = [...base, call("t5", "NotebookEdit")];
+		expect((await request({ model: "m", max_tokens: 1, tools, messages: pending })).state.toolSearch.stubbed).toEqual(["NotebookEdit"]);
 	});
 
 	test("a tool that was only called and has since been removed from the request is not offered again", async () => {
@@ -352,6 +389,21 @@ describe("inline: every deferred tool up front", () => {
 		expect(body.messages.at(-1).content).toBe("hi");
 	});
 
+	test("also offers the tools a ToolSearch result defined in text, since inline offers everything known", async () => {
+		const messages = [
+			ask("a"),
+			call("t1", "ToolSearch", { query: "notebook" }),
+			result("t1", `${fn("NotebookEdit")}\n${fn("CronCreate")}`)
+		];
+		const { body, state } = await request(
+			{ model: "m", max_tokens: 1, tools: [tool("Read"), search, cron, placeholder], messages },
+			{ toolSearch: "inline" }
+		);
+		expect(names(body)).toEqual(["Read", "ToolSearch", "CronCreate", "NotebookEdit"]);
+		expect(state.toolSearch.loaded).toEqual(["CronCreate", "NotebookEdit"]);
+		expect(body.tools.at(-1).function.description).toBe("NotebookEdit from search");
+	});
+
 	test("keeps ToolSearch when the placeholder shows tools whose definitions were not sent", async () => {
 		const body = await convert({ tools: [tool("Read"), search, cron, placeholder], messages: [ask("hi")] }, { toolSearch: "inline" });
 		expect(names(body)).toEqual(["Read", "ToolSearch", "CronCreate"]);
@@ -421,11 +473,10 @@ describe("plan()", () => {
 	const s = (extra) => resolve(extra);
 	test("passes typed tools through to be dropped by the converter, and ignores non-custom deferred flags", () => {
 		const typed = { type: "web_search_20250305", name: "web_search", defer_loading: true };
-		expect(plan([typed, tool("Read")], { loaded: [], searched: [], called: [], defined: new Map() }, s(), undefined).offer).toEqual([
-			typed,
-			tool("Read")
-		]);
-		const mixed = plan([typed, cron, search], { loaded: [], searched: [], called: [], defined: new Map() }, s(), undefined);
+		expect(
+			plan([typed, tool("Read")], { loaded: [], searched: [], called: [], failed: [], defined: new Map() }, s(), undefined).offer
+		).toEqual([typed, tool("Read")]);
+		const mixed = plan([typed, cron, search], { loaded: [], searched: [], called: [], failed: [], defined: new Map() }, s(), undefined);
 		expect(mixed.offer).toEqual([typed, search]);
 	});
 	test("settings validate toolSearch", () => {
