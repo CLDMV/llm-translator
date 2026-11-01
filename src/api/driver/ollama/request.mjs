@@ -27,7 +27,7 @@ const UNSUPPORTED = ["tool_choice", "n", "logit_bias"];
 const URL_NOTE = "[An image was omitted because Ollama accepts base64 images only and the translator does not fetch URLs.]";
 
 /**
- * Remove `tool_choice`, `n` and `logit_bias` (recorded in `state.dropped`), replace images given by URL with a note, and warn once per
+ * Remove `tool_choice`, `n` and `logit_bias` (recorded in `state.dropped`; with `tool_choice: "none"` the tools are removed too, so a forbidden tool call cannot happen), replace images given by URL with a note, and warn once per
  * upstream when the prompt is estimated to exceed `contextWindow` (Ollama truncates silently).
  * @param {any} body - Chat Completions request body.
  * @param {any} [ctx] - `{ endpoint, settings, state, warn }`.
@@ -36,6 +36,13 @@ const URL_NOTE = "[An image was omitted because Ollama accepts base64 images onl
 export function request(body, ctx) {
 	let out = noEmptyTools(body);
 	const dropped = ctx?.state?.dropped;
+	// `tool_choice: "none"` forbids tool calls. Dropping only the choice would let the model call a tool, so the tools go too.
+	if (out.tool_choice === "none" && out.tools !== undefined) {
+		out = { ...out };
+		delete out.tools;
+		delete out.parallel_tool_calls;
+		if (Array.isArray(dropped) && !dropped.includes("tools")) dropped.push("tools");
+	}
 	for (const field of UNSUPPORTED) {
 		if (out[field] === undefined) continue;
 		out = { ...out };

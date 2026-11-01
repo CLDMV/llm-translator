@@ -81,6 +81,24 @@ describe("ollama.request", () => {
 		expect(api.driver.ollama.request({ model: "m", messages }, ctx())).toEqual({ model: "m", messages });
 	});
 
+	it("tool_choice none also removes the tools, so a forbidden call cannot happen", async () => {
+		const api = await make({ upstreams: ["http://x.test"], detect: false });
+		const tool = [{ type: "function", function: { name: "f", parameters: {} } }];
+		const state = { dropped: [] };
+		const out = api.driver.ollama.request(
+			{ model: "m", messages, tools: tool, tool_choice: "none", parallel_tool_calls: false },
+			ctx({ state })
+		);
+		expect(out).toEqual({ model: "m", messages });
+		expect(state.dropped).toEqual(["tools", "tool_choice"]);
+		// "auto" is dropped but the tools stay; "none" without tools just drops the choice.
+		expect(api.driver.ollama.request({ model: "m", messages, tools: tool, tool_choice: "auto" }, ctx()).tools).toEqual(tool);
+		expect(api.driver.ollama.request({ model: "m", messages, tool_choice: "none" }, ctx({ state }))).toEqual({ model: "m", messages });
+		api.driver.ollama.request({ model: "m", messages, tools: tool, tool_choice: "none" });
+		api.driver.ollama.request({ model: "m", messages, tools: tool, tool_choice: "none" }, ctx({ state }));
+		expect(state.dropped).toEqual(["tools", "tool_choice"]);
+	});
+
 	it("keeps data URLs and replaces URL images with a note, recorded as a drop", async () => {
 		const api = await make({ upstreams: ["http://x.test"], detect: false });
 		const state = { dropped: [] };
