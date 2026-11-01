@@ -13,17 +13,14 @@
  *
  */
 /**
- * @fileoverview Generic OpenAI-compatible driver: static facts about the backend.
- * @module @cldmv/llm-translator/driver/compatible
- */
-/**
  * Describe the generic OpenAI-compatible driver (matches last, after every specific driver).
- * @returns {{name: string, protocol: string, order: number, auth: string, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export declare function info(): {
     name: string;
     protocol: string;
     order: number;
     auth: string;
+    fields: string[];
     paths: Record<string, string>;
 };

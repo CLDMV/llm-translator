@@ -29,7 +29,17 @@ export function info() {
 		order: 50,
 		auth: "bearer",
 		probes: ["/get_server_info"],
-		fields: ["regex", "ebnf", "separate_reasoning"],
+		fields: [
+			"top_k",
+			"min_p",
+			"repetition_penalty",
+			"chat_template_kwargs",
+			"skip_special_tokens",
+			"ignore_eos",
+			"regex",
+			"ebnf",
+			"separate_reasoning"
+		],
 		paths: { chat: "/v1/chat/completions", models: "/v1/models", serverInfo: "/get_server_info" }
 	};
 }

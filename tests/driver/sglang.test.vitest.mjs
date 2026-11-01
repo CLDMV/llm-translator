@@ -232,6 +232,52 @@ describe("passthroughFilter and backend extensions", () => {
 		expect(await forwarded({ url: "https://api.deepseek.com" })).toEqual([]);
 	});
 
+	it("vLLM's extension fields go to vllm and compatible upstreams only, and to llama.cpp and SGLang for the ones they accept", async () => {
+		const send = async (upstream) => {
+			const transport = fakeTransport(() => ({
+				body: {
+					id: "c",
+					object: "chat.completion",
+					model: "m",
+					choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }]
+				}
+			}));
+			const api = await make({ front: "openai", upstreams: [upstream], transport, settings: { passthroughFilter: true } });
+			await api.send({
+				model: "m",
+				messages: [{ role: "user", content: "hi" }],
+				top_k: 5,
+				min_p: 0.1,
+				chat_template_kwargs: { a: 1 },
+				thinking_token_budget: 9
+			});
+			return Object.keys(JSON.parse(transport.calls.find((call) => call.url.endsWith("/chat/completions")).init.body)).filter((key) =>
+				["top_k", "min_p", "chat_template_kwargs", "thinking_token_budget"].includes(key)
+			);
+		};
+		expect(await send({ url: "http://x.test", backend: "vllm" })).toEqual([
+			"top_k",
+			"min_p",
+			"chat_template_kwargs",
+			"thinking_token_budget"
+		]);
+		expect(await send({ url: "http://x.test", backend: "compatible" })).toEqual([
+			"top_k",
+			"min_p",
+			"chat_template_kwargs",
+			"thinking_token_budget"
+		]);
+		expect(await send({ url: "http://x.test", backend: "llamacpp" })).toEqual(["top_k", "min_p", "chat_template_kwargs"]);
+		expect(await send({ url: "http://x.test", backend: "sglang" })).toEqual(["top_k", "min_p", "chat_template_kwargs"]);
+		for (const upstream of [
+			{ url: "https://api.openai.com" },
+			{ url: "https://api.deepseek.com" },
+			{ url: "http://x.test", backend: "ollama" }
+		]) {
+			expect(await send(upstream)).toEqual([]);
+		}
+	});
+
 	it("filterChatBody takes the driver's extra fields", () => {
 		expect(filterChatBody(fields, ["regex"])).toEqual({ regex: "a+" });
 		expect(filterChatBody(fields)).toEqual({});

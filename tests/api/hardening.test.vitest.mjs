@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import Fastify from "fastify";
 import { closeAll, fakeTransport, make } from "../helpers/translator.mjs";
 import { completion, fakeVllm, json } from "../helpers/fake-server.mjs";
-import { filterChatBody } from "../../src/lib/passthrough.mjs";
+import { VLLM_FIELDS, filterChatBody } from "../../src/lib/passthrough.mjs";
 import { isLoopback } from "../../src/lib/http.mjs";
 import { merge } from "../../src/lib/cli.mjs";
 import * as upstreamError from "../../src/lib/upstream-error.mjs";
@@ -332,8 +332,10 @@ describe("pass-through body filter", () => {
 	};
 
 	it("keeps standard and documented vLLM fields and drops server controls", () => {
-		const out = filterChatBody(body);
+		const out = filterChatBody(body, VLLM_FIELDS);
 		expect(Object.keys(out).sort()).toEqual(["chat_template_kwargs", "messages", "model", "stream", "stream_options", "top_k"]);
+		// Without a driver that accepts them the vLLM fields are stripped too.
+		expect(Object.keys(filterChatBody(body)).sort()).toEqual(["messages", "model", "stream", "stream_options"]);
 		expect(out.stream_options).toEqual({ include_usage: true, continuous_usage_stats: true });
 		expect(filterChatBody({ model: "m", stream_options: { evil: 1 } })).toEqual({ model: "m" });
 		expect(filterChatBody({ model: "m", stream_options: null })).toEqual({ model: "m" });
