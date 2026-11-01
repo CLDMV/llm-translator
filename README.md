@@ -17,14 +17,15 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.2.0 (October 2026)
+### Latest: v0.3.0 (November 2026)
 
-- **The translator** — six converters between the Anthropic Messages API and OpenAI Chat Completions (requests, responses and streams, both directions), backend detection with `vllm`, `openai`, `anthropic` and generic `compatible` drivers, model aliases and routing, and `createTranslator` with `request`, `response`, `stream`, `send`, `route` and `detect`. Text, images, PDFs, tools and reasoning are mapped; whatever has no counterpart is dropped, rejected or replaced by a note, never guessed.
-- **Server and CLI for Claude Code** — an Anthropic or OpenAI front over Fastify (optional peer dependency) and the `llm-translator` command. Slow upstreams are supported: no transport timeouts, and early `message_start` plus keep-alive deltas satisfy Claude Code's stream watchdog during long prefills. Models that refuse images are detected at startup or on the first refusal and retried once without them.
-- [View full v0.2.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.2.0.md)
+- **Usage reporting, `route()` and the server `authorize` hook** — every `send()` reply has a `usage` promise (and an `onUsage` callback) with the final token counts; `api.route(body)` says which upstream and model a request would use; `server.start` and `server.plugin` take `authorize(request)` and `onUsage(report, context)` so an app with its own key system can gate and meter requests.
+- **More servers and endpoint pools** — drivers for llama.cpp, Ollama, SGLang and the DeepSeek API, failover and load balancing between upstreams that serve the same model, the `reasoningRoundTrip` and `toolSearch` settings, estimated usage when an upstream sends none, and `GET /v1/models/{id}`. Requires Node.js 22.22.0 or newer.
+- [View full v0.3.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.0.md)
 
 ### Recent Releases
 
+- **v0.2.0** (October 2026) — the first working translator: six Anthropic Messages and OpenAI Chat Completions converters, backend detection (vLLM, OpenAI, Anthropic, generic), model aliases, the optional Fastify server and the `llm-translator` CLI for Claude Code ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.2.0.md))
 - **v0.1.0** (October 2026) — package scaffold: ESM and CommonJS entry points, tsup build, the `llm-translator-dev` condition with devcheck, tests on `@cldmv/vitest-runner` and the CLDMV v4 CI/release pipeline; the only export was a placeholder ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.1.0.md))
 
 📚 **For complete version history and detailed release notes, see the [docs/changelog/](https://github.com/CLDMV/llm-translator/tree/master/docs/changelog/) folder.**
