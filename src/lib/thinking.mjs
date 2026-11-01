@@ -239,7 +239,7 @@ async function decode(signature, producer, budget) {
 /**
  * The `reasoning_details` item for an Anthropic thinking block or redacted thinking block, in the form an OpenAI client replays.
  * @param {any} block - Anthropic `thinking` or `redacted_thinking` content block (with its signature or data).
- * @param {number} index - Position among what the OpenAI message shows: 0 before the text, 1 after it (or before the first tool call when there is no text), then one more for each tool call.
+ * @param {number} index - Position among what the OpenAI message shows: 0 before the text (or before the first tool call when there is no text), 1 after the text and before the first tool call, then one more for each tool call. Empty text does not count as text.
  * @returns {object | null} The item, or null for a block that cannot be replayed (no signature or data).
  */
 export function detailOf(block, index) {

@@ -48,7 +48,8 @@ export function response(message, state, settings) {
 			const detail = detailOf(block, slot + (textSeen ? 1 : 0));
 			if (detail) details.push(detail);
 		}
-		if (block.type === "text") textSeen = true;
+		// An empty text block adds nothing to the message the client sees, so it does not count as text.
+		if (block.type === "text" && block.text !== "") textSeen = true;
 		if (block.type === "tool_use") slot++;
 		if (block.type === "text") text.push(block.text);
 		else if (block.type === "thinking") reasoning.push(block.thinking);

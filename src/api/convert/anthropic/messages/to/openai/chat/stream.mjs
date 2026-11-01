@@ -79,7 +79,6 @@ export async function* stream(source, state, settings) {
 				if (block.type === "thinking" || block.type === "redacted_thinking") {
 					reasoningBlock = { type: block.type, data: block.data, thinking: "", signature: "", slot: toolBlocks + (textBlock ? 1 : 0) };
 				}
-				if (block.type === "text") textBlock = true;
 				if (block.type === "tool_use") toolBlocks++;
 				if (block.type === "tool_use") {
 					tools.set(data.index, tools.size);
@@ -90,8 +89,11 @@ export async function* stream(source, state, settings) {
 				}
 			} else if (data.type === "content_block_delta") {
 				const delta = data.delta;
-				if (delta.type === "text_delta") yield chunk({ content: delta.text });
-				else if (delta.type === "thinking_delta") {
+				if (delta.type === "text_delta") {
+					// Only text that reaches the client counts as text for the position of reasoning items.
+					if (delta.text !== "") textBlock = true;
+					yield chunk({ content: delta.text });
+				} else if (delta.type === "thinking_delta") {
 					if (reasoningBlock) reasoningBlock.thinking += delta.thinking;
 					yield chunk({ [s.reasoningField]: delta.thinking });
 				} else if (delta.type === "signature_delta") {

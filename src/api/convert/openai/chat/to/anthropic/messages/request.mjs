@@ -202,8 +202,11 @@ function interleave(thinking, rest) {
 	const ordered = [...thinking].sort((left, right) => left.at - right.at);
 	const out = [];
 	let next = 0;
+	// Positions 0 and 1 are before the text and before the first tool call; neither may land after a tool call, whatever the message now contains.
+	const firstTool = rest.findIndex((block) => block.type === "tool_use");
 	for (const entry of ordered) {
-		while (next < Math.min(entry.at, rest.length)) out.push(rest[next++]);
+		const at = entry.at <= 1 && firstTool !== -1 ? Math.min(entry.at, firstTool) : entry.at;
+		while (next < Math.min(at, rest.length)) out.push(rest[next++]);
 		out.push(entry.block);
 	}
 	return [...out, ...rest.slice(next)];

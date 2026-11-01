@@ -650,7 +650,7 @@ describe("reasoning side channel: second review", () => {
 		expect(content.map((block) => block.thinking ?? block.type)).toEqual(["one", "text", "two", "tool_use", "three", "tool_use"]);
 	});
 
-	test("the same positions come out of a stream, and a message with no text counts tool calls only", async () => {
+	test("the same positions come out of a stream; an empty text block and a message with no text count tool calls only", async () => {
 		const events = [
 			{
 				type: "message_start",
@@ -683,7 +683,7 @@ describe("reasoning side channel: second review", () => {
 				on
 			)
 		);
-		expect(chunks.flatMap((c) => c.data?.choices?.[0]?.delta?.reasoning_details ?? []).map((item) => item.index)).toEqual([1, 2]);
+		expect(chunks.flatMap((c) => c.data?.choices?.[0]?.delta?.reasoning_details ?? []).map((item) => item.index)).toEqual([1, 1]);
 	});
 
 	test("one budget serves every attempt of a send, and its results are cached", async () => {
@@ -724,5 +724,90 @@ describe("reasoning side channel: second review", () => {
 				(m) => m.role === "assistant"
 			).reasoning_content
 		).toBe("x");
+	});
+
+	test("an empty text block is not text: thinking after it replays before the tool call", async () => {
+		const content = [
+			{ type: "text", text: "" },
+			{ type: "thinking", thinking: "t", signature: "S" },
+			{ type: "tool_use", id: "toolu_1", name: "Read", input: {} }
+		];
+		const message = { id: "m", type: "message", role: "assistant", model: "claude", content, stop_reason: "tool_use", usage: {} };
+		const replay = async (details, calls) => {
+			const body = {
+				model: "claude",
+				max_tokens: 8,
+				messages: [
+					{ role: "user", content: "go" },
+					{ role: "assistant", content: "", reasoning_details: details, tool_calls: calls },
+					{ role: "tool", tool_call_id: "toolu_1", content: "ok" }
+				]
+			};
+			return (await toAnthropicRequest(body, on)).body.messages.find((m) => m.role === "assistant").content.map((block) => block.type);
+		};
+		const json = toOpenaiResponse(message, undefined, on).choices[0].message;
+		expect(json.reasoning_details.map((item) => item.index)).toEqual([0]);
+		expect(await replay(json.reasoning_details, json.tool_calls)).toEqual(["thinking", "tool_use"]);
+		const events = [
+			{
+				type: "message_start",
+				message: { id: "m", type: "message", role: "assistant", model: "claude", content: [], usage: { input_tokens: 1, output_tokens: 0 } }
+			},
+			{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "" } },
+			{ type: "content_block_stop", index: 0 },
+			{ type: "content_block_start", index: 1, content_block: { type: "thinking", thinking: "", signature: "" } },
+			{ type: "content_block_delta", index: 1, delta: { type: "signature_delta", signature: "S" } },
+			{ type: "content_block_stop", index: 1 },
+			{ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "toolu_1", name: "Read", input: {} } },
+			{ type: "content_block_stop", index: 2 },
+			{ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+			{ type: "message_stop" }
+		];
+		const chunks = await collect(
+			toOpenaiStream(
+				events.map((data) => ({ event: data.type, data })),
+				undefined,
+				on
+			)
+		);
+		const streamed = chunks.flatMap((c) => c.data?.choices?.[0]?.delta?.reasoning_details ?? []);
+		expect(streamed.map((item) => item.index)).toEqual([0]);
+		expect(await replay(streamed, json.tool_calls)).toEqual(["thinking", "tool_use"]);
+		// Real text before the thinking still counts.
+		const withText = events.map((data) => (data.delta?.type === "text_delta" ? { ...data, delta: { ...data.delta, text: "hi" } } : data));
+		const counted = await collect(
+			toOpenaiStream(
+				withText.map((data) => ({ event: data.type, data })),
+				undefined,
+				on
+			)
+		);
+		expect(counted.flatMap((c) => c.data?.choices?.[0]?.delta?.reasoning_details ?? []).map((item) => item.index)).toEqual([1]);
+	});
+
+	test("a position 0 or 1 item never lands after a tool call on replay", async () => {
+		const item = { type: "reasoning.text", text: "t", signature: "S", format: ANTHROPIC_FORMAT, index: 1 };
+		const body = {
+			model: "claude",
+			max_tokens: 8,
+			messages: [
+				{ role: "user", content: "go" },
+				{ role: "assistant", content: "", reasoning_details: [item], tool_calls: [call] },
+				{ role: "tool", tool_call_id: "call_1", content: "ok" }
+			]
+		};
+		const types = (await toAnthropicRequest(body, on)).body.messages.find((m) => m.role === "assistant").content.map((block) => block.type);
+		expect(types).toEqual(["thinking", "tool_use"]);
+		const late = { ...item, index: 5 };
+		const after = (
+			await toAnthropicRequest(
+				{ ...body, messages: [body.messages[0], { ...body.messages[1], reasoning_details: [late] }, body.messages[2]] },
+				on
+			)
+		).body.messages
+			.find((m) => m.role === "assistant")
+			.content.map((block) => block.type);
+		expect(after).toEqual(["tool_use", "thinking"]);
 	});
 });
