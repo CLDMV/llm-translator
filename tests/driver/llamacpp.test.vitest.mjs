@@ -255,6 +255,72 @@ describe("llamacpp.chunk and streamed tool calls", () => {
 	});
 });
 
+describe("deepseek-legacy in a stream", () => {
+	const base = { id: "c", object: "chat.completion.chunk", model: "qwen" };
+	const frame = (delta, finish = null) => ({ ...base, choices: [{ index: 0, delta, finish_reason: finish }] });
+	const run = async (deltas, front = "anthropic") => {
+		const frames = [frame({ role: "assistant", content: "" }), ...deltas.map((delta) => frame(delta)), frame({}, "stop"), "[DONE]"];
+		const transport = server({}, () => new Response(openaiSse(frames), { status: 200, headers: { "content-type": "text/event-stream" } }));
+		const api = await make({ front, upstreams: [{ url: "http://llama.test", backend: "llamacpp" }], transport });
+		const body = front === "openai" ? { model: "qwen", stream: true } : { model: "qwen", max_tokens: 16, stream: true };
+		const reply = await api.send({ ...body, messages: [{ role: "user", content: "hi" }] });
+		return await collect(reply.stream);
+	};
+	const anthropic = (events) => ({
+		types: events.filter((e) => e.event === "content_block_start").map((e) => e.data.content_block.type),
+		thinking: events
+			.filter((e) => e.data?.delta?.type === "thinking_delta")
+			.map((e) => e.data.delta.thinking)
+			.join(""),
+		text: events
+			.filter((e) => e.data?.delta?.type === "text_delta")
+			.map((e) => e.data.delta.text)
+			.join("")
+	});
+
+	it("drops the repeated think block, matching the non-streaming result", async () => {
+		const whole = await run([{ reasoning_content: "r1" }, { content: "<think>r1</think>" }, { content: "answer" }]);
+		expect(anthropic(whole)).toEqual({ types: ["thinking", "text"], thinking: "r1", text: "answer" });
+		const answer = anthropic(await run([{ reasoning_content: "r1" }, { content: "<think>r1</think>\n\nanswer" }]));
+		expect(answer).toEqual({ types: ["thinking", "text"], thinking: "r1", text: "answer" });
+	});
+
+	it("handles both tags split across chunks and reasoning that arrives in the same chunk", async () => {
+		const split = await run([
+			{ reasoning_content: "r1" },
+			{ content: "<thi" },
+			{ content: "nk>r1</th" },
+			{ content: "ink>\n\nans" },
+			{ content: "wer" }
+		]);
+		expect(anthropic(split)).toEqual({ types: ["thinking", "text"], thinking: "r1", text: "answer" });
+		const same = await run([{ reasoning_content: "r1", content: "<think>r1</think>answer" }]);
+		expect(anthropic(same)).toEqual({ types: ["thinking", "text"], thinking: "r1", text: "answer" });
+		const spaced = await run([{ reasoning_content: "r1" }, { content: "  " }, { content: "<think>r1" }, { content: " more</think>x" }]);
+		expect(anthropic(spaced).text).toBe("x");
+	});
+
+	it("leaves the plain deepseek format alone, including text that only starts like a tag", async () => {
+		expect(anthropic(await run([{ reasoning_content: "r1" }, { content: "answer" }, { content: " more" }]))).toEqual({
+			types: ["thinking", "text"],
+			thinking: "r1",
+			text: "answer more"
+		});
+		expect(anthropic(await run([{ reasoning_content: "r1" }, { content: "<" }, { content: "b>bold</b>" }])).text).toBe("<b>bold</b>");
+		expect(anthropic(await run([{ content: "<think>kept by thinkTags</think>answer" }]))).toMatchObject({
+			types: ["thinking", "text"],
+			text: "answer"
+		});
+	});
+
+	it("the OpenAI front receives the answer without the repeated block", async () => {
+		const events = await run([{ reasoning_content: "r1" }, { content: "<think>r1</think>" }, { content: "answer" }], "openai");
+		const text = events.map((event) => event.data?.choices?.[0]?.delta?.content ?? "").join("");
+		expect(text).toBe("answer");
+		expect(events.map((event) => event.data?.choices?.[0]?.delta?.reasoning_content ?? "").join("")).toBe("r1");
+	});
+});
+
 describe("the --jinja refusal", () => {
 	const refusal = { error: { message: "tools param requires --jinja flag", type: "invalid_request_error", code: 400 } };
 

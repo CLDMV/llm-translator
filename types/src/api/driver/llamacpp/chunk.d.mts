@@ -13,8 +13,7 @@
  *
  */
 /**
- * Give a streamed tool call that starts without an id one. The id is made when the call's name first arrives (the first fragment of the call);
- * later fragments of the same call carry no id, as in OpenAI streams. Ids made so far are kept in `ctx.state.toolIds` (index to id).
+ * Normalize a streamed chunk: drop the duplicate reasoning block of `deepseek-legacy` and give tool calls without an id one.
  * @param {any} chunk - Parsed `chat.completion.chunk`.
  * @param {any} [ctx] - `{ state }`.
  * @returns {any} Normalized chunk.
