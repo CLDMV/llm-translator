@@ -70,7 +70,7 @@ test("CJS shim re-exports the ESM entry", async () => {
 
 test("dist/index.mjs imports the root devcheck.mjs instead of bundling it", () => {
 	const bundle = fs.readFileSync(path.join(dist, "index.mjs"), "utf8");
-	assert.match(bundle, /import\(\s*["']\.\.\/devcheck\.mjs["']\s*\)/);
+	assert.match(bundle, /createRequire\(import\.meta\.url\)\(\s*["']\.\.\/devcheck\.mjs["']\s*\)/);
 	assert.doesNotMatch(bundle, /Development environment not properly configured/);
 });
 

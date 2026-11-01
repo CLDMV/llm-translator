@@ -30,19 +30,30 @@ import { load } from "./lib/pdf.mjs";
 import { transport } from "./lib/transport.mjs";
 import { warn } from "./lib/warn.mjs";
 
-// Development environment check. devcheck.mjs lives at the repo root and exists only in
-// a source checkout; it is never published, so the import is allowed to fail. tsup keeps
-// the specifier external, so dist/index.mjs imports the same root file. It runs inside an
-// async function rather than as a top-level await: index.cjs loads this module through
-// Node's synchronous require(esm), which rejects any module graph containing top-level
-// await (ERR_REQUIRE_ASYNC_MODULE).
-(async () => {
+// Development environment check. devcheck.mjs exists only in a source checkout and exits the
+// process when the checkout runs without --conditions=llm-translator-dev. It is loaded
+// synchronously, through require(esm), so it finishes before this module's exports can be
+// called from ESM or CJS, sync or async: nothing runs against the wrong tree first. There is
+// no top-level await, which index.cjs's require(esm) would reject (ERR_REQUIRE_ASYNC_MODULE).
+//
+// node:module is looked up at runtime with process.getBuiltinModule (Node >=20.16 / 22.3)
+// instead of a static import, so bundlers never see a Node built-in or the devcheck path: a
+// browser build of a package using this block keeps working, and without process (a browser)
+// the check is skipped. devcheck.mjs is never published, so MODULE_NOT_FOUND is expected
+// outside a checkout; any other error is a real failure. The build keeps the specifier
+// external, so dist/index.mjs loads the same root file.
+/* v8 ignore start -- the false branch is a non-Node runtime and the catch runs in the published
+   package (no devcheck.mjs) or when devcheck.mjs fails to load; the suite always runs on Node
+   from a checkout where devcheck.mjs exists and loads */
+const nodeModule = typeof process === "undefined" ? undefined : process.getBuiltinModule?.("node:module");
+if (nodeModule) {
 	try {
-		await import("../devcheck.mjs");
-	} catch {
-		// ignore - devcheck.mjs is not published
+		nodeModule.createRequire(import.meta.url)("../devcheck.mjs");
+	} catch (error) {
+		if (error?.code !== "MODULE_NOT_FOUND") throw error;
 	}
-})();
+}
+/* v8 ignore stop */
 
 /**
  * @typedef {object} TranslatorConfig
