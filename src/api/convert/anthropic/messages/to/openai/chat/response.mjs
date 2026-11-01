@@ -19,12 +19,14 @@
 
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { restoreName } from "../../../../../../../lib/ids.mjs";
+import { detailOf } from "../../../../../../../lib/thinking.mjs";
 import { toOpenAIFinish, toOpenAIUsage } from "../../../../../../../lib/finish.mjs";
 
 /**
  * Convert an Anthropic message into an OpenAI `chat.completion`. Text blocks are concatenated, `thinking` blocks
  * become the reasoning field named by `reasoningField`, `tool_use` blocks become `tool_calls` (tool names restored
- * through `state.toolNames`), and other block types (server tool results, redacted thinking) are skipped.
+ * through `state.toolNames`), and other block types (server tool results) are skipped. With `reasoningRoundTrip`, thinking and redacted thinking
+ * blocks are also returned as `reasoning_details` items that carry their signatures.
  * @param {any} message - Anthropic message.
  * @param {any} [state] - State from the request converter (original model, tool-name map).
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
@@ -36,7 +38,12 @@ export function response(message, state, settings) {
 	const text = [];
 	const reasoning = [];
 	const toolCalls = [];
+	const details = [];
 	for (const block of message.content ?? []) {
+		if (s.reasoningRoundTrip) {
+			const detail = detailOf(block, details.length);
+			if (detail) details.push(detail);
+		}
 		if (block.type === "text") text.push(block.text);
 		else if (block.type === "thinking") reasoning.push(block.thinking);
 		else if (block.type === "tool_use") {
@@ -49,6 +56,8 @@ export function response(message, state, settings) {
 	}
 	const out = { role: "assistant", content: text.length === 0 && toolCalls.length > 0 ? null : text.join("") };
 	if (reasoning.length > 0) out[s.reasoningField] = reasoning.join("");
+	// With `reasoningRoundTrip` the thinking blocks and their signatures go along for the client to replay (Anthropic needs them back with tool use).
+	if (details.length > 0) out.reasoning_details = details;
 	if (toolCalls.length > 0) out.tool_calls = toolCalls;
 	const choice = { index: 0, message: out, finish_reason: toOpenAIFinish(message.stop_reason) };
 	if (typeof message.stop_sequence === "string") choice.stop_reason = message.stop_sequence;

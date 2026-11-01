@@ -16,7 +16,7 @@
  * Convert a (non-streaming) OpenAI chat completion into an Anthropic message.
  *
  * Reasoning (`reasoning`, `reasoning_content`, or a leading `<think>` block when `thinkTags` is on, or a block closed by `</think>` when `thinkOpen` is also on) becomes a
- * `thinking` block with a translator-marked signature. Tool calls become `tool_use` blocks; arguments that are not
+ * `thinking` block with a translator-marked signature (which carries the provider's reasoning fields when `reasoningRoundTrip` is on). Tool calls become `tool_use` blocks; arguments that are not
  * a JSON object are passed through under `_raw_arguments` so the client reports a tool error the model can recover
  * from.
  * @param {any} completion - OpenAI `chat.completion` object.

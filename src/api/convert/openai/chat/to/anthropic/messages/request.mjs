@@ -22,6 +22,7 @@ import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { anthropicToolId, createNameFitter } from "../../../../../../../lib/ids.mjs";
 import { parseArguments } from "../../../../../../../lib/arguments.mjs";
 import { sanitize } from "../../../../../../../lib/schema.mjs";
+import { blocksOf } from "../../../../../../../lib/thinking.mjs";
 
 const HANDLED = new Set([
 	"model",
@@ -103,11 +104,13 @@ export async function request(chatBody, settings) {
 				push("user", userBlocks(message.content, state));
 				break;
 			case "assistant": {
-				const blocks = [];
+				// Thinking blocks come first, as Anthropic requires. They exist only when the client replayed `reasoning_details`
+				// items this translator made (`reasoningRoundTrip`); plain reasoning text has no signature and is still dropped.
+				const blocks = s.reasoningRoundTrip ? blocksOf(message.reasoning_details) : [];
 				const text = plainText(message.content);
 				if (text !== "") blocks.push({ type: "text", text });
 				else if (typeof message.refusal === "string" && message.refusal !== "") blocks.push({ type: "text", text: message.refusal });
-				if (reasoningPresent(message)) drop(state, "reasoning");
+				if (reasoningPresent(message) && !blocks.some((block) => block.type === "thinking")) drop(state, "reasoning");
 				for (const call of message.tool_calls ?? []) {
 					blocks.push({
 						type: "tool_use",

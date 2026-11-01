@@ -71,6 +71,12 @@ describe("settings", () => {
 		}
 	});
 
+	test("reasoningRoundTrip defaults to off and must be a boolean", () => {
+		expect(resolve().reasoningRoundTrip).toBe(false);
+		expect(resolve({ reasoningRoundTrip: true }).reasoningRoundTrip).toBe(true);
+		expect(() => resolve({ reasoningRoundTrip: "yes" })).toThrow(/Invalid setting reasoningRoundTrip/);
+	});
+
 	test("thinkOpen defaults to off and must be a boolean", () => {
 		expect(resolve().thinkOpen).toBe(false);
 		expect(resolve({ thinkOpen: true }).thinkOpen).toBe(true);

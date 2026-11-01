@@ -5,9 +5,9 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 ## Reasoning
 
 - Only a leading `<think>...</think>` block in content is parsed as reasoning. A model whose chat template opens the think block in the prompt, so the reply contains only a closing `</think>`, needs `thinkOpen: true`; the stream then emits nothing until the `</think>` arrives or the stream ends (FI-081, [#23](https://github.com/CLDMV/llm-translator/issues/23)).
-- Reasoning blocks produced by the translator carry a marked signature (`llmt:...`). They are not Anthropic signatures and are not accepted by real Anthropic endpoints. When an OpenAI client talks to an Anthropic upstream, assistant reasoning in history is dropped.
+- Reasoning blocks produced by the translator carry a marked signature (`llmt:...`). They are not Anthropic signatures and are not accepted by real Anthropic endpoints. When an OpenAI client talks to an Anthropic upstream, assistant reasoning in history is dropped unless `reasoningRoundTrip` is on and the client replays the `reasoning_details` items it was given (D-46).
 - `redacted_thinking` blocks are dropped. Thinking `display` modes and `between_tools` thinking have no effect.
-- Servers that require reasoning to be sent back on every turn (DeepSeek with tools, OpenRouter's structured `reasoning_details`) are not supported yet; reasoning goes back as plain text only.
+- Servers that require reasoning to be sent back on every turn (DeepSeek with tools, OpenRouter's structured `reasoning_details`) are supported through `reasoningRoundTrip` (on for the DeepSeek driver). It depends on the client keeping the signature of each thinking block; a client that drops thinking blocks, or `clear_thinking` removing old turns, leaves nothing to restore. Such a turn is sent without reasoning, one warning is printed per upstream, and the server may refuse it (DeepSeek's refusal is explained in the error). OpenRouter and its `reasoning_details` shapes have not been verified against the real service (no driver yet, [#41](https://github.com/CLDMV/llm-translator/issues/41)).
 
 ## Tools
 

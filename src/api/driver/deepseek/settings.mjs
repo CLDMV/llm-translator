@@ -27,6 +27,7 @@
 export function settings() {
 	return {
 		reasoningField: "reasoning_content",
+		reasoningRoundTrip: true,
 		maxTokensField: "max_tokens",
 		thinking: "none",
 		thinkingBudget: false,

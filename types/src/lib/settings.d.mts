@@ -34,6 +34,10 @@ export type Settings = {
      */
     thinkOpen: boolean;
     /**
+     * - Carry reasoning the upstream needs back across turns. OpenAI-protocol upstream: the provider's reasoning fields (`reasoning_content`, `reasoning`, `reasoning_details`) travel in the thinking block's `llmt:` signature and are restored on the next request. Anthropic-protocol upstream with an OpenAI client: thinking blocks and their signatures travel as `reasoning_details` items the client replays. Off by default; the DeepSeek driver turns it on.
+     */
+    reasoningRoundTrip: boolean;
+    /**
      * - How Anthropic `thinking` is requested from the server.
      */
     thinking: "chat_template_kwargs" | "reasoning_effort" | "none";
@@ -152,6 +156,7 @@ export type Settings = {
  * @property {"reasoning"|"reasoning_content"} reasoningField - Field used when SENDING reasoning to an OpenAI-style server (reading accepts both).
  * @property {boolean} thinkTags - Parse a leading `<think>...</think>` in content as reasoning.
  * @property {boolean} thinkOpen - With `thinkTags`: the output starts inside a thought because the chat template opens `<think>` in the generation prompt, so reasoning runs up to the first `</think>`. Without a `</think>` the content is plain text.
+ * @property {boolean} reasoningRoundTrip - Carry reasoning the upstream needs back across turns. OpenAI-protocol upstream: the provider's reasoning fields (`reasoning_content`, `reasoning`, `reasoning_details`) travel in the thinking block's `llmt:` signature and are restored on the next request. Anthropic-protocol upstream with an OpenAI client: thinking blocks and their signatures travel as `reasoning_details` items the client replays. Off by default; the DeepSeek driver turns it on.
  * @property {"chat_template_kwargs"|"reasoning_effort"|"none"} thinking - How Anthropic `thinking` is requested from the server.
  * @property {boolean} thinkingBudget - Send `thinking_token_budget` for `thinking.type = "enabled"`.
  * @property {boolean} effort - Map `output_config.effort` to `reasoning_effort`.

@@ -23,6 +23,7 @@ import { createNameFitter } from "../../../../../../../lib/ids.mjs";
 import { sanitize } from "../../../../../../../lib/schema.mjs";
 import { NOTE } from "../../../../../../../lib/images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
+import { unsign } from "../../../../../../../lib/thinking.mjs";
 
 const HANDLED = new Set([
 	"model",
@@ -249,12 +250,16 @@ async function convertMessages(messages, s, state, fit, system, keepThinking) {
 			const all = [...toolParts, ...parts];
 			if (all.length > 0) pushUser(all);
 		} else if (message.role === "assistant") {
-			const turn = { role: "assistant", texts: [], reasoning: [], tool_calls: [] };
+			const turn = { role: "assistant", texts: [], reasoning: [], restored: [], tool_calls: [] };
 			for (const block of asBlocks(message.content)) {
 				if (block.type === "text") {
 					if (block.text !== "") turn.texts.push(block.text);
 				} else if (block.type === "thinking") {
-					if (block.thinking) turn.reasoning.push(block.thinking);
+					// A translator signature that carries the provider's own reasoning fields restores them exactly, whatever the client did to
+					// the thinking text; anything else (a real Anthropic signature, a forged or garbled mark) falls back to the text.
+					const restored = s.reasoningRoundTrip ? await unsign(block.signature) : null;
+					if (restored) turn.restored.push(restored);
+					else if (block.thinking) turn.reasoning.push(block.thinking);
 				} else if (block.type === "redacted_thinking") {
 					drop(state, "redacted_thinking");
 				} else if (block.type === "tool_use") {
@@ -272,6 +277,7 @@ async function convertMessages(messages, s, state, fit, system, keepThinking) {
 			if (last?.role === "assistant") {
 				last.texts.push(...turn.texts);
 				last.reasoning.push(...turn.reasoning);
+				last.restored.push(...turn.restored);
 				last.tool_calls.push(...turn.tool_calls);
 			} else out.push(turn);
 		} else {
@@ -279,7 +285,7 @@ async function convertMessages(messages, s, state, fit, system, keepThinking) {
 		}
 	}
 
-	return finalize(out, s, system, hoisted, keepThinking);
+	return finalize(out, s, system, hoisted, keepThinking, state);
 }
 
 /**
@@ -300,6 +306,30 @@ function thinkingTurnsToKeep(contextManagement, state) {
 }
 
 /**
+ * Merge the reasoning fields restored from several signatures of one assistant turn: text fields are joined without a separator (the
+ * pieces are consecutive parts of one string), `reasoning_details` lists are concatenated.
+ * @param {{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] }[]} list - Decoded signature data.
+ * @returns {Record<string, any>} Fields to set on the assistant message.
+ */
+function restoredFields(list) {
+	const out = {};
+	for (const data of list) {
+		for (const key of ["reasoning_content", "reasoning"]) if (data[key] !== undefined) out[key] = (out[key] ?? "") + data[key];
+		if (data.reasoning_details) out.reasoning_details = [...(out.reasoning_details ?? []), ...data.reasoning_details];
+	}
+	return out;
+}
+
+/**
+ * Does an assistant message carry any reasoning field?
+ * @param {any} message - OpenAI assistant message.
+ * @returns {boolean} True when it has reasoning text or details.
+ */
+function reasoningSent(message) {
+	return Boolean(message.reasoning_content || message.reasoning || message.reasoning_details);
+}
+
+/**
  * Turn the internal message list into OpenAI messages: join text, place reasoning, apply the thinking-turn limit
  * and detect a trailing prefill.
  * @param {any[]} out - Internal messages.
@@ -307,14 +337,18 @@ function thinkingTurnsToKeep(contextManagement, state) {
  * @param {string} system - Leading system text.
  * @param {string[]} hoisted - Inline system texts to append to the leading system message.
  * @param {number} keepThinking - Number of reasoning-bearing assistant turns to keep.
+ * @param {any} state - Conversion state (`reasoningMissing` counts assistant tool turns left without reasoning).
  * @returns {{ messages: any[], prefill: boolean }} Final messages.
  */
-function finalize(out, s, system, hoisted, keepThinking) {
+function finalize(out, s, system, hoisted, keepThinking, state) {
 	let remaining = keepThinking;
 	for (let i = out.length - 1; i >= 0; i--) {
-		if (out[i].role !== "assistant" || out[i].reasoning.length === 0) continue;
+		if (out[i].role !== "assistant" || (out[i].reasoning.length === 0 && out[i].restored.length === 0)) continue;
 		if (remaining > 0) remaining--;
-		else out[i].reasoning = [];
+		else {
+			out[i].reasoning = [];
+			out[i].restored = [];
+		}
 	}
 	const messages = [];
 	const lead = [system, ...hoisted].filter((t) => t !== "").join("\n\n");
@@ -325,7 +359,12 @@ function finalize(out, s, system, hoisted, keepThinking) {
 			messages.push({ role: "user", content: plain ? m.parts.map((p) => p.text).join("\n\n") : m.parts });
 		} else if (m.role === "assistant") {
 			const message = { role: "assistant", content: m.texts.join("\n\n") };
-			if (m.reasoning.length > 0) message[s.reasoningField] = m.reasoning.join("\n\n");
+			if (m.restored.length > 0) Object.assign(message, restoredFields(m.restored));
+			if (m.reasoning.length > 0 && message[s.reasoningField] === undefined) message[s.reasoningField] = m.reasoning.join("\n\n");
+			// A turn that made tool calls and has no reasoning to send back (the client dropped its thinking blocks or their signatures)
+			// is counted, so the caller can warn: servers that require reasoning with tools will refuse the request.
+			if (s.reasoningRoundTrip && m.tool_calls.length > 0 && !reasoningSent(message))
+				state.reasoningMissing = (state.reasoningMissing ?? 0) + 1;
 			if (m.tool_calls.length > 0) message.tool_calls = m.tool_calls;
 			messages.push(message);
 		} else messages.push(m);

@@ -85,6 +85,13 @@ async function prepare(c, body, options, picked) {
 	if (text && !convert && c.front === "openai") upstream = images.strip(upstream);
 	if (options.tools === false) upstream = tools.strip(upstream);
 	upstream.model = model;
+	if (converted?.reasoningMissing) {
+		warn(
+			c.config,
+			c.state,
+			`Upstream ${endpoint.name}: assistant turns with tool calls have no reasoning to send back (the client dropped its thinking blocks or their signatures), which servers that need it with tools will refuse.`
+		);
+	}
 	if (driver.request)
 		upstream = await driver.request(upstream, {
 			endpoint,

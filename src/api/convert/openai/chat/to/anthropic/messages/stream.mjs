@@ -21,7 +21,7 @@ import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError, openaiToAnthropicType, rewriteContextOverflow } from "../../../../../../../lib/errors.mjs";
 import { isComplete } from "../../../../../../../lib/arguments.mjs";
 import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
-import { sign, reasoningOf, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
+import { sign, reasoningOf, reasoningKey, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
 import { toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
 
@@ -70,10 +70,20 @@ export async function* stream(source, state, settings) {
 	const event = (type, fields) => ({ event: type, data: { type, ...fields } });
 	const fail = (type, message) => event("error", { error: { type, message } });
 
+	// The provider reasoning fields of the thinking block being written, carried in its signature when `reasoningRoundTrip` is on.
+	const carried = (carry) => {
+		const data = {};
+		if (s.reasoningRoundTrip) {
+			if (carry.key !== null) data[carry.key] = carry.text;
+			if (carry.details.length > 0) data.reasoning_details = carry.details;
+		}
+		return Object.keys(data).length > 0 ? data : undefined;
+	};
+
 	function* close() {
 		if (open === null) return;
 		if (open.kind === "thinking") {
-			yield event("content_block_delta", { index: open.index, delta: { type: "signature_delta", signature: sign() } });
+			yield event("content_block_delta", { index: open.index, delta: { type: "signature_delta", signature: sign(carried(open.carry)) } });
 		} else if (open.kind === "tool") {
 			open.entry.state = "closed";
 			if (!open.entry.sent)
@@ -113,24 +123,38 @@ export async function* stream(source, state, settings) {
 
 	function* begin(kind, block, entry) {
 		yield* close();
-		open = { kind, index: nextIndex++, entry };
+		open = { kind, index: nextIndex++, entry, carry: { key: null, text: "", details: [] } };
 		yield event("content_block_start", { index: open.index, content_block: block });
 	}
 
-	function* piece(kind, text) {
+	function* piece(kind, text, key = null) {
 		// Models put blank lines between their reasoning and the answer; Anthropic's answers do not start with them.
 		if (kind === "text" && trimNext) text = text.trimStart();
 		if (text === "") return;
 		trimNext = kind === "thinking";
 		if (open?.kind === "tool") {
-			held.push({ kind, text });
+			held.push({ kind, text, key });
 			return;
 		}
 		if (open?.kind !== kind) {
 			yield* begin(kind, kind === "text" ? { type: "text", text: "" } : { type: "thinking", thinking: "", signature: "" });
 		}
+		if (key !== null) {
+			open.carry.key ??= key;
+			open.carry.text += text;
+		}
 		const delta = kind === "text" ? { type: "text_delta", text } : { type: "thinking_delta", thinking: text };
 		yield event("content_block_delta", { index: open.index, delta });
+	}
+
+	// Structured reasoning (`reasoning_details`) belongs to the open thinking block, which it opens when nothing else has.
+	function* details(items) {
+		if (open?.kind === "tool") {
+			held.push({ kind: "details", items });
+			return;
+		}
+		if (open?.kind !== "thinking") yield* begin("thinking", { type: "thinking", thinking: "", signature: "" });
+		open.carry.details.push(...items);
 	}
 
 	function* pieces(split) {
@@ -209,8 +233,11 @@ export async function* stream(source, state, settings) {
 				ownReasoning = true;
 				if (splitter) released = splitter.release().text;
 			}
-			yield* piece("thinking", reasoning);
+			yield* piece("thinking", reasoning, reasoningKey(delta));
 			yield* piece("text", released);
+			if (s.reasoningRoundTrip && Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0) {
+				yield* details(delta.reasoning_details);
+			}
 			if (typeof delta.content === "string" && delta.content !== "") {
 				if (splitter && !ownReasoning) yield* pieces(splitter.push(delta.content));
 				else yield* piece("text", delta.content);
@@ -234,7 +261,7 @@ export async function* stream(source, state, settings) {
 	const last = ordered().at(-1);
 	const argumentsComplete = last === undefined || isComplete(last.args.join(""));
 	yield* close();
-	for (const item of held) yield* piece(item.kind, item.text);
+	for (const item of held) yield* item.kind === "details" ? details(item.items) : piece(item.kind, item.text, item.key);
 	yield* close();
 	if (nextIndex === 0) {
 		yield* begin("text", { type: "text", text: "" });

@@ -16,7 +16,7 @@
 /**
  * @fileoverview DeepSeek driver: host detection, thinking-mode request fixes, reasoning round trip and trailing usage.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeAll, collect, fakeTransport, make } from "../helpers/translator.mjs";
 import { openaiSse } from "../helpers/streams.mjs";
 import { sign } from "../../src/lib/thinking.mjs";
@@ -195,5 +195,155 @@ describe("deepseek usage on the last content chunk", () => {
 		const events = await collect(reply.stream);
 		expect(events.at(-1).data).toBe("[DONE]");
 		expect(await reply.usage).toMatchObject({ input_tokens: 11, output_tokens: 4, reported: true, complete: true });
+	});
+});
+
+describe("deepseek reasoning round trip through the signature (#45)", () => {
+	const reasoning = "I should read the file first, then answer.";
+	const toolReply = {
+		id: "c",
+		object: "chat.completion",
+		model: "deepseek-reasoner",
+		choices: [
+			{
+				index: 0,
+				finish_reason: "tool_calls",
+				message: {
+					role: "assistant",
+					content: "Reading.",
+					reasoning_content: reasoning,
+					tool_calls: [{ id: "call_1", type: "function", function: { name: "Read", arguments: '{"path":"/a"}' } }]
+				}
+			}
+		]
+	};
+	/** Server that answers the first request with a tool call and enforces the reasoning rule on the second. */
+	const conversation = () => {
+		let turn = 0;
+		return deepseek(() => (turn++ === 0 ? { body: toolReply } : { body: completion() }));
+	};
+	const second = (first, edit) => [
+		{ role: "user", content: "read /a" },
+		{ role: "assistant", content: first.body.content.map(edit) },
+		{
+			role: "user",
+			content: [{ type: "tool_result", tool_use_id: first.body.content.find((b) => b.type === "tool_use").id, content: "file body" }]
+		}
+	];
+
+	it("works when the client replays the blocks unchanged", async () => {
+		const transport = conversation();
+		const api = await make({ upstreams: [url], transport });
+		const first = await api.send({
+			model: "deepseek-reasoner",
+			max_tokens: 64,
+			tools: [tool],
+			messages: [{ role: "user", content: "read /a" }]
+		});
+		expect(first.body.content[0].signature).toMatch(/^llmt:/);
+		const reply = await api.send({ model: "deepseek-reasoner", max_tokens: 64, tools: [tool], messages: second(first, (b) => b) });
+		expect(reply.status).toBe(200);
+		expect(chatBody(transport).messages).toBeDefined();
+		const sent = JSON.parse(transport.calls.filter((call) => call.url.endsWith("/chat/completions")).at(-1).init.body);
+		expect(sent.messages.find((m) => m.role === "assistant")).toMatchObject({ reasoning_content: reasoning });
+	});
+
+	it("works when the client dropped or rewrote the thinking text but kept the signature", async () => {
+		for (const text of ["", "something the client summarised"]) {
+			const transport = conversation();
+			const api = await make({ upstreams: [url], transport });
+			const first = await api.send({
+				model: "deepseek-reasoner",
+				max_tokens: 64,
+				tools: [tool],
+				messages: [{ role: "user", content: "read /a" }]
+			});
+			const reply = await api.send({
+				model: "deepseek-reasoner",
+				max_tokens: 64,
+				tools: [tool],
+				messages: second(first, (b) => (b.type === "thinking" ? { ...b, thinking: text } : b))
+			});
+			expect(reply.status).toBe(200);
+			const sent = JSON.parse(transport.calls.filter((call) => call.url.endsWith("/chat/completions")).at(-1).init.body);
+			expect(sent.messages.find((m) => m.role === "assistant").reasoning_content).toBe(reasoning);
+		}
+	});
+
+	it("a garbled mark falls back to the thinking text, and a lost one is refused with an explanation and one warning", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const transport = conversation();
+			const api = await make({ upstreams: [url], transport, silent: false });
+			const first = await api.send({
+				model: "deepseek-reasoner",
+				max_tokens: 64,
+				tools: [tool],
+				messages: [{ role: "user", content: "read /a" }]
+			});
+			const garbled = await api.send({
+				model: "deepseek-reasoner",
+				max_tokens: 64,
+				tools: [tool],
+				messages: second(first, (b) => (b.type === "thinking" ? { ...b, signature: "llmt:~garbage" } : b))
+			});
+			expect(garbled.status).toBe(200);
+			const sent = JSON.parse(transport.calls.filter((call) => call.url.endsWith("/chat/completions")).at(-1).init.body);
+			expect(sent.messages.find((m) => m.role === "assistant").reasoning_content).toBe(reasoning);
+			expect(warn).not.toHaveBeenCalled();
+			const lost = () =>
+				api.send({
+					model: "deepseek-reasoner",
+					max_tokens: 64,
+					tools: [tool],
+					messages: second(first, (b) => (b.type === "thinking" ? { ...b, thinking: "", signature: "EqQB" } : b))
+				});
+			const refused = await lost();
+			await lost();
+			expect(refused.status).toBe(400);
+			expect(refused.body.error.message).toContain("start a new conversation");
+			expect(warn.mock.calls.filter((call) => /no reasoning to send back/.test(call[0]))).toHaveLength(1);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("reasoning_details from another provider round-trip exactly through any upstream that switches the setting on", async () => {
+		const details = [
+			{ type: "reasoning.encrypted", id: "r1", data: "AAECAw==", format: "openai-responses-v1", index: 0 },
+			{ type: "reasoning.text", text: "step", signature: "opaque", format: "anthropic-claude-v1", index: 1 }
+		];
+		const reply = {
+			id: "c",
+			object: "chat.completion",
+			model: "m",
+			choices: [
+				{
+					index: 0,
+					finish_reason: "tool_calls",
+					message: {
+						role: "assistant",
+						content: null,
+						reasoning_details: details,
+						tool_calls: [{ id: "call_9", type: "function", function: { name: "Read", arguments: "{}" } }]
+					}
+				}
+			]
+		};
+		const transport = fakeTransport(() => ({ body: reply }));
+		const api = await make({
+			upstreams: [{ url: "http://router.test", backend: "compatible", settings: { reasoningRoundTrip: true } }],
+			transport
+		});
+		const first = await api.send({ model: "m", max_tokens: 8, tools: [tool], messages: [{ role: "user", content: "go" }] });
+		expect(first.body.content.map((block) => block.type)).toEqual(["thinking", "tool_use"]);
+		await api.send({
+			model: "m",
+			max_tokens: 8,
+			tools: [tool],
+			messages: second(first, (b) => (b.type === "thinking" ? { ...b, thinking: "" } : b))
+		});
+		const sent = JSON.parse(transport.calls.at(-1).init.body);
+		expect(sent.messages.find((m) => m.role === "assistant").reasoning_details).toEqual(details);
 	});
 });

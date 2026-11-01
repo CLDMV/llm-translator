@@ -20,7 +20,7 @@
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
-import { sign, reasoningOf, splitThink } from "../../../../../../../lib/thinking.mjs";
+import { sign, reasoningOf, reasoningKey, detailsText, splitThink } from "../../../../../../../lib/thinking.mjs";
 import { isComplete, parseArguments } from "../../../../../../../lib/arguments.mjs";
 import { toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 
@@ -28,7 +28,7 @@ import { toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/fini
  * Convert a (non-streaming) OpenAI chat completion into an Anthropic message.
  *
  * Reasoning (`reasoning`, `reasoning_content`, or a leading `<think>` block when `thinkTags` is on, or a block closed by `</think>` when `thinkOpen` is also on) becomes a
- * `thinking` block with a translator-marked signature. Tool calls become `tool_use` blocks; arguments that are not
+ * `thinking` block with a translator-marked signature (which carries the provider's reasoning fields when `reasoningRoundTrip` is on). Tool calls become `tool_use` blocks; arguments that are not
  * a JSON object are passed through under `_raw_arguments` so the client reports a tool error the model can recover
  * from.
  * @param {any} completion - OpenAI `chat.completion` object.
@@ -48,9 +48,18 @@ export function response(completion, state, settings) {
 
 	let reasoning = reasoningOf(message);
 	let text = typeof message.content === "string" ? message.content : "";
+	// With `reasoningRoundTrip` the provider's own reasoning fields ride in the signature so they can be sent back exactly.
+	const carry = {};
+	if (s.reasoningRoundTrip) {
+		const key = reasoningKey(message);
+		if (key) carry[key] = message[key];
+		if (Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0)
+			carry.reasoning_details = message.reasoning_details;
+	}
 	if (reasoning === "" && s.thinkTags) ({ reasoning, text } = splitThink(text, s.thinkOpen));
-	if (reasoning !== "") {
-		content.push({ type: "thinking", thinking: reasoning, signature: sign() });
+	if (reasoning === "" && carry.reasoning_details) reasoning = detailsText(carry.reasoning_details);
+	if (reasoning !== "" || carry.reasoning_details) {
+		content.push({ type: "thinking", thinking: reasoning, signature: sign(Object.keys(carry).length > 0 ? carry : undefined) });
 		text = text.trimStart();
 	}
 	if (text === "" && typeof message.refusal === "string") text = message.refusal;
