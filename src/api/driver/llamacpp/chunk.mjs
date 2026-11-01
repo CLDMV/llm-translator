@@ -90,6 +90,8 @@ function ids(delta, state) {
 export function chunk(chunk, ctx) {
 	const delta = chunk?.choices?.[0]?.delta;
 	if (!ctx?.state || delta === null || typeof delta !== "object") return chunk;
+	ctx.state.thinkLegacy ??= { reasoning: false, mode: "start", held: "" };
+	ctx.state.thinkLegacy.base = { id: chunk.id, object: chunk.object, created: chunk.created, model: chunk.model };
 	const next = ids(legacy(delta, ctx.state), ctx.state);
 	if (next === delta) return chunk;
 	const [first, ...rest] = chunk.choices;

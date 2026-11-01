@@ -50,6 +50,13 @@ export function stream(source, state) {
 	const convert = c.converters(endpoint);
 	const normalize = driver.chunk;
 	const ctx = { endpoint, settings, state };
+	/**
+	 * Chunks the driver's normalizer was still holding when the stream ended (`flush(ctx)`), as upstream messages.
+	 * @returns {AsyncGenerator<{data: *}>} Messages to emit before the stream closes.
+	 */
+	async function* flushed() {
+		for (const held of (await driver.flush?.(ctx)) ?? []) yield { data: held };
+	}
 	if (convert && !normalize) return convert.stream(source, state.convert, settings);
 	if (convert) {
 		return convert.stream(
@@ -57,19 +64,25 @@ export function stream(source, state) {
 				for await (const message of messages(source)) {
 					if (message.data !== "[DONE]") yield await normalize(message.data, ctx);
 				}
+				for await (const message of flushed()) yield message.data;
 			})(),
 			state.convert,
 			settings
 		);
 	}
 	return (async function* () {
+		let closed = false;
 		for await (const message of messages(source)) {
 			if (message.data === "[DONE]") {
+				// Held text goes out before the sentinel.
+				for await (const held of flushed()) yield { data: restore(held.data, state.model) };
+				closed = true;
 				yield message;
 				continue;
 			}
 			const data = normalize ? await normalize(message.data, ctx) : message.data;
 			yield { ...message, data: restore(data, state.model) };
 		}
+		if (!closed) for await (const held of flushed()) yield { data: restore(held.data, state.model) };
 	})();
 }

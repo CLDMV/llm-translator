@@ -313,6 +313,48 @@ describe("deepseek-legacy in a stream", () => {
 		});
 	});
 
+	it("a stream that ends while text is held releases it as the answer", async () => {
+		for (const held of ["<", "<thi", "  "]) {
+			const out = anthropic(await run([{ reasoning_content: "r1" }, { content: held }]));
+			expect(out.types).toEqual(["thinking", ...(held.trim() === "" ? [] : ["text"])]);
+			expect(out.text).toBe(held.trim() === "" ? "" : held);
+		}
+		const events = await run([{ reasoning_content: "r1" }, { content: "<" }], "openai");
+		expect(events.map((event) => event.data?.choices?.[0]?.delta?.content ?? "").join("")).toBe("<");
+		expect(events.at(-1).data).toBe("[DONE]");
+		expect(events.findIndex((event) => event.data?.choices?.[0]?.delta?.content === "<")).toBeLessThan(events.length - 1);
+	});
+
+	it("the OpenAI front also flushes when the upstream stream ends without [DONE]", async () => {
+		const frames = [frame({ reasoning_content: "r1" }), frame({ content: "<thi" }), frame({}, "stop")];
+		const transport = server({}, () => new Response(openaiSse(frames), { status: 200, headers: { "content-type": "text/event-stream" } }));
+		const api = await make({ front: "openai", upstreams: [{ url: "http://llama.test", backend: "llamacpp" }], transport });
+		const reply = await api.send({ model: "qwen", stream: true, messages: [{ role: "user", content: "hi" }] });
+		const events = await collect(reply.stream);
+		expect(events.map((event) => event.data?.choices?.[0]?.delta?.content ?? "").join("")).toBe("<thi");
+	});
+
+	it("flush releases nothing when nothing is held, inside a repeated block, or without state", async () => {
+		const api = await make({ upstreams: ["http://x.test"], detect: false });
+		const { flush, chunk } = api.driver.llamacpp;
+		expect(flush({})).toEqual([]);
+		expect(flush({ state: {} })).toEqual([]);
+		const state = {};
+		chunk(frame({ reasoning_content: "r" }), { state });
+		chunk(frame({ content: "<think>dup</th" }), { state });
+		expect(flush({ state })).toEqual([]);
+		const plain = {};
+		chunk(frame({ reasoning_content: "r" }), { state: plain });
+		chunk(frame({ content: "answer" }), { state: plain });
+		expect(flush({ state: plain })).toEqual([]);
+		const held = {};
+		chunk({ ...base, created: 5, choices: [{ index: 0, delta: { reasoning_content: "r" } }] }, { state: held });
+		chunk(frame({ content: "<" }), { state: held });
+		const [out] = flush({ state: held });
+		expect(out).toMatchObject({ id: "c", object: "chat.completion.chunk", model: "qwen", choices: [{ delta: { content: "<" } }] });
+		expect(flush({ state: held })).toEqual([]);
+	});
+
 	it("the OpenAI front receives the answer without the repeated block", async () => {
 		const events = await run([{ reasoning_content: "r1" }, { content: "<think>r1</think>" }, { content: "answer" }], "openai");
 		const text = events.map((event) => event.data?.choices?.[0]?.delta?.content ?? "").join("");
