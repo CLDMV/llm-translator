@@ -11,6 +11,7 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `vllm`       | `openai.chat`        | 10    | `GET /version` returns a version, or `GET /v1/models` lists a model with `owned_by: "vllm"` |
 | `anthropic`  | `anthropic.messages` | 20    | host `api.anthropic.com` (no network access)                                                |
 | `openai`     | `openai.chat`        | 30    | host `api.openai.com` (no network access)                                                   |
+| `deepseek`   | `openai.chat`        | 35    | host `api.deepseek.com` (no request of its own)                                             |
 | `llamacpp`   | `openai.chat`        | 40    | `GET /props` has llama-server fields, or `GET /v1/models` lists `owned_by: "llamacpp"`      |
 | `sglang`     | `openai.chat`        | 50    | `GET /get_server_info` has `model_path`, or `GET /v1/models` lists `owned_by: "sglang"`     |
 | `ollama`     | `openai.chat`        | 60    | `GET /api/version` returns a version                                                        |
@@ -40,7 +41,7 @@ A driver folder contains these files, all optional except `info`:
 - llama.cpp: `GET /props` (fields `default_generation_settings`, `total_slots` or `build_info`) and `GET /v1/models` (`owned_by: "llamacpp"`). Facts are `{ models, build, vision }`; `vision` comes from `modalities.vision` in newer builds and sets `images`.
 - SGLang: `GET /get_server_info` and `GET /v1/models` (`owned_by: "sglang"`). Facts are `{ version, models, modelPath, reasoningParser, toolCallParser }`. SGLang also answers `/version`, so vLLM detection steps aside when `/v1/models` names `sglang` or `llamacpp`.
 - Ollama: `GET /api/version` (and the shared `GET /v1/models` for the model list). Facts are `{ version, models }`.
-- OpenAI and Anthropic: a host-name check, no network.
+- OpenAI, DeepSeek and Anthropic: a host-name check, no request of their own. (vLLM is tried first and probes any host; a hosted API answers it with a 404 or an error.)
 - Generic: `GET /v1/models` for reachability and the served model ids.
 
 ### Text-only models behind any OpenAI-protocol driver
@@ -62,6 +63,17 @@ What the `llamacpp` driver changes compared with the generic one:
 - Tools need `--jinja`. A `400` that names `--jinja` is recognised like vLLM's missing tool parser: the client error gets a hint, and `toolFallback` retries without tools. See [decision D-41](decisions.md).
 
 llama-server also serves `/v1/messages` natively; the driver does not use it (separate issue, [#31](https://github.com/CLDMV/llm-translator/issues/31)). Nothing here has been run against a real `llama-server` yet: the detection fields, the `deepseek-legacy` shape and the refusal wordings come from the llama.cpp documentation and sources (tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70)).
+
+## DeepSeek API
+
+What the `deepseek` driver changes compared with the generic one:
+
+- `reasoningField: "reasoning_content"`, `maxTokensField: "max_tokens"`, `topK: false`, `prefill: "none"`, `responseFormat: false` (the API takes `json_object` only, not `json_schema`), `images: false` (text-only models), and no thinking switch: thinking follows the model (`deepseek-reasoner`).
+- In thinking mode (a `reasoner` model, or a body that enables `thinking`) a forced `tool_choice` (`required` or a named function) and `logprobs`/`top_logprobs` are removed and recorded in `state.dropped`; `auto` and `none` stay.
+- Usage that arrives on the last content chunk (rather than a separate `choices: []` chunk) is read like any other usage, for both fronts and the usage report.
+- With tools, DeepSeek requires the `reasoning_content` of earlier turns to be sent back. The translator already sends thinking blocks that the client replays as `reasoning_content`, so a conversation whose history still carries its thinking blocks works. When the history lacks them (the client did not replay them, or `clear_thinking` removed them) DeepSeek answers 400, and the driver appends an explanation to that error. Keeping the reasoning on the translator's side so such conversations work is not part of this driver: it is the reasoning side channel, tracked in [#45](https://github.com/CLDMV/llm-translator/issues/45).
+
+Nothing here has been run against the real API: the `/v1` paths, the model names that mean thinking mode and the error wording are from the DeepSeek documentation (tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70)). See [decision D-44](decisions.md).
 
 ## SGLang
 
