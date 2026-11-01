@@ -73,6 +73,7 @@ export function response(completion, state, settings) {
 		matchedStop: choice.stop_reason,
 		argumentsComplete: calls.length === 0 || isComplete(calls.at(-1).function.arguments)
 	});
+	if (state && completion.usage) state.upstreamUsage = completion.usage;
 	return {
 		id: messageId(),
 		type: "message",

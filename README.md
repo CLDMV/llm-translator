@@ -19,7 +19,7 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ### Latest: v0.2.0 (October 2026)
 
-- **The translator** — six converters between the Anthropic Messages API and OpenAI Chat Completions (requests, responses and streams, both directions), backend detection with `vllm`, `openai`, `anthropic` and generic `compatible` drivers, model aliases and routing, and `createTranslator` with `request`, `response`, `stream`, `send` and `detect`. Text, images, PDFs, tools and reasoning are mapped; whatever has no counterpart is dropped, rejected or replaced by a note, never guessed.
+- **The translator** — six converters between the Anthropic Messages API and OpenAI Chat Completions (requests, responses and streams, both directions), backend detection with `vllm`, `openai`, `anthropic` and generic `compatible` drivers, model aliases and routing, and `createTranslator` with `request`, `response`, `stream`, `send`, `route` and `detect`. Text, images, PDFs, tools and reasoning are mapped; whatever has no counterpart is dropped, rejected or replaced by a note, never guessed.
 - **Server and CLI for Claude Code** — an Anthropic or OpenAI front over Fastify (optional peer dependency) and the `llm-translator` command. Slow upstreams are supported: no transport timeouts, and early `message_start` plus keep-alive deltas satisfy Claude Code's stream watchdog during long prefills. Models that refuse images are detected at startup or on the first refusal and retried once without them.
 - [View full v0.2.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.2.0.md)
 
@@ -97,6 +97,10 @@ const call = await api.request({ model: "claude-opus-5-5", max_tokens: 256, mess
 // Or let the translator do the full round trip.
 const reply = await api.send({ model: "qwen3-coder", max_tokens: 256, stream: true, messages: [{ role: "user", content: "hi" }] });
 if (reply.stream) for await (const { event, data } of reply.stream) console.log(event, data);
+
+// Where would a request go, and what did it cost? (see docs/server.md)
+const { upstream, model } = api.route({ model: "claude-opus-5-5" }); // no I/O
+const { input_tokens, output_tokens, reported } = await reply.usage; // or send(body, { onUsage })
 ```
 
 ### Server and Claude Code
