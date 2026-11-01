@@ -31,6 +31,7 @@ import { TranslatorError } from "./errors.mjs";
  * @property {boolean} effort - Map `output_config.effort` to `reasoning_effort`.
  * @property {boolean} images - The model accepts images. When false images are replaced by a text note.
  * @property {boolean} imageFallback - Retry a request once without images when an OpenAI-protocol upstream answers 400 that the model does not accept images, and remember that for the endpoint and model until the process ends.
+ * @property {boolean} toolFallback - Retry a request once without tools when an OpenAI-protocol upstream answers 400 that tool parsing is not enabled (vLLM started without `--enable-auto-tool-choice` and `--tool-call-parser`). Off by default: the request then runs without tools, which silently changes what the model can do.
  * @property {"extract"|"note"|"error"} documents - How `document` blocks are handled.
  * @property {((block: object, ctx: object) => Promise<object[]>|object[])|null} documentConverter - Override for `document` conversion; returns Anthropic content blocks.
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
@@ -63,6 +64,7 @@ export const DEFAULTS = Object.freeze({
 	effort: false,
 	images: true,
 	imageFallback: true,
+	toolFallback: false,
 	documents: "extract",
 	documentConverter: null,
 	pdf: Object.freeze({ pages: true, maxPages: 100, maxBytes: 32 * 1024 * 1024, maxImages: 20, scale: 1.5 }),
@@ -97,7 +99,7 @@ const ENUMS = {
 	toolStreaming: ["buffer", "stream"]
 };
 
-const BOOLEANS = ["effortPassthrough", "passthroughFilter", "imageFallback"];
+const BOOLEANS = ["effortPassthrough", "passthroughFilter", "imageFallback", "toolFallback"];
 
 /**
  * Merge settings layers (later layers win, `undefined` values are skipped, `pdf` merges key by key) and validate

@@ -21,6 +21,7 @@ import { context, self } from "../lib/runtime.mjs";
 import { TranslatorError } from "../lib/errors.mjs";
 import * as http from "../lib/http.mjs";
 import * as images from "../lib/images.mjs";
+import * as tools from "../lib/tools.mjs";
 import { parse as parseError } from "../lib/upstream-error.mjs";
 import { meter as createMeter } from "../lib/usage.mjs";
 import { warn } from "../lib/warn.mjs";
@@ -109,13 +110,22 @@ async function round({ transport, textOnly, request, response, stream, error }, 
 	let upstream = await request(body, ask);
 	note(upstream);
 	let result = await call(transport, upstream, options.signal);
-	if (!result.ok && result.status === 400 && upstream.images.sent && upstream.images.retry) {
-		// A text-only model behind an OpenAI-protocol upstream: ask once more without the images and remember the model.
+	if (
+		!result.ok &&
+		result.status === 400 &&
+		((upstream.images.sent && upstream.images.retry) || (upstream.tools.sent && upstream.tools.retry))
+	) {
+		// A text-only model, or a vLLM server without tool parsing, behind an OpenAI-protocol upstream: ask once more without what it
+		// refused. A refused image is remembered for the model; a refused tool list is not (the server may be restarted with the flags).
 		const failure = await parse(result);
-		if (!images.refused(parseError(failure, 400).message))
-			return fail(400, failure, http.plain(result.headers), upstream.state, "upstream_error");
-		textOnly.add(upstream.images.key);
-		upstream = await request(body, { ...ask, images: false });
+		const message = parseError(failure, 400).message;
+		const retry = {};
+		if (upstream.images.sent && upstream.images.retry && images.refused(message)) {
+			textOnly.add(upstream.images.key);
+			retry.images = false;
+		} else if (upstream.tools.sent && upstream.tools.retry && tools.refused(message)) retry.tools = false;
+		if (!("images" in retry || "tools" in retry)) return fail(400, failure, http.plain(result.headers), upstream.state, "upstream_error");
+		upstream = await request(body, { ...ask, ...retry });
 		note(upstream);
 		result = await call(transport, upstream, options.signal);
 	}
