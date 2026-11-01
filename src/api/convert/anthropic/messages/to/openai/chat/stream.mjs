@@ -48,6 +48,9 @@ export async function* stream(source, state, settings) {
 	let finished = false;
 	// The thinking or redacted thinking block being read, replayed as one `reasoning_details` item when it stops (`reasoningRoundTrip`).
 	let reasoningBlock = null;
+	// Position of a reasoning item among what the OpenAI message shows: the text (one part) and then each tool call.
+	let textBlock = false;
+	let toolBlocks = 0;
 
 	const chunk = (delta, finishReason = null, extra = {}) => ({
 		data: {
@@ -73,8 +76,11 @@ export async function* stream(source, state, settings) {
 				yield chunk({ role: "assistant", content: "" });
 			} else if (data.type === "content_block_start") {
 				const block = data.content_block;
-				if (block.type === "thinking" || block.type === "redacted_thinking")
-					reasoningBlock = { type: block.type, data: block.data, thinking: "", signature: "" };
+				if (block.type === "thinking" || block.type === "redacted_thinking") {
+					reasoningBlock = { type: block.type, data: block.data, thinking: "", signature: "", slot: toolBlocks + (textBlock ? 1 : 0) };
+				}
+				if (block.type === "text") textBlock = true;
+				if (block.type === "tool_use") toolBlocks++;
 				if (block.type === "tool_use") {
 					tools.set(data.index, tools.size);
 					const name = restoreName(toolNames, block.name);
@@ -94,7 +100,7 @@ export async function* stream(source, state, settings) {
 					yield chunk({ tool_calls: [{ index: tools.get(data.index), function: { arguments: delta.partial_json } }] });
 				}
 			} else if (data.type === "content_block_stop") {
-				const detail = s.reasoningRoundTrip && reasoningBlock ? detailOf(reasoningBlock, data.index) : null;
+				const detail = s.reasoningRoundTrip && reasoningBlock ? detailOf(reasoningBlock, reasoningBlock.slot) : null;
 				if (detail) yield chunk({ reasoning_details: [detail] });
 				reasoningBlock = null;
 			} else if (data.type === "message_delta") {

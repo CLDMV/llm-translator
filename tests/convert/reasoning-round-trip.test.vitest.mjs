@@ -17,14 +17,17 @@
  * @fileoverview Reasoning side channel (`reasoningRoundTrip`): provider reasoning fields carried in thinking-block signatures (OpenAI-protocol
  * upstreams) and Anthropic thinking blocks carried as `reasoning_details` (OpenAI clients).
  */
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { request as toOpenaiRequest } from "../../src/api/convert/anthropic/messages/to/openai/chat/request.mjs";
 import { response as toAnthropicResponse } from "../../src/api/convert/openai/chat/to/anthropic/messages/response.mjs";
 import { stream as toAnthropicStream } from "../../src/api/convert/openai/chat/to/anthropic/messages/stream.mjs";
 import { request as toAnthropicRequest } from "../../src/api/convert/openai/chat/to/anthropic/messages/request.mjs";
 import { response as toOpenaiResponse } from "../../src/api/convert/anthropic/messages/to/openai/chat/response.mjs";
 import { stream as toOpenaiStream } from "../../src/api/convert/anthropic/messages/to/openai/chat/stream.mjs";
-import { ANTHROPIC_FORMAT, sign, unsign } from "../../src/lib/thinking.mjs";
+import { ANTHROPIC_FORMAT, createBudget, sign, unsign } from "../../src/lib/thinking.mjs";
+import { closeAll, make } from "../helpers/translator.mjs";
+
+afterEach(closeAll);
 import { deflateRawSync } from "node:zlib";
 import { collect, openaiSse } from "../helpers/streams.mjs";
 
@@ -263,7 +266,7 @@ describe("Anthropic upstream with an OpenAI client: thinking blocks travel as re
 		const out = toOpenaiResponse(message, undefined, on);
 		expect(out.choices[0].message.reasoning_details).toEqual([
 			{ type: "reasoning.text", text: "plan", signature: "EqQBsig", format: ANTHROPIC_FORMAT, index: 0 },
-			{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 1 }
+			{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 0 }
 		]);
 		expect(out.choices[0].message.reasoning).toBe("plan" + "no signature");
 		expect(toOpenaiResponse(message).choices[0].message.reasoning_details).toBeUndefined();
@@ -307,7 +310,7 @@ describe("Anthropic upstream with an OpenAI client: thinking blocks travel as re
 		const items = (chunks) => chunks.flatMap((c) => c.data?.choices?.[0]?.delta?.reasoning_details ?? []);
 		expect(items(await run(on))).toEqual([
 			{ type: "reasoning.text", text: "plan", signature: "EqQBsig", format: ANTHROPIC_FORMAT, index: 0 },
-			{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 1 }
+			{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 0 }
 		]);
 		expect(items(await run({}))).toEqual([]);
 		const noSignature = events.filter((e) => e.type !== "content_block_delta" || e.delta.type !== "signature_delta");
@@ -318,7 +321,7 @@ describe("Anthropic upstream with an OpenAI client: thinking blocks travel as re
 				on
 			)
 		);
-		expect(items(bare)).toEqual([{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 1 }]);
+		expect(items(bare)).toEqual([{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 0 }]);
 	});
 
 	test("reasoning deltas that arrive without a block start are tolerated", async () => {
@@ -362,7 +365,7 @@ describe("Anthropic upstream with an OpenAI client: thinking blocks travel as re
 	test("replayed items become thinking blocks ahead of the text and tool calls; anything else is ignored", async () => {
 		const items = [
 			{ type: "reasoning.text", text: "plan", signature: "EqQBsig", format: ANTHROPIC_FORMAT, index: 0 },
-			{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 1 },
+			{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 0 },
 			{ type: "reasoning.text", text: "foreign", signature: "x", format: "openai-responses-v1" },
 			{ role: "system" }
 		];
@@ -542,7 +545,7 @@ describe("reasoning side channel: review fixes", () => {
 	test("replayed thinking keeps its place between text and tool use", async () => {
 		const items = [
 			{ type: "reasoning.text", text: "first", signature: "s1", format: ANTHROPIC_FORMAT, index: 0 },
-			{ type: "reasoning.text", text: "second", signature: "s2", format: ANTHROPIC_FORMAT, index: 2 },
+			{ type: "reasoning.text", text: "second", signature: "s2", format: ANTHROPIC_FORMAT, index: 1 },
 			{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 9 }
 		];
 		const body = {
@@ -584,5 +587,142 @@ describe("reasoning side channel: review fixes", () => {
 			on
 		);
 		expect(reply.choices[0].message.reasoning_details[0].index).toBe(1);
+	});
+});
+
+describe("reasoning side channel: second review", () => {
+	const turnWith = (signature, id) => ({
+		role: "assistant",
+		content: [
+			{ type: "thinking", thinking: "plain", signature },
+			{ type: "tool_use", id, name: "Read", input: {} }
+		]
+	});
+	const result = (id) => ({ role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] });
+
+	test("signatures are decoded newest turn first, so a small budget goes to the latest turns", async () => {
+		const old = sign({ reasoning_content: "old" });
+		const recent = sign({ reasoning_content: "recent" });
+		const body = {
+			model: "m",
+			max_tokens: 8,
+			messages: [{ role: "user", content: "go" }, turnWith(old, "a"), result("a"), turnWith(recent, "b"), result("b")]
+		};
+		const budget = { ...createBudget(), signatures: 1 };
+		const assistants = (await toOpenaiRequest(body, on, { budget })).body.messages.filter((m) => m.role === "assistant");
+		expect(assistants[0].reasoning).toBe("plain");
+		expect(assistants[0].reasoning_content).toBeUndefined();
+		expect(assistants[1].reasoning_content).toBe("recent");
+	});
+
+	test("positions are relative to what the OpenAI client sees, so interleaved thinking replays in place", async () => {
+		const message = {
+			id: "msg_1",
+			type: "message",
+			role: "assistant",
+			model: "claude",
+			content: [
+				{ type: "thinking", thinking: "one", signature: "S1" },
+				{ type: "text", text: "a" },
+				{ type: "text", text: "b" },
+				{ type: "thinking", thinking: "two", signature: "S2" },
+				{ type: "tool_use", id: "toolu_1", name: "Read", input: {} },
+				{ type: "thinking", thinking: "three", signature: "S3" },
+				{ type: "tool_use", id: "toolu_2", name: "Read", input: {} }
+			],
+			stop_reason: "tool_use",
+			usage: {}
+		};
+		const reply = toOpenaiResponse(message, undefined, on);
+		expect(reply.choices[0].message.reasoning_details.map((item) => item.index)).toEqual([0, 1, 2]);
+		const sent = reply.choices[0].message;
+		const body = {
+			model: "claude",
+			max_tokens: 8,
+			messages: [
+				{ role: "user", content: "go" },
+				{ role: "assistant", content: sent.content, reasoning_details: sent.reasoning_details, tool_calls: sent.tool_calls },
+				{ role: "tool", tool_call_id: "toolu_1", content: "ok" },
+				{ role: "tool", tool_call_id: "toolu_2", content: "ok" }
+			]
+		};
+		const content = (await toAnthropicRequest(body, on)).body.messages.find((m) => m.role === "assistant").content;
+		expect(content.map((block) => block.thinking ?? block.type)).toEqual(["one", "text", "two", "tool_use", "three", "tool_use"]);
+	});
+
+	test("the same positions come out of a stream, and a message with no text counts tool calls only", async () => {
+		const events = [
+			{
+				type: "message_start",
+				message: {
+					id: "msg_1",
+					type: "message",
+					role: "assistant",
+					model: "claude",
+					content: [],
+					usage: { input_tokens: 1, output_tokens: 0 }
+				}
+			},
+			{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "Read", input: {} } },
+			{ type: "content_block_stop", index: 0 },
+			{ type: "content_block_start", index: 1, content_block: { type: "thinking", thinking: "", signature: "" } },
+			{ type: "content_block_delta", index: 1, delta: { type: "signature_delta", signature: "S" } },
+			{ type: "content_block_stop", index: 1 },
+			{ type: "content_block_start", index: 2, content_block: { type: "text", text: "" } },
+			{ type: "content_block_stop", index: 2 },
+			{ type: "content_block_start", index: 3, content_block: { type: "thinking", thinking: "", signature: "" } },
+			{ type: "content_block_delta", index: 3, delta: { type: "signature_delta", signature: "T" } },
+			{ type: "content_block_stop", index: 3 },
+			{ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+			{ type: "message_stop" }
+		];
+		const chunks = await collect(
+			toOpenaiStream(
+				events.map((data) => ({ event: data.type, data })),
+				undefined,
+				on
+			)
+		);
+		expect(chunks.flatMap((c) => c.data?.choices?.[0]?.delta?.reasoning_details ?? []).map((item) => item.index)).toEqual([1, 2]);
+	});
+
+	test("one budget serves every attempt of a send, and its results are cached", async () => {
+		const api = await make({
+			upstreams: [{ url: "http://a.test", backend: "compatible", settings: { reasoningRoundTrip: true } }],
+			detect: false
+		});
+		const signature = sign({ reasoning_content: "kept" }, "compatible:openai.chat:a.test");
+		const body = { model: "m", max_tokens: 8, messages: [{ role: "user", content: "go" }, turnWith(signature, "a"), result("a")] };
+		const budget = createBudget();
+		const first = await api.request(body, { budget });
+		const second = await api.request(body, { budget });
+		expect(first.body.messages.find((m) => m.role === "assistant").reasoning_content).toBe("kept");
+		expect(second.body.messages.find((m) => m.role === "assistant").reasoning_content).toBe("kept");
+		expect(budget.signatures).toBe(1023);
+	});
+
+	test("the producer includes the host, so two generic upstreams do not share data", async () => {
+		const mine = await make({
+			upstreams: [{ url: "http://b.test", backend: "compatible", settings: { reasoningRoundTrip: true } }],
+			detect: false
+		});
+		const body = (signature) => ({
+			model: "m",
+			max_tokens: 8,
+			messages: [{ role: "user", content: "go" }, turnWith(signature, "a"), result("a")]
+		});
+		const turn = async (signature) => (await mine.request(body(signature))).body.messages.find((m) => m.role === "assistant");
+		expect((await turn(sign({ reasoning_content: "x" }, "compatible:openai.chat:a.test"))).reasoning_content).toBeUndefined();
+		expect((await turn(sign({ reasoning_content: "x" }, "compatible:openai.chat:b.test"))).reasoning_content).toBe("x");
+		expect((await turn(sign({ reasoning_content: "x" }))).reasoning_content).toBeUndefined();
+		const odd = await make({
+			upstreams: [{ url: "not a url", backend: "compatible", settings: { reasoningRoundTrip: true } }],
+			detect: false
+		});
+		expect(
+			(await odd.request(body(sign({ reasoning_content: "x" }, "compatible:openai.chat:not a url")))).body.messages.find(
+				(m) => m.role === "assistant"
+			).reasoning_content
+		).toBe("x");
 	});
 });

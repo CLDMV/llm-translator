@@ -39,9 +39,10 @@ const MAX_TEXT = 512 * 1024;
 const MAX_ITEMS = 256;
 const MAX_KEYS = 32;
 const MAX_DEPTH = 5;
-/** Per request: most bytes inflated or decoded in total, most marked signatures decoded, and the largest output-to-input ratio of an inflated signature. */
+/** Per request: most bytes inflated or decoded in total, most marked signatures decoded, most failed decodes before decoding stops, and the largest output-to-input ratio of an inflated signature. */
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_REQUEST_SIGNATURES = 1024;
+const MAX_REQUEST_FAILURES = 8;
 const MAX_RATIO = 30;
 /** `format` of the `reasoning_details` items that carry an Anthropic thinking block (text with its signature) or redacted thinking (data). */
 export const ANTHROPIC_FORMAT = "anthropic-claude-v1";
@@ -89,22 +90,22 @@ function validate(data) {
  *
  * Format: `llmt:` followed by the base64url of a JSON payload `{"v":1}`, or `{"v":1,"p":"<producer>","d":{...}}` when provider reasoning data has to
  * come back with the block. `p` names the driver and protocol that produced the data (so it is restored only for the same producer) and `d` holds
- * one text field (`reasoning_content` or `reasoning`) and/or `reasoning_details`. A payload longer than 512 characters is deflated and written
+ * one text field (`reasoning_content` or `reasoning`) and/or `reasoning_details`. A payload longer than 512 bytes is deflated and written
  * as `llmt:~` plus base64url, unless that would not shrink it or would exceed the 30:1 inflation ratio {@link unsign} accepts. Data that
  * {@link unsign} would reject (over the size limits, unknown shape) or a result over 256 KiB leaves the plain marker.
  * @param {{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] }} [data] - Provider reasoning data to carry.
- * @param {string} [producer] - Producer binding, `driver:protocol`.
+ * @param {string} [producer] - Producer binding, `driver:protocol:host`.
  * @returns {string} Signature string.
  */
 export function sign(data, producer) {
 	const clean = data === undefined ? null : validate(data);
 	if (clean === null) return marker();
-	const json = JSON.stringify(producer === undefined ? { v: 1, d: clean } : { v: 1, p: producer, d: clean });
-	if (json.length > MAX_JSON) return marker();
-	let body = Buffer.from(json).toString("base64url");
-	if (json.length > PACK_AT) {
-		const packed = deflateRawSync(Buffer.from(json));
-		if (json.length <= MAX_RATIO * packed.length && packed.length < json.length) body = PACKED + packed.toString("base64url");
+	const bytes = Buffer.from(JSON.stringify(producer === undefined ? { v: 1, d: clean } : { v: 1, p: producer, d: clean }));
+	if (bytes.length > MAX_JSON) return marker();
+	let body = bytes.toString("base64url");
+	if (bytes.length > PACK_AT) {
+		const packed = deflateRawSync(bytes);
+		if (bytes.length <= MAX_RATIO * packed.length && packed.length < bytes.length) body = PACKED + packed.toString("base64url");
 	}
 	const out = PREFIX + body;
 	return out.length > MAX_SIGNATURE ? marker() : out;
@@ -143,51 +144,78 @@ function plain(value, depth) {
 }
 
 /**
- * The limits on decoding signatures within one request: how many bytes may be inflated or decoded in total and how many marked signatures
- * may be decoded. Once either is spent, further signatures are not decoded and the caller falls back to the thinking text.
- * @returns {{ bytes: number, signatures: number }} A fresh budget for one request.
+ * The limits on decoding signatures within one request, shared by every conversion of it (retries and failover included): how many bytes may be
+ * inflated or decoded in total, how many marked signatures may be decoded, and how many decodes may fail before decoding stops for the rest of the
+ * request. Bytes are charged before a signature is inflated (the most it could produce) and refunded down to what it did produce, so a signature that
+ * fails still costs. Results are cached by producer and signature, so converting the same request again costs nothing. Once the budget is spent the
+ * caller falls back to the thinking text.
+ * @returns {{ bytes: number, signatures: number, failures: number, cache: Map<string, any> }} A fresh budget for one request.
  */
 export function createBudget() {
-	return { bytes: MAX_REQUEST_BYTES, signatures: MAX_REQUEST_SIGNATURES };
+	return { bytes: MAX_REQUEST_BYTES, signatures: MAX_REQUEST_SIGNATURES, failures: MAX_REQUEST_FAILURES, cache: new Map() };
 }
 
 /**
  * Read the provider reasoning data out of a signature made by {@link sign}. Strict: the signature must carry the mark, be within the size
- * limits and decode to `{"v":1,"d":{...}}` with only the known fields, each well formed; a payload bound to a producer is returned only for that
- * same producer. Anything else (a real Anthropic signature, a plain marker, a forged, garbled or foreign one) gives null and the caller falls back to
- * the thinking text. Inflation is bounded while it runs: by 1 MiB per signature, by the rest of the per-request budget, and by a 30:1 ratio of
- * output to compressed input, so a small signature cannot expand into a large allocation.
+ * limits and decode to `{"v":1,"p":...,"d":{...}}` with only the known fields, each well formed, and its producer must equal `producer`
+ * (a payload with no producer is returned only when none is given). Anything else (a real Anthropic signature, a plain marker, a forged, garbled or
+ * foreign one) gives null and the caller falls back to the thinking text. Inflation is bounded while it runs: by 1 MiB per signature, by the rest of
+ * the per-request budget, and by a 30:1 ratio of output to compressed input, so a small signature cannot expand into a large allocation; after a few
+ * failed decodes the rest of the request is not decoded at all.
  * @param {unknown} signature - Signature value from a thinking block.
- * @param {{ producer?: string, budget?: { bytes: number, signatures: number } }} [options] - `producer` is the current `driver:protocol`; `budget` is shared by all signatures of one request (see {@link createBudget}).
+ * @param {{ producer?: string, budget?: ReturnType<typeof createBudget> }} [options] - `producer` is the current `driver:protocol:host`; `budget` is shared by all signatures of one request (see {@link createBudget}).
  * @returns {Promise<{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] } | null>} The data, or null.
  */
 export async function unsign(signature, { producer, budget = createBudget() } = {}) {
-	if (!isOurs(signature) || signature.length > MAX_SIGNATURE || budget.signatures <= 0) return null;
+	if (!isOurs(signature) || signature.length > MAX_SIGNATURE) return null;
+	const key = `${producer}\n${signature}`;
+	if (budget.cache.has(key)) return budget.cache.get(key);
+	if (budget.signatures <= 0 || budget.failures <= 0) return null;
 	budget.signatures--;
+	const result = await decode(signature, producer, budget);
+	if (result === undefined) {
+		budget.failures--;
+		budget.cache.set(key, null);
+		return null;
+	}
+	budget.cache.set(key, result);
+	return result;
+}
+
+/**
+ * Decode one marked signature, charging the budget before any inflation.
+ * @param {string} signature - Marked signature within the length limit.
+ * @param {string | undefined} producer - Current producer.
+ * @param {ReturnType<typeof createBudget>} budget - Per-request budget.
+ * @returns {Promise<object | null | undefined>} The data; null for a well-formed signature that is not for this producer or carries nothing; undefined when it failed to decode (counts as a failure).
+ */
+async function decode(signature, producer, budget) {
 	try {
 		let body = signature.slice(PREFIX.length);
 		const packed = body.startsWith(PACKED);
 		if (packed) body = body.slice(PACKED.length);
-		if (!BASE64URL.test(body)) return null;
+		if (!BASE64URL.test(body)) return undefined;
 		const raw = Buffer.from(body, "base64url");
 		const limit = Math.min(MAX_JSON, budget.bytes);
-		if (limit <= 0) return null;
-		const bytes = packed ? await inflate(raw, { maxOutputLength: Math.max(1, Math.min(limit, MAX_RATIO * raw.length)) }) : raw;
-		if (bytes.length > limit) return null;
-		budget.bytes -= bytes.length;
+		// The most this signature may produce is charged up front; what it did not produce is refunded once it has been read.
+		const attempt = packed ? Math.min(limit, MAX_RATIO * raw.length) : raw.length;
+		if (attempt < 1 || attempt > limit) return undefined;
+		budget.bytes -= attempt;
+		const bytes = packed ? await inflate(raw, { maxOutputLength: attempt }) : raw;
+		budget.bytes += attempt - bytes.length;
 		const payload = JSON.parse(bytes.toString("utf8"));
-		if (payload?.v !== 1 || payload.d === undefined) return null;
-		if (payload.p !== undefined && (typeof payload.p !== "string" || payload.p !== producer)) return null;
-		return validate(payload.d);
+		if (payload?.v !== 1 || payload.d === undefined) return undefined;
+		if (payload.p !== producer) return null;
+		return validate(payload.d) ?? undefined;
 	} catch {
-		return null;
+		return undefined;
 	}
 }
 
 /**
  * The `reasoning_details` item for an Anthropic thinking block or redacted thinking block, in the form an OpenAI client replays.
  * @param {any} block - Anthropic `thinking` or `redacted_thinking` content block (with its signature or data).
- * @param {number} index - Position of the block among all content blocks of its message.
+ * @param {number} index - Position among what the OpenAI message shows: 0 before the text, 1 after it (or before the first tool call when there is no text), then one more for each tool call.
  * @returns {object | null} The item, or null for a block that cannot be replayed (no signature or data).
  */
 export function detailOf(block, index) {
@@ -211,7 +239,7 @@ export function detailOf(block, index) {
  * translator's Anthropic format with the expected string fields become blocks, only their known fields are copied, and at most 64 items
  * totalling 1 MiB of text are taken; anything else is ignored.
  * @param {unknown} details - `reasoning_details` of an assistant message.
- * @returns {{ at: number, block: any }[]} Anthropic content blocks with the position (`index`) they had in the original message, which the caller uses to keep thinking in place between text and tool use (possibly empty).
+ * @returns {{ at: number, block: any }[]} Anthropic content blocks with the position (`index`) they had in the original message, which the caller uses to keep thinking in place between the text and the tool calls (possibly empty).
  */
 export function blocksOf(details) {
 	const position = (item) => (Number.isInteger(item.index) && item.index >= 0 ? item.index : 0);

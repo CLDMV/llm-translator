@@ -28,6 +28,7 @@ import { capture } from "../lib/capture.mjs";
 import { estimate, bodyLength, output, patch, stream as estimating } from "../lib/estimate.mjs";
 import { warn } from "../lib/warn.mjs";
 import * as pool from "../lib/pool.mjs";
+import { createBudget } from "../lib/thinking.mjs";
 
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
 
@@ -91,7 +92,14 @@ export async function send(body, options = {}) {
  * @returns {Promise<any>} Client-protocol reply.
  */
 async function round({ transport, textOnly, request, response, stream, error, captured }, body, options, meter) {
-	const ask = { front: options.front, headers: options.headers, clientHeaders: options.clientHeaders, filter: options.filter, usage: true };
+	const ask = {
+		front: options.front,
+		headers: options.headers,
+		clientHeaders: options.clientHeaders,
+		filter: options.filter,
+		usage: true,
+		budget: createBudget()
+	};
 	// An OpenAI-front client sees the final usage chunk only when it asked for one; the meter always gets it.
 	const hide = meter.meta.front === "openai" && body?.stream_options?.include_usage !== true;
 	/**

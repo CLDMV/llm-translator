@@ -39,11 +39,17 @@ export function response(message, state, settings) {
 	const reasoning = [];
 	const toolCalls = [];
 	const details = [];
-	for (const [at, block] of (message.content ?? []).entries()) {
+	// A reasoning item records where its block sat among what the OpenAI message shows: the text (all text blocks make one part) and then each
+	// tool call. Counting only those keeps the position meaningful after the text blocks were joined.
+	let slot = 0;
+	let textSeen = false;
+	for (const block of message.content ?? []) {
 		if (s.reasoningRoundTrip) {
-			const detail = detailOf(block, at);
+			const detail = detailOf(block, slot + (textSeen ? 1 : 0));
 			if (detail) details.push(detail);
 		}
+		if (block.type === "text") textSeen = true;
+		if (block.type === "tool_use") slot++;
 		if (block.type === "text") text.push(block.text);
 		else if (block.type === "thinking") reasoning.push(block.thinking);
 		else if (block.type === "tool_use") {

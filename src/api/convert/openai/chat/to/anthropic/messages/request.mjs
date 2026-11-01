@@ -191,8 +191,9 @@ function drop(state, name) {
 }
 
 /**
- * Put replayed thinking blocks back where they were: each goes at the position it had among the original message's blocks (its `index`), ahead of
- * the text and tool calls that follow it. The message's text and tool calls keep their order; positions past the end go last.
+ * Put replayed thinking blocks back where they were. A block's `at` is its position among what the OpenAI message showed: 0 is before the text,
+ * 1 after the text and before the first tool call (or before the first tool call when there is no text), and so on. The message's text and tool
+ * calls keep their order; a block never moves past a part it preceded, and positions beyond the end go last.
  * @param {{ at: number, block: any }[]} thinking - Thinking blocks with their original positions.
  * @param {any[]} rest - The assistant message's text and tool_use blocks.
  * @returns {any[]} Content blocks in order.
@@ -201,12 +202,11 @@ function interleave(thinking, rest) {
 	const ordered = [...thinking].sort((left, right) => left.at - right.at);
 	const out = [];
 	let next = 0;
-	let other = 0;
-	while (next < ordered.length || other < rest.length) {
-		if (next < ordered.length && (other >= rest.length || ordered[next].at <= out.length)) out.push(ordered[next++].block);
-		else out.push(rest[other++]);
+	for (const entry of ordered) {
+		while (next < Math.min(entry.at, rest.length)) out.push(rest[next++]);
+		out.push(entry.block);
 	}
-	return out;
+	return [...out, ...rest.slice(next)];
 }
 
 /**

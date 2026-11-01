@@ -19,6 +19,7 @@ import { deflateRawSync } from "node:zlib";
 import {
 	ANTHROPIC_FORMAT,
 	blocksOf,
+	createBudget,
 	createThinkSplitter,
 	detailOf,
 	detailsText,
@@ -341,27 +342,36 @@ describe("limits on signatures", () => {
 
 	test("the per-request budget caps the bytes inflated and the signatures decoded", async () => {
 		const text = (n) => Array.from({ length: n }, (_, i) => `thought ${(i * 7919) % 1000} about ${i % 13}`).join(" ");
-		const signature = sign({ reasoning_content: text(9000) });
-		const budget = { bytes: 200000, signatures: 100 };
+		const budget = { ...createBudget(), bytes: 200000, signatures: 100 };
 		const results = [];
-		for (let i = 0; i < 5; i++) results.push(await unsign(signature, { budget }));
+		for (let i = 0; i < 5; i++) results.push(await unsign(sign({ reasoning_content: `${i} ${text(9000)}` }), { budget }));
 		const accepted = results.filter(Boolean).length;
 		expect(accepted).toBeGreaterThan(0);
 		expect(accepted).toBeLessThan(5);
 		expect(results.slice(accepted).every((entry) => entry === null)).toBe(true);
-		const few = { bytes: 10000000, signatures: 2 };
+		const few = { ...createBudget(), signatures: 2 };
 		const small = sign({ reasoning_content: "x" });
 		expect(
-			[await unsign(small, { budget: few }), await unsign(small, { budget: few }), await unsign(small, { budget: few })].map(Boolean)
+			[
+				await unsign(small, { budget: few }),
+				await unsign(sign({ reasoning_content: "y" }), { budget: few }),
+				await unsign(sign({ reasoning_content: "z" }), { budget: few })
+			].map(Boolean)
 		).toEqual([true, true, false]);
-		expect(await unsign(small, { budget: { bytes: 0, signatures: 5 } })).toBeNull();
-		expect(await unsign(sign({ reasoning_content: "x".repeat(100) }), { budget: { bytes: 10, signatures: 5 } })).toBeNull();
+		expect(await unsign(small, { budget: { ...createBudget(), bytes: 0, signatures: 5 } })).toBeNull();
+		expect(
+			await unsign(sign({ reasoning_content: "x".repeat(100) }), { budget: { ...createBudget(), bytes: 10, signatures: 5 } })
+		).toBeNull();
 		// Many small bombs share one budget and are all refused by the ratio, so none of them inflates a megabyte.
-		const bombs = Array.from({ length: 200 }, () => packedOf({ v: 1, d: { reasoning_content: "a".repeat(400000) } }));
-		const shared = { bytes: 8 * 1024 * 1024, signatures: 1024 };
-		const decoded = await Promise.all(bombs.map((entry) => unsign(entry, { budget: shared })));
+		const bombs = Array.from({ length: 200 }, (_, i) => packedOf({ v: 1, d: { reasoning_content: `${i}${"a".repeat(400000)}` } }));
+		const shared = createBudget();
+		const decoded = [];
+		for (const entry of bombs) decoded.push(await unsign(entry, { budget: shared }));
 		expect(decoded.every((entry) => entry === null)).toBe(true);
-		expect(shared.bytes).toBe(8 * 1024 * 1024);
+		// Each refusal was charged, and after eight of them nothing more was decoded.
+		expect(shared.failures).toBe(0);
+		expect(shared.signatures).toBe(1024 - 8);
+		expect(shared.bytes).toBeGreaterThanOrEqual(0);
 	});
 
 	test("data is bound to the producer that signed it", async () => {
@@ -369,7 +379,9 @@ describe("limits on signatures", () => {
 		expect(await unsign(bound, { producer: "deepseek:openai.chat" })).toEqual({ reasoning_content: "x" });
 		expect(await unsign(bound, { producer: "compatible:openai.chat" })).toBeNull();
 		expect(await unsign(bound)).toBeNull();
-		expect(await unsign(sign({ reasoning_content: "x" }), { producer: "deepseek:openai.chat" })).toEqual({ reasoning_content: "x" });
+		// A payload with no producer is only for a caller with no producer, and the other way round.
+		expect(await unsign(sign({ reasoning_content: "x" }), { producer: "deepseek:openai.chat" })).toBeNull();
+		expect(await unsign(sign({ reasoning_content: "x" }))).toEqual({ reasoning_content: "x" });
 		expect(await unsign(wrap(JSON.stringify({ v: 1, p: 5, d: { reasoning: "x" } })), { producer: "5" })).toBeNull();
 	});
 
@@ -408,5 +420,57 @@ describe("mergeDetail", () => {
 		const odd = [{ type: "reasoning.text", index: 0 }];
 		mergeDetail(odd, { type: "reasoning.text", index: 0, text: "x" });
 		expect(odd[0].text).toBe("x");
+	});
+});
+
+describe("failed decodes still cost", () => {
+	const bomb = (n) =>
+		`llmt:~${deflateRawSync(Buffer.from(JSON.stringify({ v: 1, d: { reasoning_content: `${n}${"a".repeat(300000)}` } }))).toString("base64url")}`;
+
+	test("over-limit signatures are charged before inflating and stop decoding after a few failures", async () => {
+		const budget = createBudget();
+		const results = [];
+		for (let i = 0; i < 100; i++) results.push(await unsign(bomb(i), { budget }));
+		expect(results.every((entry) => entry === null)).toBe(true);
+		// Eight failures, then nothing more is decoded, so the rest cost nothing at all.
+		expect(budget.failures).toBe(0);
+		expect(budget.signatures).toBe(1024 - 8);
+		expect(budget.bytes).toBeLessThan(8 * 1024 * 1024);
+		const good = sign({ reasoning_content: "still fine" });
+		expect(await unsign(good, { budget })).toBeNull();
+	});
+
+	test("an attempt is charged up front: signatures that would inflate a lot exhaust the byte budget", async () => {
+		const budget = { ...createBudget(), bytes: 100000, failures: 100 };
+		const filler = Array.from({ length: 6000 }, (_, i) => `n${(i * 7919) % 9973}`).join(" ");
+		const large = sign({ reasoning_content: filler });
+		expect(large.startsWith("llmt:~")).toBe(true);
+		expect(await unsign(large, { budget })).not.toBeNull();
+		const spent = 100000 - budget.bytes;
+		expect(spent).toBeGreaterThan(0);
+		expect(spent).toBeLessThan(80000);
+		// A flood of different signatures that each could expand to the limit drains what is left, then fails.
+		const outcomes = [];
+		for (let i = 0; i < 20; i++) outcomes.push(await unsign(sign({ reasoning_content: `${i} ${filler}` }), { budget }));
+		expect(outcomes.some((entry) => entry === null)).toBe(true);
+		expect(budget.bytes).toBeGreaterThanOrEqual(0);
+	});
+
+	test("results are cached per producer and signature, so converting a request again is free", async () => {
+		const budget = createBudget();
+		const signature = sign({ reasoning_content: "x" }, "p:q:h");
+		expect(await unsign(signature, { producer: "p:q:h", budget })).toEqual({ reasoning_content: "x" });
+		const before = { ...budget, cache: undefined };
+		expect(await unsign(signature, { producer: "p:q:h", budget })).toEqual({ reasoning_content: "x" });
+		expect({ ...budget, cache: undefined }).toEqual(before);
+		// The same signature for another producer is a separate (refused) decode.
+		expect(await unsign(signature, { producer: "p:q:other", budget })).toBeNull();
+		expect(budget.signatures).toBe(before.signatures - 1);
+	});
+
+	test("sign measures its limits in bytes", () => {
+		const wide = "\u00e9".repeat(300000);
+		expect(Buffer.byteLength(wide)).toBe(600000);
+		expect(sign({ reasoning_details: [{ text: wide }, { text: wide }, { text: wide }] })).toBe(sign());
 	});
 });

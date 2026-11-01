@@ -53,7 +53,7 @@ const BILLING = "x-anthropic-billing-header:";
  * tool-name map, thinking mode, fields that were dropped).
  * @param {any} body - Anthropic `POST /v1/messages` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
- * @param {{ producer?: string }} [context] - `producer` is the `driver:protocol` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them.
+ * @param {{ producer?: string, budget?: ReturnType<typeof createBudget> }} [context] - `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts).
  * @returns {Promise<{ body: any, state: any }>} OpenAI request body and conversion state.
  * @throws {TranslatorError} For malformed requests, unsupported content when configured to error, or PDF limit violations.
  */
@@ -92,7 +92,7 @@ export async function request(body, settings, context) {
 		fit,
 		system,
 		thinkingTurnsToKeep(body.context_management, state),
-		createBudget()
+		context?.budget ?? createBudget()
 	);
 	out.messages = conversation.messages;
 	if (conversation.prefill) {
@@ -193,6 +193,18 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 	const toolInputs = new Map();
 	const mode = s.inlineSystem === "auto" ? "user" : s.inlineSystem;
 
+	// Signatures that carry provider reasoning are decoded newest turn first, so the per-request budget goes to the turns a server checks (the
+	// latest ones) and a flood of old or forged signatures cannot starve them.
+	const decoded = new Map();
+	if (s.reasoningRoundTrip) {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].role !== "assistant") continue;
+			for (const block of [...asBlocks(messages[i].content)].reverse()) {
+				if (block.type === "thinking") decoded.set(block, await unsign(block.signature, { producer: state.producer, budget }));
+			}
+		}
+	}
+
 	const pushUser = (parts) => {
 		const last = out.at(-1);
 		if (last?.role === "user") last.parts.push(...parts);
@@ -268,7 +280,7 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 				} else if (block.type === "thinking") {
 					// A translator signature that carries the provider's own reasoning fields restores them exactly, whatever the client did to
 					// the thinking text; anything else (a real Anthropic signature, a forged or garbled mark) falls back to the text.
-					const restored = s.reasoningRoundTrip ? await unsign(block.signature, { producer: state.producer, budget }) : null;
+					const restored = decoded.get(block) ?? null;
 					if (restored) turn.parts.push({ restored });
 					else if (block.thinking) turn.parts.push({ text: block.thinking });
 				} else if (block.type === "redacted_thinking") {
