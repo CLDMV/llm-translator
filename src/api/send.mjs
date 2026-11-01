@@ -23,7 +23,9 @@ import * as http from "../lib/http.mjs";
 import * as images from "../lib/images.mjs";
 import * as tools from "../lib/tools.mjs";
 import { parse as parseError } from "../lib/upstream-error.mjs";
-import { meter as createMeter } from "../lib/usage.mjs";
+import { meter as createMeter, normalize } from "../lib/usage.mjs";
+import { capture } from "../lib/capture.mjs";
+import { estimate, bodyLength, output, patch, stream as estimating } from "../lib/estimate.mjs";
 import { warn } from "../lib/warn.mjs";
 
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
@@ -38,6 +40,13 @@ const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache
  * cache_creation_input_tokens, reported, complete, reason, model, requested, upstream, front, stream }`: token fields are numbers or
  * `null` (never 0 for unknown), `reported` is false when the upstream carried no usage, `complete` is true only for a reply that finished
  * normally and `reason` is `"done"`, `"aborted"`, `"error"` or `"upstream_error"`. A stream that ends early reports the usage seen so far.
+ *
+ * When a converted reply's upstream sent no usage, the client-protocol reply carries estimates instead of zeros: the server tokenizer's
+ * count when the driver has one, else one token per four characters (what `token.count` uses) for the input, and one token per four
+ * characters of generated text for the output. The report never presents them as real counts: its token fields stay `null`,
+ * `reported` stays false and the estimates are in `estimated: { input_tokens, output_tokens }` (null when the upstream reported usage).
+ * On the Anthropic front a stream carries them in the final `message_delta`, because `message_start` is sent before the output is known.
+ * Replies passed through without conversion are never altered.
  * @param {any} body - Client request body (per `front`).
  * @param {any} [options] - `{ signal, front, headers, clientHeaders, filter, onUsage }`: abort signal for the upstream call, per-call front, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a warning and never breaks the reply).
  * @returns {Promise<{status: number, headers: Record<string,string>, body: any, usage: Promise<any>} | {status: number, headers: Record<string,string>, stream: AsyncIterable<{event?: string, data: *}>, usage: Promise<any>}>} A JSON reply, or a stream reply when the client asked for streaming and the upstream accepted.
@@ -47,6 +56,7 @@ export async function send(body, options = {}) {
 	const { request, response, stream, error } = self;
 	const build = error.build;
 	const { config, state } = context;
+	const captured = capture(self, context, options.front);
 	const object = body && typeof body === "object" && !Array.isArray(body);
 	const meta = {
 		model: null,
@@ -58,7 +68,7 @@ export async function send(body, options = {}) {
 	const meter = createMeter(meta, options.onUsage, (message) => warn(config, state, message));
 	const attach = (reply) => Object.defineProperty(reply, "usage", { value: meter.usage, enumerable: false, configurable: true });
 	try {
-		return attach(await round({ transport, textOnly, request, response, stream, error }, body, options, meter));
+		return attach(await round({ transport, textOnly, request, response, stream, error, captured }, body, options, meter));
 	} catch (cause) {
 		if (!(cause instanceof TranslatorError)) {
 			meter.finish(options.signal?.aborted ? "aborted" : "error");
@@ -71,13 +81,13 @@ export async function send(body, options = {}) {
 
 /**
  * The round trip itself; throws `TranslatorError` for conversion and connection failures.
- * @param {any} api - Captured `{ transport, textOnly, request, response, stream, error }`.
+ * @param {any} api - Captured `{ transport, textOnly, request, response, stream, error, captured }` (`captured` is the `lib/capture` result).
  * @param {any} body - Client request body.
  * @param {any} options - `{ signal, front, headers, clientHeaders, filter }`.
  * @param {any} meter - Usage meter (see `lib/usage`); settled here for every outcome except a live stream.
  * @returns {Promise<any>} Client-protocol reply.
  */
-async function round({ transport, textOnly, request, response, stream, error }, body, options, meter) {
+async function round({ transport, textOnly, request, response, stream, error, captured }, body, options, meter) {
 	const ask = { front: options.front, headers: options.headers, clientHeaders: options.clientHeaders, filter: options.filter, usage: true };
 	// An OpenAI-front client sees the final usage chunk only when it asked for one; the meter always gets it.
 	const hide = meter.meta.front === "openai" && body?.stream_options?.include_usage !== true;
@@ -93,6 +103,32 @@ async function round({ transport, textOnly, request, response, stream, error }, 
 		// a stream that fails partway); meter the upstream's own counts, which the converter keeps on its state.
 		if (!sent.state.native && sent.state.front === "anthropic") meter.source(() => sent.state.convert?.upstreamUsage);
 		else if (!sent.state.native) meter.source(() => sent.state.convert?.upstreamUsage, "folded");
+	};
+	/**
+	 * Whether a converted reply must carry estimates: the upstream reported no usage (valid once the converter has read its reply).
+	 * @param {any} sent - Result of `request`.
+	 * @returns {boolean} True when the upstream's usage is missing or all zero.
+	 */
+	const missing = (sent) =>
+		!sent.state.native && normalize(sent.state.front === "anthropic" ? "openai" : "folded", sent.state.convert?.upstreamUsage) === null;
+	/**
+	 * Input estimate for a request: the driver's tokenizer when it has one and answers, else the character estimate.
+	 * @param {any} sent - Result of `request`.
+	 * @returns {Promise<number>} Estimated prompt tokens.
+	 */
+	const input = async (sent) => {
+		const endpoint = captured.endpoint(sent.upstream);
+		const driver = captured.driver(endpoint);
+		const exact = driver.count
+			? await driver.count({
+					endpoint,
+					request: sent.body,
+					transport,
+					signal: options.signal,
+					timeout: captured.config.detectTimeout
+				})
+			: null;
+		return exact ?? estimate(sent.body);
 	};
 	/**
 	 * Build the error reply for an upstream failure and settle the meter.
@@ -132,13 +168,26 @@ async function round({ transport, textOnly, request, response, stream, error }, 
 	const headers = http.plain(result.headers);
 	if (!result.ok) return fail(result.status, await parse(result), headers, upstream.state, "upstream_error");
 	if (upstream.state.stream) {
-		return { status: 200, headers: SSE_HEADERS, stream: meter.track(stream(result.body, upstream.state), options.signal, hide) };
+		const events = stream(result.body, upstream.state);
+		const client = upstream.state.native
+			? events
+			: estimating(meter.meta.front, events, {
+					missing: () => missing(upstream),
+					input: () => input(upstream),
+					report: (counts) => meter.estimate(counts)
+				});
+		return { status: 200, headers: SSE_HEADERS, stream: meter.track(client, options.signal, hide) };
 	}
 	const parsed = await parse(result);
 	if (parsed === null || typeof parsed !== "object") {
 		return fail(502, "The upstream returned a body that is not JSON", headers, upstream.state, "error");
 	}
 	const client = await response(parsed, upstream.state);
+	if (missing(upstream)) {
+		const counts = { input_tokens: await input(upstream), output_tokens: output(bodyLength(meter.meta.front, client)) };
+		client.usage = patch(meter.meta.front, client.usage, counts);
+		meter.estimate(counts);
+	}
 	meter.json(client);
 	meter.finish("done");
 	return { status: 200, headers: { "content-type": "application/json" }, body: client };

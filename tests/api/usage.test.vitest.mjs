@@ -90,6 +90,7 @@ describe("send usage reporting, Anthropic front", () => {
 			cache_read_input_tokens: 8,
 			cache_creation_input_tokens: null,
 			reported: true,
+			estimated: null,
 			complete: true,
 			reason: "done",
 			model: "qwen3-coder",

@@ -100,7 +100,7 @@ if (reply.stream) for await (const { event, data } of reply.stream) console.log(
 
 // Where would a request go, and what did it cost? (see docs/server.md)
 const { upstream, model } = api.route({ model: "claude-opus-5-5" }); // no I/O
-const { input_tokens, output_tokens, reported } = await reply.usage; // or send(body, { onUsage })
+const { input_tokens, output_tokens, reported, estimated } = await reply.usage; // or send(body, { onUsage }); `estimated` holds the guesses written into the client reply when the upstream sent no usage
 ```
 
 ### Server and Claude Code
