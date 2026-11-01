@@ -203,11 +203,14 @@ export async function* stream(source, state, settings) {
 			if (!choice) continue;
 			const delta = choice.delta ?? {};
 			const reasoning = reasoningOf(delta);
+			// Content the splitter was still holding is answer text, but the thinking block comes first (as in the non-streaming conversion).
+			let released = "";
 			if (reasoning !== "" && !ownReasoning) {
 				ownReasoning = true;
-				if (splitter) yield* pieces(splitter.release());
+				if (splitter) released = splitter.release().text;
 			}
 			yield* piece("thinking", reasoning);
+			yield* piece("text", released);
 			if (typeof delta.content === "string" && delta.content !== "") {
 				if (splitter && !ownReasoning) yield* pieces(splitter.push(delta.content));
 				else yield* piece("text", delta.content);

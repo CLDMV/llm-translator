@@ -277,7 +277,21 @@ describe("reasoning", () => {
 		]);
 	});
 
-	test("thinkOpen: content held before reasoning arrives is released as text", async () => {
+	test("whitespace held before the reasoning field is dropped and the thinking block comes first", async () => {
+		const events = await run([
+			chunk({ content: "\n" }),
+			chunk({ reasoning_content: "r" }),
+			chunk({ content: "ans" }),
+			chunk({}, {}, "stop")
+		]);
+		expect(deltas(events).filter((d) => d.type !== "signature_delta")).toEqual([
+			{ type: "thinking_delta", thinking: "r" },
+			{ type: "text_delta", text: "ans" }
+		]);
+		expect(events.filter((e) => e.event === "content_block_start").map((e) => e.data.content_block.type)).toEqual(["thinking", "text"]);
+	});
+
+	test("thinkOpen: content held before reasoning arrives is released as text, after the thinking block", async () => {
 		const events = await run(
 			[chunk({ content: "early " }), chunk({ reasoning_content: "r" }), chunk({ content: "late" }), chunk({}, {}, "stop")],
 			undefined,
@@ -290,6 +304,7 @@ describe("reasoning", () => {
 				.filter((d) => d.type === "text_delta")
 				.map((d) => d.text)
 		).toEqual(["early ", "late"]);
+		expect(events.filter((e) => e.event === "content_block_start").map((e) => e.data.content_block.type)).toEqual(["thinking", "text"]);
 	});
 
 	describe.each(["buffer", "stream"])("thinkOpen with toolStreaming %s", (toolStreaming) => {
