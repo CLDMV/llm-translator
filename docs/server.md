@@ -82,6 +82,41 @@ const server = await api.server.start({
 
 A refusal is delivered through `api.error.build`, so each front gets its own error format (Anthropic `{"type":"error",…}`, OpenAI `{"error":{…}}`). `onUsage(report, context)` is called once per request with the usage report described under [usage reporting](#usage-reporting-and-model-allow-lists) and the `context` the hook returned (`undefined` without a hook); it also works without `authorize`. With `authorize` set, a non-loopback bind no longer needs an `apiKey`.
 
+## Endpoint pools: failover and load balancing
+
+Upstreams that serve the same model (after aliases) form a pool for that model. The `pool` key of the translator config (also accepted in the CLI's JSON file) chooses how a request is spread over them:
+
+```json
+{
+	"upstreams": [
+		{ "name": "gpu1", "url": "http://gpu1:8000", "models": ["qwen3-coder"] },
+		{ "name": "gpu2", "url": "http://gpu2:8000", "models": ["qwen3-coder"] }
+	],
+	"pool": {
+		"strategy": "round_robin",
+		"backoff": { "base": 1000, "max": 60000 },
+		"models": { "qwen3-coder": "least_busy" }
+	}
+}
+```
+
+| Key            | Default      | Meaning                                                                                                                                                                                                     |
+| -------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `strategy`     | `"failover"` | `failover`: configuration order, so the first endpoint is used until it fails. `round_robin`: rotate per model. `least_busy`: the endpoint with the fewest requests in flight, ties in configuration order. |
+| `models`       | `{}`         | Strategy per model, keyed by the model name after aliases. Models not listed use `strategy`.                                                                                                                |
+| `backoff.base` | `1000`       | Milliseconds a failing endpoint is skipped after its first failure. Each further consecutive failure doubles it.                                                                                            |
+| `backoff.max`  | `60000`      | Upper limit of the backoff in milliseconds.                                                                                                                                                                 |
+
+With no `pool` key nothing changes: the first endpoint that serves the model is used, and requests only move on when it fails.
+
+**When a request moves on.** A connection error or an HTTP 5xx from an endpoint, received before anything was sent to the client, sends the same request to the next endpoint of the pool. Each endpoint is tried at most once per request. Nothing else moves on: a 4xx (including 429) is the answer, a stream that fails after its first event is not replayed, and nothing is tried once the caller's abort signal has fired. The retry without images or tools ([decision D-38](decisions.md), `toolFallback`) happens on the endpoint that refused, before any failover, and the next endpoint starts with the full request. If every endpoint fails, the last endpoint's failure is the reply.
+
+**Health.** An endpoint that failed is skipped by `request`, `send` and `route` until its backoff has passed; the next success resets it. Healthy endpoints are always tried before unhealthy ones, and when no endpoint of the pool is healthy they are all still tried, the one that recovers soonest first. A request counts as in flight from the call until its reply is over (the JSON reply built, or the stream finished, failed or closed; a stream nobody reads keeps its slot).
+
+**Seeing it.** `api.endpoint.status()` returns the pool config and one record per endpoint: `healthy`, `failures`, `retryAt`, `inflight`, `requests`, `errors`, `lastError`, `lastFailure`, `lastSuccess`. `api.status().upstreams[].health` carries the same record. The server has no route for it; serve it from your own handler (behind the same `apiKey` or `authorize` as everything else) if you want one.
+
+**Usage and `authorize`.** The usage report's `upstream` (and `reply.usage`) names the endpoint that answered, or the last one tried when all failed. `authorize` runs once per HTTP request, before `send`, and failover never runs it again. `api.route(body)` returns `pool`, the endpoint names in the order they would be tried right now, and `upstream` is the first of them. It is a snapshot: it does not advance a round robin, and `send` decides again, so a different member can answer (use `usage.upstream` for the one that did).
+
 ## Forwarded requests and header allow-list
 
 When the front and the upstream speak the same protocol the body is forwarded without conversion.
@@ -183,7 +218,7 @@ const reply = await api.send(body, {
 });
 ```
 
-`api.route(body)` returns `{ upstream, model, requested, protocol, backend, native, unserved }`: the upstream endpoint name, the model name sent upstream (after aliases and routing), the model the client asked for, the upstream protocol, its backend, whether the body is forwarded without conversion and whether no upstream lists the model.
+`api.route(body)` returns `{ upstream, model, requested, protocol, backend, native, unserved, pool }`: the upstream endpoint name, the model name sent upstream (after aliases and routing), the model the client asked for, the upstream protocol, its backend, whether the body is forwarded without conversion and whether no upstream lists the model. `pool` lists the endpoints that serve the model in the order they would be tried (see [Endpoint pools](#endpoint-pools-failover-and-load-balancing)).
 
 The report:
 

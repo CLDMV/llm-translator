@@ -27,6 +27,7 @@ import { meter as createMeter, normalize } from "../lib/usage.mjs";
 import { capture } from "../lib/capture.mjs";
 import { estimate, bodyLength, output, patch, stream as estimating } from "../lib/estimate.mjs";
 import { warn } from "../lib/warn.mjs";
+import * as pool from "../lib/pool.mjs";
 
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
 
@@ -103,8 +104,9 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 		meter.meta.upstream = sent.upstream;
 		// A converted reply carries numbers the converter wrote for the client (zeros for what the upstream did not carry, and nothing for
 		// a stream that fails partway); meter the upstream's own counts, which the converter keeps on its state.
-		if (!sent.state.native && sent.state.front === "anthropic") meter.source(() => sent.state.convert?.upstreamUsage);
-		else if (!sent.state.native) meter.source(() => sent.state.convert?.upstreamUsage, "folded");
+		// A native reply has no converter state to read, and the endpoint tried before (failover) may have left a source behind.
+		if (sent.state.native) meter.source(null);
+		else meter.source(() => sent.state.convert?.upstreamUsage, sent.state.front === "anthropic" ? "openai" : "folded");
 	};
 	/**
 	 * Which sides of a converted reply's usage the upstream did not report, and so need an estimate (valid once the converter has read its reply).
@@ -168,30 +170,83 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 		meter.finish(reason);
 		return error(status, failure, headers, state);
 	};
+	/**
+	 * One endpoint's turn: the call, and the single retry without images or tools when that endpoint refuses them.
+	 * @param {any} first - Result of `request` for the endpoint.
+	 * @returns {Promise<{upstream: any, result: Response, failure?: any}>} The last request sent, its response and, when the body was read, the parsed failure.
+	 */
+	const attempt = async (first) => {
+		let sent = first;
+		let result = await call(transport, sent, options.signal);
+		if (!result.ok && result.status === 400 && ((sent.images.sent && sent.images.retry) || (sent.tools.sent && sent.tools.retry))) {
+			// A text-only model, or a vLLM server without tool parsing, behind an OpenAI-protocol upstream: ask once more without what it
+			// refused. A refused image is remembered for the model; a refused tool list is not (the server may be restarted with the flags).
+			const failure = await parse(result);
+			const message = parseError(failure, 400).message;
+			const retry = {};
+			if (sent.images.sent && sent.images.retry && images.refused(message)) {
+				textOnly.add(sent.images.key);
+				retry.images = false;
+			} else if (sent.tools.sent && sent.tools.retry && tools.refused(message)) retry.tools = false;
+			if (!("images" in retry || "tools" in retry)) return { upstream: sent, result, failure };
+			sent = await request(body, { ...ask, ...retry, endpoint: sent.upstream });
+			note(sent);
+			result = await call(transport, sent, options.signal);
+		}
+		return { upstream: sent, result };
+	};
 	let upstream = await request(body, ask);
-	note(upstream);
-	let result = await call(transport, upstream, options.signal);
-	if (
-		!result.ok &&
-		result.status === 400 &&
-		((upstream.images.sent && upstream.images.retry) || (upstream.tools.sent && upstream.tools.retry))
-	) {
-		// A text-only model, or a vLLM server without tool parsing, behind an OpenAI-protocol upstream: ask once more without what it
-		// refused. A refused image is remembered for the model; a refused tool list is not (the server may be restarted with the flags).
-		const failure = await parse(result);
-		const message = parseError(failure, 400).message;
-		const retry = {};
-		if (upstream.images.sent && upstream.images.retry && images.refused(message)) {
-			textOnly.add(upstream.images.key);
-			retry.images = false;
-		} else if (upstream.tools.sent && upstream.tools.retry && tools.refused(message)) retry.tools = false;
-		if (!("images" in retry || "tools" in retry)) return fail(400, failure, http.plain(result.headers), upstream.state, "upstream_error");
-		upstream = await request(body, { ...ask, ...retry });
-		note(upstream);
-		result = await call(transport, upstream, options.signal);
+	const names = upstream.pool;
+	let turn = 0;
+	// The endpoint whose in-flight slot this request holds.
+	let held = null;
+	const release = () => held.health.inflight--;
+	let result;
+	let failure;
+	try {
+		for (;;) {
+			const endpoint = captured.endpoint(upstream.upstream);
+			held = endpoint;
+			endpoint.health.inflight++;
+			endpoint.health.requests++;
+			note(upstream);
+			// Only a connection error or a 5xx before the first byte of the reply moves on to the next endpoint of the pool; 4xx, the abort
+			// of the caller and anything that happens once the reply has started never do.
+			let reason = null;
+			try {
+				({ upstream, result, failure } = await attempt(upstream));
+				if (!result.ok && result.status >= 500) reason = `HTTP ${result.status}`;
+			} catch (cause) {
+				if (!(cause instanceof TranslatorError) || cause.code !== "upstream_unreachable") throw cause;
+				reason = cause.message;
+				result = undefined;
+				failure = cause;
+			}
+			if (reason === null) {
+				pool.succeeded(endpoint);
+				break;
+			}
+			pool.failed(captured.config, endpoint, reason);
+			if (turn + 1 >= names.length || options.signal?.aborted) {
+				// Nothing left to try: the last endpoint's failure is the reply.
+				if (result === undefined) throw failure;
+				break;
+			}
+			await result?.body?.cancel();
+			const next = await request(body, { ...ask, endpoint: names[++turn] });
+			release();
+			upstream = next;
+		}
+	} catch (cause) {
+		release();
+		throw cause;
 	}
+	// The slot is held until the reply is over (the meter settles for every outcome; a stream nobody reads never does).
+	const slot = held;
+	held = null;
+	meter.usage.then(() => slot.health.inflight--);
 	const headers = http.plain(result.headers);
-	if (!result.ok) return fail(result.status, await parse(result), headers, upstream.state, "upstream_error");
+	if (!result.ok) return fail(result.status, failure ?? (await parse(result)), headers, upstream.state, "upstream_error");
 	if (upstream.state.stream) {
 		const events = stream(result.body, upstream.state);
 		const client = upstream.state.native

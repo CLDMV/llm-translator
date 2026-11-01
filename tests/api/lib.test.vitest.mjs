@@ -106,9 +106,11 @@ describe("lib/normalize", () => {
 });
 
 describe("lib/route", () => {
-	const anthropic = { name: "a", protocol: "anthropic.messages", default: false };
-	const vllm = { name: "v", protocol: "openai.chat", facts: { models: ["m"] }, default: true };
-	const config = { aliases: { alias: "m" } };
+	const health = () => ({ until: 0, inflight: 0 });
+	const anthropic = { name: "a", protocol: "anthropic.messages", default: false, health: health() };
+	const vllm = { name: "v", protocol: "openai.chat", facts: { models: ["m"] }, default: true, health: health() };
+	const config = { aliases: { alias: "m" }, pool: { strategy: "failover", models: {} } };
+	const state = { cursors: new Map() };
 
 	it("serves models", () => {
 		expect(serves(vllm, "m")).toBe(true);
@@ -119,14 +121,14 @@ describe("lib/route", () => {
 	});
 
 	it("picks by alias, model, default, first", () => {
-		expect(pick(config, [anthropic, vllm], "alias")).toEqual({ endpoint: vllm, model: "m", unserved: false });
-		expect(pick(config, [vllm, anthropic], "claude-1").endpoint).toBe(anthropic);
-		expect(pick(config, [anthropic, vllm], "zzz")).toEqual({ endpoint: vllm, model: "m", unserved: false });
-		expect(pick(config, [anthropic], "zzz")).toEqual({ endpoint: anthropic, model: "zzz", unserved: true });
-		const wide = { name: "w", protocol: "openai.chat", facts: { models: ["a", "b"] } };
-		expect(pick(config, [wide], "zzz")).toEqual({ endpoint: wide, model: "zzz", unserved: true });
-		const listed = { name: "l", protocol: "openai.chat", models: ["only"] };
-		expect(pick(config, [listed], "zzz")).toEqual({ endpoint: listed, model: "only", unserved: false });
+		expect(pick(config, [anthropic, vllm], "alias", state)).toEqual({ endpoint: vllm, model: "m", unserved: false, pool: [vllm] });
+		expect(pick(config, [vllm, anthropic], "claude-1", state).endpoint).toBe(anthropic);
+		expect(pick(config, [anthropic, vllm], "zzz", state)).toEqual({ endpoint: vllm, model: "m", unserved: false, pool: [vllm] });
+		expect(pick(config, [anthropic], "zzz", state)).toEqual({ endpoint: anthropic, model: "zzz", unserved: true, pool: [anthropic] });
+		const wide = { name: "w", protocol: "openai.chat", facts: { models: ["a", "b"] }, health: health() };
+		expect(pick(config, [wide], "zzz", state)).toEqual({ endpoint: wide, model: "zzz", unserved: true, pool: [wide] });
+		const listed = { name: "l", protocol: "openai.chat", models: ["only"], health: health() };
+		expect(pick(config, [listed], "zzz", state)).toEqual({ endpoint: listed, model: "only", unserved: false, pool: [listed] });
 	});
 });
 

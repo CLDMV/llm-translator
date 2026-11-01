@@ -120,7 +120,7 @@ Then point Claude Code at it with `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`. Th
 
 ## 📚 Configuration
 
-`createTranslator(config)` takes `front`, `upstreams` (URLs or objects with `url`, `apiKey`, `backend`, `models`, `default` and `settings`), `aliases`, global `settings`, `detect` and a custom `transport`. The CLI reads the same keys from flags, `LLM_TRANSLATOR_*` environment variables and a JSON file, in that order of precedence.
+`createTranslator(config)` takes `front`, `upstreams` (URLs or objects with `url`, `apiKey`, `backend`, `models`, `default` and `settings`), `aliases`, global `settings`, `pool` (failover and load balancing between upstreams that serve the same model, see [docs/server.md](https://github.com/CLDMV/llm-translator/blob/master/docs/server.md#endpoint-pools-failover-and-load-balancing)), `detect` and a custom `transport`. The CLI reads the same keys from flags, `LLM_TRANSLATOR_*` environment variables and a JSON file, in that order of precedence.
 
 Settings tune how the converters map one protocol onto the other (`inlineSystem`, `images`, `imageFallback`, `toolStreaming`, `pingInterval` and more); they are resolved per upstream from defaults, probed values, driver defaults and your overrides. The full table is in [docs/settings.md](https://github.com/CLDMV/llm-translator/blob/master/docs/settings.md).
 

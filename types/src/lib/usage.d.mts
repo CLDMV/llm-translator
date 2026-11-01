@@ -82,7 +82,7 @@ export declare function normalize(protocol: "anthropic" | "openai" | "folded", u
  * @param {{front: "anthropic" | "openai", requested: string | null, model: string | null, upstream: string | null, stream: boolean}} meta - Request facts; `model` and `upstream` may be filled in later.
  * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
  * @param {(message: string) => void} warn - Receives a message when `onUsage` throws or rejects.
- * @returns {{meta: any, usage: Promise<UsageReport>, json: (body: any) => void, event: (data: any) => void, finish: (reason: UsageReport["reason"]) => void, estimate: (counts: {input_tokens: number | null, output_tokens: number | null}) => void, source: (read: () => any, protocol?: "openai" | "folded") => void, track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any}} Meter.
+ * @returns {{meta: any, usage: Promise<UsageReport>, json: (body: any) => void, event: (data: any) => void, finish: (reason: UsageReport["reason"]) => void, estimate: (counts: {input_tokens: number | null, output_tokens: number | null}) => void, source: (read: (() => any) | null, protocol?: "openai" | "folded") => void, track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any}} Meter.
  */
 export declare function meter(meta: {
     front: "anthropic" | "openai";
@@ -100,6 +100,6 @@ export declare function meter(meta: {
         input_tokens: number | null;
         output_tokens: number | null;
     }) => void;
-    source: (read: () => any, protocol?: "openai" | "folded") => void;
+    source: (read: (() => any) | null, protocol?: "openai" | "folded") => void;
     track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any;
 };

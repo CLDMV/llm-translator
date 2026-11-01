@@ -61,6 +61,7 @@ describe("package surface", () => {
 					"convert",
 					"detect",
 					"driver",
+					"endpoint",
 					"error",
 					"model",
 					"request",

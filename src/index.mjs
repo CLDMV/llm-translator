@@ -49,6 +49,7 @@ import { warn } from "./lib/warn.mjs";
  * @property {"anthropic" | "openai"} [front] Client protocol the translator speaks (default `"anthropic"`).
  * @property {Array<string | import("./lib/config.mjs").UpstreamConfig>} upstreams Upstream servers: `{ name, url, apiKey, headers, backend, models, default, settings, version }` (or a bare URL).
  * @property {Record<string, string>} [aliases] Client model name to upstream model name.
+ * @property {import("./lib/pool.mjs").PoolConfig} [pool] Endpoint pools: `{ strategy, backoff: { base, max }, models }` (see docs/settings.md).
  * @property {Record<string, any>} [settings] Global converter settings (see `lib/settings.mjs`).
  * @property {boolean} [detect] Probe `auto` upstreams at startup (default true).
  * @property {number} [detectTimeout] Probe timeout in ms (default 5000).
@@ -71,6 +72,7 @@ export async function createTranslator(config) {
 		servers: new Set(),
 		warned: new Set(),
 		textOnly: new Set(),
+		cursors: new Map(),
 		front: undefined
 	};
 	const pdf = await load();

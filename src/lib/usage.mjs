@@ -94,7 +94,7 @@ function usageChunk(data) {
  * @param {{front: "anthropic" | "openai", requested: string | null, model: string | null, upstream: string | null, stream: boolean}} meta - Request facts; `model` and `upstream` may be filled in later.
  * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
  * @param {(message: string) => void} warn - Receives a message when `onUsage` throws or rejects.
- * @returns {{meta: any, usage: Promise<UsageReport>, json: (body: any) => void, event: (data: any) => void, finish: (reason: UsageReport["reason"]) => void, estimate: (counts: {input_tokens: number | null, output_tokens: number | null}) => void, source: (read: () => any, protocol?: "openai" | "folded") => void, track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any}} Meter.
+ * @returns {{meta: any, usage: Promise<UsageReport>, json: (body: any) => void, event: (data: any) => void, finish: (reason: UsageReport["reason"]) => void, estimate: (counts: {input_tokens: number | null, output_tokens: number | null}) => void, source: (read: (() => any) | null, protocol?: "openai" | "folded") => void, track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any}} Meter.
  */
 export function meter(meta, onUsage, warn) {
 	/** @type {Record<string, number | null>} */
@@ -154,7 +154,7 @@ export function meter(meta, onUsage, warn) {
 		/**
 		 * Take the counts from the upstream's own OpenAI-protocol usage instead of the client output, which a converter fills with zeros
 		 * for what the upstream did not carry.
-		 * @param {() => any} read - Returns the upstream's raw `usage` object, or undefined.
+		 * @param {(() => any) | null} read - Returns the upstream's raw `usage` object, or undefined; null reads the usage from the client output again.
 		 * @param {"openai" | "folded"} [protocol] - Shape of that object: OpenAI, or Anthropic reported the way the OpenAI front does (see `normalize`).
 		 * @returns {void}
 		 */
