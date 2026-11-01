@@ -12,6 +12,7 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `anthropic`  | `anthropic.messages` | 20    | host `api.anthropic.com` (no network access)                                                |
 | `openai`     | `openai.chat`        | 30    | host `api.openai.com` (no network access)                                                   |
 | `llamacpp`   | `openai.chat`        | 40    | `GET /props` has llama-server fields, or `GET /v1/models` lists `owned_by: "llamacpp"`      |
+| `sglang`     | `openai.chat`        | 50    | `GET /get_server_info` has `model_path`, or `GET /v1/models` lists `owned_by: "sglang"`     |
 | `ollama`     | `openai.chat`        | 60    | `GET /api/version` returns a version                                                        |
 | `compatible` | `openai.chat`        | 100   | always; the fallback for LM Studio and other servers without a driver                       |
 
@@ -37,6 +38,7 @@ A driver folder contains these files, all optional except `info`:
 
 - vLLM: `GET /version` and `GET /v1/models` in parallel. Facts are `{ version, models, maxModelLen }`. After binding, when the resolved `inlineSystem` is still `auto`, `POST /tokenize` is called with `[system, user, system, user]`; success means the chat template tolerates inline system messages (`keep`), failure means they are folded into the neighbouring user turn (`user`). Unless `images` is configured, a one-token chat completion with a 1x1 image is also sent: a `400` saying the model is not multimodal sets `images: false` (so images and PDF page images become text notes instead of failing every request), success keeps `images: true`, and any other answer (including a timeout) leaves the default. Settings you configure yourself are never probed.
 - llama.cpp: `GET /props` (fields `default_generation_settings`, `total_slots` or `build_info`) and `GET /v1/models` (`owned_by: "llamacpp"`). Facts are `{ models, build, vision }`; `vision` comes from `modalities.vision` in newer builds and sets `images`.
+- SGLang: `GET /get_server_info` and `GET /v1/models` (`owned_by: "sglang"`). Facts are `{ version, models, modelPath, reasoningParser, toolCallParser }`. SGLang also answers `/version`, so vLLM detection steps aside when `/v1/models` names `sglang` or `llamacpp`.
 - Ollama: `GET /api/version` (and the shared `GET /v1/models` for the model list). Facts are `{ version, models }`.
 - OpenAI and Anthropic: a host-name check, no network.
 - Generic: `GET /v1/models` for reachability and the served model ids.
@@ -60,6 +62,17 @@ What the `llamacpp` driver changes compared with the generic one:
 - Tools need `--jinja`. A `400` that names `--jinja` is recognised like vLLM's missing tool parser: the client error gets a hint, and `toolFallback` retries without tools. See [decision D-41](decisions.md).
 
 llama-server also serves `/v1/messages` natively; the driver does not use it (separate issue, [#31](https://github.com/CLDMV/llm-translator/issues/31)). Nothing here has been run against a real `llama-server` yet: the detection fields, the `deepseek-legacy` shape and the refusal wordings come from the llama.cpp documentation and sources (tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70)).
+
+## SGLang
+
+What the `sglang` driver changes compared with the generic one:
+
+- `reasoningField: "reasoning_content"`, `maxTokensField: "max_completion_tokens"`, `topK: true`, `prefill: "none"`, `thinking: "chat_template_kwargs"`.
+- When `/get_server_info` shows the server runs with a `--reasoning-parser`, requests carry `separate_reasoning: true` (unless the client set it), so the model's thinking arrives in `reasoning_content` and becomes `thinking` blocks. Without a parser the reasoning stays inline in `content` and `thinkTags` reads a leading `<think>` block as before (use `thinkOpen` for templates that open the tag in the prompt).
+- Streams that carry `reasoning_content` deltas, text and tool calls convert to `thinking`, `text` and `tool_use` blocks like any other OpenAI-protocol upstream.
+- SGLang's `regex` and `ebnf` constraints (and `separate_reasoning`) are in the allow-list for the OpenAI front's `passthroughFilter`, so an OpenAI client can send them. Forced tool choice (`required` or a named function) is handled by the server (it builds an EBNF grammar itself); the driver passes `tool_choice` through.
+
+Nothing here has been run against a real SGLang server yet: the detection fields, `owned_by: "sglang"` and the image refusal wording are unverified (tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70)). See [decision D-43](decisions.md).
 
 ## Ollama (`/v1`)
 
