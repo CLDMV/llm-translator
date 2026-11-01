@@ -43,13 +43,15 @@ export declare function isOurs(signature: unknown): signature is string;
  * request. Bytes are charged before a signature is inflated (the most it could produce) and refunded down to what it did produce, so a signature that
  * fails still costs. Results are cached by producer and signature, so converting the same request again costs nothing. Once the budget is spent the
  * caller falls back to the thinking text.
- * @returns {{ bytes: number, signatures: number, failures: number, cache: Map<string, any> }} A fresh budget for one request.
+ * Decodes on one budget run one at a time (each waits for the one before it), so concurrent callers cannot get past the checks together.
+ * @returns {{ bytes: number, signatures: number, failures: number, cache: Map<string, any>, queue: Promise<void> }} A fresh budget for one request.
  */
 export declare function createBudget(): {
     bytes: number;
     signatures: number;
     failures: number;
     cache: Map<string, any>;
+    queue: Promise<void>;
 };
 /**
  * Read the provider reasoning data out of a signature made by {@link sign}. Strict: the signature must carry the mark, be within the size
@@ -57,7 +59,7 @@ export declare function createBudget(): {
  * (a payload with no producer is returned only when none is given). Anything else (a real Anthropic signature, a plain marker, a forged, garbled or
  * foreign one) gives null and the caller falls back to the thinking text. Inflation is bounded while it runs: by 1 MiB per signature, by the rest of
  * the per-request budget, and by a 30:1 ratio of output to compressed input, so a small signature cannot expand into a large allocation; after a few
- * failed decodes the rest of the request is not decoded at all.
+ * failed decodes the rest of the request is not decoded at all. Calls that share a budget are queued, so they are safe to make concurrently.
  * @param {unknown} signature - Signature value from a thinking block.
  * @param {{ producer?: string, budget?: ReturnType<typeof createBudget> }} [options] - `producer` is the current `driver:protocol:host`; `budget` is shared by all signatures of one request (see {@link createBudget}).
  * @returns {Promise<{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] } | null>} The data, or null.

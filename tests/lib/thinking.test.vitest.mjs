@@ -468,6 +468,30 @@ describe("failed decodes still cost", () => {
 		expect(budget.signatures).toBe(before.signatures - 1);
 	});
 
+	test("concurrent decodes on one budget queue, stop at the failure limit and never go negative", async () => {
+		const budget = createBudget();
+		const bombs = Array.from({ length: 200 }, (_, i) => bomb(i));
+		const outcomes = await Promise.all(bombs.map((entry) => unsign(entry, { budget })));
+		expect(outcomes.every((entry) => entry === null)).toBe(true);
+		expect(budget.failures).toBe(0);
+		expect(budget.signatures).toBe(1024 - 8);
+		expect(budget.bytes).toBeGreaterThanOrEqual(0);
+		const mixed = createBudget();
+		const good = Array.from({ length: 5 }, (_, i) => sign({ reasoning_content: `part ${i}` }));
+		const results = await Promise.all([...good, good[0], good[1]].map((entry) => unsign(entry, { budget: mixed })));
+		expect(results.map((entry) => entry?.reasoning_content)).toEqual([
+			"part 0",
+			"part 1",
+			"part 2",
+			"part 3",
+			"part 4",
+			"part 0",
+			"part 1"
+		]);
+		// The two repeated signatures were answered from the cache, not decoded again.
+		expect(mixed.signatures).toBe(1024 - 5);
+	});
+
 	test("sign measures its limits in bytes", () => {
 		const wide = "\u00e9".repeat(300000);
 		expect(Buffer.byteLength(wide)).toBe(600000);
