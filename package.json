@@ -49,8 +49,7 @@
 	"files": [
 		"dist/",
 		"!dist/**/*.map",
-		"types/",
-		"!types/devcheck.d.mts"
+		"types/"
 	],
 	"repository": {
 		"type": "git",

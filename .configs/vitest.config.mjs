@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-26T07:20:29-07:00 (1793024429)
+ *	@Last modified time: 2026-11-01T09:41:26-08:00 (1793554886)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -43,7 +43,7 @@ export default defineConfig({
 		environment: "node",
 		testTimeout: 30000,
 		// Workers get the condition on their node CLI (execArgv), so Node's own resolver
-		// and devcheck.mjs see it too.
+		// loads src/ too.
 		nodeOptions: ["--conditions=llm-translator-dev"],
 		// "dot" keeps CI logs to one character per test file instead of a full
 		// "RUN vX.Y.Z" + per-file pass/fail block for every file — vitest's
