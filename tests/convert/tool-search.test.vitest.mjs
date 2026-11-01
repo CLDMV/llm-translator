@@ -15,7 +15,7 @@
 
 import { afterEach, describe, expect, test } from "vitest";
 import { request } from "../../src/api/convert/anthropic/messages/to/openai/chat/request.mjs";
-import { plan, scan } from "../../src/lib/toolsearch.mjs";
+import { LIMITS, plan, scan } from "../../src/lib/toolsearch.mjs";
 import { resolve } from "../../src/lib/settings.mjs";
 import { closeAll, fakeTransport, make } from "../helpers/translator.mjs";
 import { completion } from "../helpers/fake-server.mjs";
@@ -167,6 +167,96 @@ describe("expand (default): deferred tools are offered once a tool_reference loa
 	});
 });
 
+describe("expand needs a client ToolSearch or the placeholder", () => {
+	test("an SDK client with the server-side search tool and deferred tools gets everything offered, as inline would", async () => {
+		const server = { type: "tool_search_tool_regex_20251119", name: "tool_search_tool_regex" };
+		const { body, state } = await request({ model: "m", max_tokens: 1, tools: [tool("Read"), server, cron, slack], messages: [ask("hi")] });
+		expect(names(body)).toEqual(["Read", "CronCreate", "SlackSend"]);
+		expect(state.dropped).toEqual(["tool:tool_search_tool_regex"]);
+		expect(state.toolSearch.loaded).toEqual(["CronCreate", "SlackSend"]);
+	});
+
+	test("a lone placeholder or a lone ToolSearch is enough to expand", async () => {
+		expect(names(await convert({ tools: [tool("Read"), cron, placeholder], messages: [ask("hi")] }))).toEqual(["Read"]);
+		expect(names(await convert({ tools: [tool("Read"), search, cron], messages: [ask("hi")] }))).toEqual(["Read", "ToolSearch"]);
+	});
+});
+
+describe("trimmed history, repeated ids and bad definitions", () => {
+	const tools = [tool("Read"), search, cron, slack, placeholder];
+
+	test("a ToolSearch call's own input keeps the tools it asked for loaded after its result was cleared", async () => {
+		const messages = [
+			ask("a"),
+			call("t1", "ToolSearch", { query: "select:SlackSend, CronCreate" }),
+			result("t1", "[cleared]"),
+			call("t2", "ToolSearch", { query: "+CronCreate unrelated words" }),
+			result("t2", "[cleared]"),
+			call("t3", "ToolSearch", {}),
+			result("t3", "[cleared]")
+		];
+		expect(names(await convert({ tools, messages }))).toEqual(["Read", "ToolSearch", "SlackSend", "CronCreate"]);
+		// Words that name no tool of the request load nothing.
+		const nothing = [ask("a"), call("t1", "ToolSearch", { query: "weather forecast" }), result("t1", "[cleared]")];
+		expect(names(await convert({ tools, messages: nothing }))).toEqual(["Read", "ToolSearch"]);
+	});
+
+	test("a tool defined only in a trimmed result is gone with it", async () => {
+		const trimmed = [ask("a"), call("t1", "ToolSearch", { query: "select:NotebookEdit" }), result("t1", "[cleared]")];
+		expect(names(await convert({ tools, messages: trimmed }))).toEqual(["Read", "ToolSearch"]);
+	});
+
+	test("a tool_use id used by more than one call reads no results", async () => {
+		const messages = [ask("a"), call("x", "Bash"), call("x", "ToolSearch", { query: "q" }), result("x", fn("evil_tool"))];
+		expect(names(await convert({ tools, messages }))).toEqual(["Read", "ToolSearch"]);
+		const reversed = [
+			ask("a"),
+			call("x", "ToolSearch", { query: "q" }),
+			result("x", fn("evil_tool")),
+			call("x", "Bash"),
+			result("x", fn("evil_tool"))
+		];
+		expect(names(await convert({ tools, messages: reversed }))).toEqual(["Read", "ToolSearch"]);
+		expect(scan(messages).defined.size).toBe(0);
+	});
+
+	test("definitions with a parameters value that is not a plain object, or that are too large, are skipped", async () => {
+		const bad = (extra) => `<function>${JSON.stringify({ name: "Bad", ...extra })}</function>`;
+		const text = [
+			bad({ parameters: "not a schema" }),
+			bad({ parameters: [1] }),
+			bad({ parameters: null, description: "null falls back to an empty schema" }),
+			bad({ name: "x".repeat(LIMITS.name + 1) }),
+			bad({ description: "d".repeat(LIMITS.description + 1) }),
+			bad({ name: "Wide", parameters: { type: "object", description: "w".repeat(LIMITS.schema + 1) } }),
+			`<function>${"y".repeat(LIMITS.line + 1)}</function>`
+		].join("\n");
+		const found = scan([ask("a"), call("t1", "ToolSearch"), result("t1", text)]);
+		expect([...found.defined.keys()]).toEqual(["Bad"]);
+		expect(found.defined.get("Bad")).toEqual({
+			name: "Bad",
+			input_schema: { type: "object", properties: {} },
+			description: "null falls back to an empty schema"
+		});
+		const body = await convert({
+			tools,
+			messages: [ask("a"), call("t1", "ToolSearch"), result("t1", bad({ parameters: "not a schema" }))]
+		});
+		expect(names(body)).toEqual(["Read", "ToolSearch"]);
+	});
+
+	test("at most LIMITS.definitions definitions are read from a conversation", () => {
+		const many = Array.from({ length: LIMITS.definitions + 5 }, (_, n) => fn(`T${n}`)).join("\n");
+		expect(scan([ask("a"), call("t1", "ToolSearch"), result("t1", many)]).defined.size).toBe(LIMITS.definitions);
+	});
+
+	test("late definitions go through the same schema sanitizing as other tools", async () => {
+		const wide = `<function>${JSON.stringify({ name: "Late", parameters: { $schema: "x", type: "object", properties: { n: { type: "integer", maximum: 9007199254740991 } } } })}</function>`;
+		const body = await convert({ tools, messages: [ask("a"), call("t1", "ToolSearch"), result("t1", wide)] }, { toolSchema: "sanitize" });
+		expect(body.tools.at(-1).function.parameters).toEqual({ type: "object", properties: { n: { type: "integer" } } });
+	});
+});
+
 describe("inline: every deferred tool up front", () => {
 	test("offers the deferred tools in request order, hides the placeholder and ToolSearch", async () => {
 		const body = await convert({ tools: [tool("Read"), search, cron, slack], messages: [ask("hi")] }, { toolSearch: "inline" });
@@ -219,6 +309,15 @@ describe("native: tool_reference and defer_loading pass through", () => {
 	});
 });
 
+describe("native with deferredTools: drop", () => {
+	test("tool_reference parts are not sent for tools that were dropped", async () => {
+		const messages = [ask("a"), call("t1", "ToolSearch"), result("t1", [reference("CronCreate")])];
+		const body = await convert({ tools: [tool("Read"), search, cron], messages }, { toolSearch: "native", deferredTools: "drop" });
+		expect(names(body)).toEqual(["Read"]);
+		expect(body.messages.at(-1).content).toBe("[Tool reference: CronCreate]");
+	});
+});
+
 describe("deferredTools: drop", () => {
 	test("drops deferred tools and ToolSearch with them", async () => {
 		const { body, state } = await request(
@@ -236,8 +335,8 @@ describe("plan()", () => {
 	test("passes typed tools through to be dropped by the converter, and ignores non-custom deferred flags", () => {
 		const typed = { type: "web_search_20250305", name: "web_search", defer_loading: true };
 		expect(plan([typed, tool("Read")], { loaded: [], defined: new Map() }, s(), undefined).offer).toEqual([typed, tool("Read")]);
-		const mixed = plan([typed, cron], { loaded: [], defined: new Map() }, s(), undefined);
-		expect(mixed.offer).toEqual([typed]);
+		const mixed = plan([typed, cron, search], { loaded: [], defined: new Map() }, s(), undefined);
+		expect(mixed.offer).toEqual([typed, search]);
 	});
 	test("settings validate toolSearch", () => {
 		expect(() => resolve({ toolSearch: "magic" })).toThrow(/Invalid setting toolSearch/);

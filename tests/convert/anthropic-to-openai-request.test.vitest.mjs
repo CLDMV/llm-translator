@@ -587,9 +587,13 @@ describe("tools", () => {
 
 	test("deferred tools are offered once loaded, offered up front by inline, or dropped", async () => {
 		const tools = [tool("Placeholder", { defer_loading: true }), tool("Second", { defer_loading: true }), tool("Real")];
-		const hidden = await convert(base({ tools }));
-		expect(hidden.tools.map((t) => t.function.name)).toEqual(["Real"]);
-		const inlined = await convert(base({ tools }), { toolSearch: "inline" });
+		// Without a ToolSearch or the placeholder nothing could load them, so they are offered at once.
+		const offered = await convert(base({ tools }));
+		expect(offered.tools.map((t) => t.function.name)).toEqual(["Placeholder", "Second", "Real"]);
+		const searchable = [...tools, tool("ToolSearch")];
+		const hidden = await convert(base({ tools: searchable }));
+		expect(hidden.tools.map((t) => t.function.name)).toEqual(["Real", "ToolSearch"]);
+		const inlined = await convert(base({ tools: searchable }), { toolSearch: "inline" });
 		expect(inlined.tools.map((t) => t.function.name)).toEqual(["Placeholder", "Second", "Real"]);
 		expect(JSON.stringify(inlined)).not.toContain("defer_loading");
 		const dropped = await request(base({ tools }), { deferredTools: "drop" });

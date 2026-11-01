@@ -241,7 +241,7 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 			case "tool_reference":
 				// `native`: the server understands the part. Otherwise the model is told in words; a tool that was expanded into the tools list
 				// is "loaded", anything else could not be and stays a plain reference.
-				if (s.toolSearch === "native") return [{ type: "tool_reference", tool_name: block.tool_name }];
+				if (s.toolSearch === "native" && s.deferredTools !== "drop") return [{ type: "tool_reference", tool_name: block.tool_name }];
 				return [
 					{
 						type: "text",

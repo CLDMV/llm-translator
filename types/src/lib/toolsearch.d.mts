@@ -26,9 +26,19 @@
 export declare const SEARCH_TOOL = "ToolSearch";
 /** The reserved deferred tool that is never offered. */
 export declare const PLACEHOLDER_TOOL = "DeferredToolPlaceholder";
+/** Limits on definitions read from `ToolSearch` result text, which the model's tools list is built from: count in a conversation, characters per definition, name, description and serialized schema. */
+export declare const LIMITS: Readonly<{
+    definitions: 64;
+    line: 131072;
+    name: 256;
+    description: 16384;
+    schema: 65536;
+}>;
 /**
- * Find what the conversation has already loaded: tools named by `tool_reference` blocks, tools the assistant has called, and tools
- * defined in `<function>` lines of `ToolSearch` results (only that tool's results are read, so no other tool output can add a tool).
+ * Find what the conversation has already loaded: tools named by `tool_reference` blocks, tools the assistant has called, tools a `ToolSearch`
+ * call asked for by name (so a result that was cleared from a trimmed history does not unload them), and tools defined in `<function>` lines
+ * of `ToolSearch` results. Only `ToolSearch` results are read, and none for a `tool_use` id that appears on more than one call, so no other
+ * tool's output can add a tool. A definition that exists only in a result that was trimmed away is gone with it.
  * @param {any[]} messages - Anthropic messages.
  * @returns {{loaded: string[], defined: Map<string, any>}} Names in order of first appearance, and the definitions found in results.
  */
@@ -42,7 +52,7 @@ export declare function scan(messages: any[]): {
  * - `expand`: tools without `defer_loading` in request order, then the deferred tools the conversation has loaded (or `tool_choice` names), in
  *   the order they were first loaded, so the list only ever grows at its end. `ToolSearch` is offered while there is something left to load.
  * - `inline`: every tool except the placeholder, in request order; `ToolSearch` is offered only when the placeholder shows that Claude Code holds
- *   tools whose definitions it did not send.
+ *   tools whose definitions it did not send. `expand` behaves like `inline` when the request has neither a `ToolSearch` nor the placeholder.
  * - `native`: every tool as sent; the server is expected to understand `defer_loading` and `tool_reference`.
  *
  * A tool a `ToolSearch` result defined in text and that the request does not list is offered after the others (`expand` only).

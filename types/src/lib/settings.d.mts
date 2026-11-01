@@ -88,7 +88,7 @@ export type Settings = {
      */
     deferredTools: "forward" | "drop";
     /**
-     * - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch`; `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
+     * - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
      */
     toolSearch: "expand" | "inline" | "native";
     /**
@@ -172,7 +172,7 @@ export type Settings = {
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
- * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch`; `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
+ * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
  * @property {boolean} toolErrors - Prefix `is_error` tool results with `[error] `.
  * @property {"max_completion_tokens"|"max_tokens"} maxTokensField - Field used for the output cap.
  * @property {boolean} streamUsage - Request `stream_options.include_usage` on streamed requests.

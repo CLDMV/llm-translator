@@ -32,6 +32,9 @@ export const PLACEHOLDER_TOOL = "DeferredToolPlaceholder";
 
 const FUNCTION_LINE = /<function>([\s\S]*?)<\/function>/g;
 
+/** Limits on definitions read from `ToolSearch` result text, which the model's tools list is built from: count in a conversation, characters per definition, name, description and serialized schema. */
+export const LIMITS = Object.freeze({ definitions: 64, line: 131072, name: 256, description: 16384, schema: 65536 });
+
 /**
  * Text of a tool result's content (string, or the text blocks of an array).
  * @param {any} content - `tool_result` content.
@@ -48,25 +51,49 @@ function textOf(content) {
 
 /**
  * Anthropic tool from a `<function>{"name","description","parameters"}</function>` line of a `ToolSearch` result.
+ * A definition is skipped when it is too large (see `LIMITS`), has no usable name, or its `parameters` is present but not a plain object.
  * @param {string} json - Contents of the tags.
- * @returns {{name: string, description?: string, input_schema: any} | null} Tool, or null when the line is not a tool definition.
+ * @returns {{name: string, description?: string, input_schema: any} | null} Tool, or null when the line is not an acceptable tool definition.
  */
 function definition(json) {
+	if (json.length > LIMITS.line) return null;
 	let parsed;
 	try {
 		parsed = JSON.parse(json);
 	} catch {
 		return null;
 	}
-	if (!parsed || typeof parsed.name !== "string" || parsed.name === "") return null;
-	const tool = { name: parsed.name, input_schema: parsed.parameters ?? { type: "object", properties: {} } };
-	if (typeof parsed.description === "string") tool.description = parsed.description;
+	if (!parsed || typeof parsed.name !== "string" || parsed.name === "" || parsed.name.length > LIMITS.name) return null;
+	const schema = parsed.parameters ?? { type: "object", properties: {} };
+	if (typeof schema !== "object" || schema === null || Array.isArray(schema) || JSON.stringify(schema).length > LIMITS.schema) return null;
+	const tool = { name: parsed.name, input_schema: schema };
+	if (typeof parsed.description === "string") {
+		if (parsed.description.length > LIMITS.description) return null;
+		tool.description = parsed.description;
+	}
 	return tool;
 }
 
 /**
- * Find what the conversation has already loaded: tools named by `tool_reference` blocks, tools the assistant has called, and tools
- * defined in `<function>` lines of `ToolSearch` results (only that tool's results are read, so no other tool output can add a tool).
+ * Tool names a `ToolSearch` call asked for: the entries of a `select:A,B` query, or any word of a keyword query. A word only matters when it
+ * equals the name of a tool the request defines, so unrelated words do nothing.
+ * @param {any} input - The `tool_use` input.
+ * @returns {string[]} Candidate names.
+ */
+function asked(input) {
+	if (typeof input?.query !== "string") return [];
+	return input.query
+		.replace(/^\s*select:/i, "")
+		.split(/[\s,]+/)
+		.map((word) => word.replace(/^\+/, ""))
+		.filter((word) => word !== "");
+}
+
+/**
+ * Find what the conversation has already loaded: tools named by `tool_reference` blocks, tools the assistant has called, tools a `ToolSearch`
+ * call asked for by name (so a result that was cleared from a trimmed history does not unload them), and tools defined in `<function>` lines
+ * of `ToolSearch` results. Only `ToolSearch` results are read, and none for a `tool_use` id that appears on more than one call, so no other
+ * tool's output can add a tool. A definition that exists only in a result that was trimmed away is gone with it.
  * @param {any[]} messages - Anthropic messages.
  * @returns {{loaded: string[], defined: Map<string, any>}} Names in order of first appearance, and the definitions found in results.
  */
@@ -74,21 +101,28 @@ export function scan(messages) {
 	const loaded = [];
 	const defined = new Map();
 	const calls = new Map();
+	const seen = new Map();
 	const add = (name) => {
 		if (!loaded.includes(name)) loaded.push(name);
 	};
 	for (const message of messages) {
 		if (!Array.isArray(message?.content)) continue;
+		for (const block of message.content) if (block?.type === "tool_use") seen.set(block.id, (seen.get(block.id) ?? 0) + 1);
+	}
+	for (const message of messages) {
+		if (!Array.isArray(message?.content)) continue;
 		for (const block of message.content) {
 			if (block?.type === "tool_use") {
-				calls.set(block.id, block.name);
+				if (seen.get(block.id) === 1) calls.set(block.id, block.name);
 				add(block.name);
+				if (block.name === SEARCH_TOOL) for (const name of asked(block.input)) add(name);
 			} else if (block?.type === "tool_result") {
 				for (const inner of Array.isArray(block.content) ? block.content : []) {
 					if (inner?.type === "tool_reference" && typeof inner.tool_name === "string") add(inner.tool_name);
 				}
 				if (calls.get(block.tool_use_id) !== SEARCH_TOOL) continue;
 				for (const match of textOf(block.content).matchAll(FUNCTION_LINE)) {
+					if (defined.size >= LIMITS.definitions) break;
 					const tool = definition(match[1]);
 					if (tool) {
 						add(tool.name);
@@ -107,7 +141,7 @@ export function scan(messages) {
  * - `expand`: tools without `defer_loading` in request order, then the deferred tools the conversation has loaded (or `tool_choice` names), in
  *   the order they were first loaded, so the list only ever grows at its end. `ToolSearch` is offered while there is something left to load.
  * - `inline`: every tool except the placeholder, in request order; `ToolSearch` is offered only when the placeholder shows that Claude Code holds
- *   tools whose definitions it did not send.
+ *   tools whose definitions it did not send. `expand` behaves like `inline` when the request has neither a `ToolSearch` nor the placeholder.
  * - `native`: every tool as sent; the server is expected to understand `defer_loading` and `tool_reference`.
  *
  * A tool a `ToolSearch` result defined in text and that the request does not list is offered after the others (`expand` only).
@@ -126,11 +160,14 @@ export function plan(tools, found, s, choice) {
 	const hide = new Set([PLACEHOLDER_TOOL]);
 	let offer = tools;
 	let loaded = [];
+	// Loading on demand needs a client `ToolSearch` (or the placeholder that says Claude Code has one); without either, as with the server-side
+	// tool search of an SDK client, nothing could ever load the deferred tools, so they are offered at once.
+	const searchable = placeholder || tools.some((tool) => tool.name === SEARCH_TOOL);
 	if (s.deferredTools === "drop") {
 		hide.add(SEARCH_TOOL);
 	} else if (s.toolSearch === "native") {
 		hide.clear();
-	} else if (s.toolSearch === "inline") {
+	} else if (s.toolSearch === "inline" || !searchable) {
 		if (!placeholder) hide.add(SEARCH_TOOL);
 		loaded = real.map((tool) => tool.name);
 	} else {
