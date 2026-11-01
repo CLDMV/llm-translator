@@ -66,7 +66,7 @@ async function prepare(c, body, options, picked) {
 	let upstream;
 	let converted;
 	if (convert) {
-		({ body: upstream, state: converted } = await convert.request(body, settings));
+		({ body: upstream, state: converted } = await convert.request(body, settings, { producer: `${endpoint.driver}:${endpoint.protocol}` }));
 	} else {
 		upstream =
 			c.front === "openai" && (options.filter ?? settings.passthroughFilter === true)

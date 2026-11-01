@@ -21,7 +21,7 @@ import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError, openaiToAnthropicType, rewriteContextOverflow } from "../../../../../../../lib/errors.mjs";
 import { isComplete } from "../../../../../../../lib/arguments.mjs";
 import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
-import { sign, reasoningOf, reasoningKey, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
+import { sign, reasoningOf, reasoningKey, detailsText, mergeDetail, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
 import { toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
 
@@ -83,7 +83,10 @@ export async function* stream(source, state, settings) {
 	function* close() {
 		if (open === null) return;
 		if (open.kind === "thinking") {
-			yield event("content_block_delta", { index: open.index, delta: { type: "signature_delta", signature: sign(carried(open.carry)) } });
+			yield event("content_block_delta", {
+				index: open.index,
+				delta: { type: "signature_delta", signature: sign(carried(open.carry), state?.producer) }
+			});
 		} else if (open.kind === "tool") {
 			open.entry.state = "closed";
 			if (!open.entry.sent)
@@ -147,14 +150,17 @@ export async function* stream(source, state, settings) {
 		yield event("content_block_delta", { index: open.index, delta });
 	}
 
-	// Structured reasoning (`reasoning_details`) belongs to the open thinking block, which it opens when nothing else has.
+	// Structured reasoning (`reasoning_details`) belongs to the open thinking block, which it opens when nothing else has. Fragments of one item
+	// (same index and type) are merged, so the signature carries the same items a JSON reply would.
 	function* details(items) {
 		if (open?.kind === "tool") {
 			held.push({ kind: "details", items });
 			return;
 		}
 		if (open?.kind !== "thinking") yield* begin("thinking", { type: "thinking", thinking: "", signature: "" });
-		open.carry.details.push(...items);
+		for (const fragment of items) mergeDetail(open.carry.details, fragment);
+		// A thought that arrives only as structured details still needs readable text, as in the JSON conversion.
+		if (open.carry.key === null) yield* piece("thinking", detailsText(items));
 	}
 
 	function* pieces(split) {

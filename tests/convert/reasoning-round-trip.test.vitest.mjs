@@ -25,6 +25,7 @@ import { request as toAnthropicRequest } from "../../src/api/convert/openai/chat
 import { response as toOpenaiResponse } from "../../src/api/convert/anthropic/messages/to/openai/chat/response.mjs";
 import { stream as toOpenaiStream } from "../../src/api/convert/anthropic/messages/to/openai/chat/stream.mjs";
 import { ANTHROPIC_FORMAT, sign, unsign } from "../../src/lib/thinking.mjs";
+import { deflateRawSync } from "node:zlib";
 import { collect, openaiSse } from "../helpers/streams.mjs";
 
 const on = { reasoningRoundTrip: true };
@@ -156,7 +157,7 @@ describe("Anthropic request to OpenAI: signatures restore the provider fields", 
 		expect(named.reasoning_content).toBeUndefined();
 	});
 
-	test("several blocks of one turn join without a separator", async () => {
+	test("several blocks of one turn use one text field and join restored pieces without a separator", async () => {
 		const assistant = turn(
 			{ type: "thinking", thinking: "", signature: sign({ reasoning_content: "ab", reasoning_details: [details[0]] }) },
 			[
@@ -165,8 +166,8 @@ describe("Anthropic request to OpenAI: signatures restore the provider fields", 
 			]
 		);
 		const message = await sent(convo(assistant));
-		expect(message.reasoning_content).toBe("abcd");
-		expect(message.reasoning).toBe("x");
+		expect(message.reasoning_content).toBe("abcdx");
+		expect(message.reasoning).toBeUndefined();
 		expect(message.reasoning_details).toEqual(details);
 	});
 
@@ -182,12 +183,13 @@ describe("Anthropic request to OpenAI: signatures restore the provider fields", 
 		expect(off.reasoning_content).toBeUndefined();
 	});
 
-	test("a plain thinking block next to a restored one does not overwrite the restored field", async () => {
+	test("a plain thinking block next to a restored one is appended, not dropped", async () => {
 		const assistant = turn({ type: "thinking", thinking: "", signature: sign({ reasoning: "kept" }) }, [
 			{ type: "thinking", thinking: "extra", signature: "x" }
 		]);
 		const message = await sent(convo(assistant));
-		expect(message.reasoning).toBe("kept");
+		expect(message.reasoning).toBe("kept\n\nextra");
+		expect(message.reasoning_content).toBeUndefined();
 	});
 
 	test("clear_thinking removes restored data from older turns, and merged turns keep theirs", async () => {
@@ -316,7 +318,7 @@ describe("Anthropic upstream with an OpenAI client: thinking blocks travel as re
 				on
 			)
 		);
-		expect(items(bare)).toEqual([{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 0 }]);
+		expect(items(bare)).toEqual([{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 1 }]);
 	});
 
 	test("reasoning deltas that arrive without a block start are tolerated", async () => {
@@ -414,5 +416,173 @@ describe("Anthropic upstream with an OpenAI client: thinking blocks travel as re
 			on
 		);
 		expect(kept.state.dropped).not.toContain("reasoning");
+	});
+});
+
+describe("reasoning side channel: review fixes", () => {
+	const base = { id: "c", object: "chat.completion.chunk", model: "m" };
+	const frame = (delta, finish = null) => ({ ...base, choices: [{ index: 0, delta, finish_reason: finish }] });
+	const run = async (deltas, settings = on, state) =>
+		await collect(toAnthropicStream(openaiSse([...deltas.map((delta) => frame(delta)), frame({}, "stop"), "[DONE]"]), state, settings));
+	const signatures = async (events) =>
+		await Promise.all(
+			events.filter((e) => e.data?.delta?.type === "signature_delta").map((e) => unsign(e.data.delta.signature, { producer: "p:q" }))
+		);
+
+	test("streamed fragments of one item are merged, so a stream signs the same items a JSON reply does", async () => {
+		const merged = [
+			{ type: "reasoning.text", index: 0, text: "step one", signature: "SIG", format: "f", id: "t1" },
+			{ type: "reasoning.summary", index: 1, summary: "brief" },
+			{ type: "reasoning.encrypted", index: 2, data: "AAAA", id: "e1" }
+		];
+		const fragments = [
+			{ reasoning_details: [{ type: "reasoning.text", index: 0, text: "step ", id: "t1", format: "f" }] },
+			{
+				reasoning_details: [
+					{ type: "reasoning.text", index: 0, text: "one" },
+					{ type: "reasoning.summary", index: 1, summary: "bri" }
+				]
+			},
+			{
+				reasoning_details: [
+					{ type: "reasoning.text", index: 0, signature: "SIG" },
+					{ type: "reasoning.summary", index: 1, summary: "ef" }
+				]
+			},
+			{
+				reasoning_details: [
+					{ type: "reasoning.encrypted", index: 2, id: "e1" },
+					{ type: "reasoning.encrypted", index: 2, data: "AAAA" }
+				]
+			},
+			{ content: "ok" }
+		];
+		const state = { producer: "p:q" };
+		expect(await signatures(await run(fragments, on, state))).toEqual([{ reasoning_details: merged }]);
+		const json = toAnthropicResponse(completion({ role: "assistant", content: "ok", reasoning_details: merged }), state, on);
+		expect(await unsign(json.content[0].signature, { producer: "p:q" })).toEqual({ reasoning_details: merged });
+	});
+
+	test("a thought that arrives only as structured details streams its readable text, once", async () => {
+		const events = await run([
+			{ reasoning_details: [{ type: "reasoning.summary", index: 0, summary: "short " }] },
+			{ reasoning_details: [{ type: "reasoning.summary", index: 0, summary: "summary" }] },
+			{ content: "ok" }
+		]);
+		const thinking = events
+			.filter((e) => e.data?.delta?.type === "thinking_delta")
+			.map((e) => e.data.delta.thinking)
+			.join("");
+		expect(thinking).toBe("short summary");
+		const json = toAnthropicResponse(
+			completion({ role: "assistant", content: "ok", reasoning_details: [{ type: "reasoning.summary", summary: "short summary" }] }),
+			undefined,
+			on
+		);
+		expect(json.content[0].thinking).toBe("short summary");
+		// With text in the reasoning field as well, the details do not repeat it.
+		const both = await run([
+			{ reasoning_content: "plan", reasoning_details: [{ type: "reasoning.text", index: 0, text: "plan" }] },
+			{ content: "ok" }
+		]);
+		expect(
+			both
+				.filter((e) => e.data?.delta?.type === "thinking_delta")
+				.map((e) => e.data.delta.thinking)
+				.join("")
+		).toBe("plan");
+	});
+
+	test("replies are signed for their producer and restored only for it", async () => {
+		const state = { producer: "deepseek:openai.chat" };
+		const out = toAnthropicResponse(completion({ role: "assistant", content: "x", reasoning_content: "r" }), state, on);
+		const assistant = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "plain text", signature: out.content[0].signature },
+				{ type: "tool_use", id: "t", name: "Read", input: {} }
+			]
+		};
+		const body = {
+			model: "m",
+			max_tokens: 8,
+			messages: [
+				{ role: "user", content: "go" },
+				assistant,
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "ok" }] }
+			]
+		};
+		const find = (converted) => converted.body.messages.find((m) => m.role === "assistant");
+		expect(find(await toOpenaiRequest(body, on, { producer: "deepseek:openai.chat" })).reasoning_content).toBe("r");
+		for (const context of [{ producer: "compatible:openai.chat" }, {}, undefined]) {
+			const message = find(await toOpenaiRequest(body, on, context));
+			expect(message.reasoning_content).toBeUndefined();
+			expect(message.reasoning).toBe("plain text");
+		}
+		expect((await toOpenaiRequest(body, on, { producer: "x:y" })).state.producer).toBe("x:y");
+		expect((await toOpenaiRequest(body, on)).state.producer).toBeUndefined();
+	});
+
+	test("a request cannot make the converter decode more than its budget", async () => {
+		const bomb = `llmt:~${deflateRawSync(Buffer.from(JSON.stringify({ v: 1, d: { reasoning_content: "a".repeat(300000) } }))).toString("base64url")}`;
+		const blocks = Array.from({ length: 50 }, () => ({ type: "thinking", thinking: "fallback", signature: bomb }));
+		const body = {
+			model: "m",
+			max_tokens: 8,
+			messages: [
+				{ role: "user", content: "go" },
+				{ role: "assistant", content: blocks }
+			]
+		};
+		const message = (await toOpenaiRequest(body, on)).body.messages.find((m) => m.role === "assistant");
+		expect(message.reasoning_content).toBeUndefined();
+		expect(message.reasoning.split("\n\n")).toHaveLength(50);
+	});
+
+	test("replayed thinking keeps its place between text and tool use", async () => {
+		const items = [
+			{ type: "reasoning.text", text: "first", signature: "s1", format: ANTHROPIC_FORMAT, index: 0 },
+			{ type: "reasoning.text", text: "second", signature: "s2", format: ANTHROPIC_FORMAT, index: 2 },
+			{ type: "reasoning.encrypted", data: "ENC", format: ANTHROPIC_FORMAT, index: 9 }
+		];
+		const body = {
+			model: "claude",
+			max_tokens: 8,
+			messages: [
+				{ role: "user", content: "go" },
+				{ role: "assistant", content: "Reading.", reasoning_details: items, tool_calls: [call] },
+				{ role: "tool", tool_call_id: "call_1", content: "ok" }
+			]
+		};
+		const content = (await toAnthropicRequest(body, on)).body.messages.find((m) => m.role === "assistant").content;
+		expect(content.map((block) => block.thinking ?? block.data ?? block.text ?? block.type)).toEqual([
+			"first",
+			"Reading.",
+			"second",
+			"tool_use",
+			"ENC"
+		]);
+		const unplaced = { type: "reasoning.text", text: "unplaced", signature: "s3", format: ANTHROPIC_FORMAT };
+		const loose = { ...body, messages: [body.messages[0], { ...body.messages[1], reasoning_details: [unplaced] }, body.messages[2]] };
+		const front = (await toAnthropicRequest(loose, on)).body.messages.find((m) => m.role === "assistant").content;
+		expect(front[0].thinking).toBe("unplaced");
+		const reply = toOpenaiResponse(
+			{
+				id: "m",
+				type: "message",
+				role: "assistant",
+				model: "claude",
+				content: [
+					{ type: "text", text: "a" },
+					{ type: "thinking", thinking: "t", signature: "S" },
+					{ type: "tool_use", id: "x", name: "Read", input: {} }
+				],
+				stop_reason: "tool_use",
+				usage: {}
+			},
+			undefined,
+			on
+		);
+		expect(reply.choices[0].message.reasoning_details[0].index).toBe(1);
 	});
 });

@@ -39,9 +39,9 @@ export function response(message, state, settings) {
 	const reasoning = [];
 	const toolCalls = [];
 	const details = [];
-	for (const block of message.content ?? []) {
+	for (const [at, block] of (message.content ?? []).entries()) {
 		if (s.reasoningRoundTrip) {
-			const detail = detailOf(block, details.length);
+			const detail = detailOf(block, at);
 			if (detail) details.push(detail);
 		}
 		if (block.type === "text") text.push(block.text);

@@ -23,6 +23,7 @@ import {
 	detailOf,
 	detailsText,
 	isOurs,
+	mergeDetail,
 	reasoningKey,
 	reasoningOf,
 	sign,
@@ -201,10 +202,15 @@ describe("signatures that carry provider reasoning", () => {
 		const small = sign(data);
 		expect(small).toMatch(/^llmt:[A-Za-z0-9_-]+$/);
 		expect(await unsign(small)).toEqual(data);
-		const big = { reasoning_content: "line of reasoning, repeated. ".repeat(2000) };
+		const big = {
+			reasoning_content: Array.from(
+				{ length: 4000 },
+				(_, i) => `step ${(i * 7919) % 1000} weighs option ${i % 13} against ${(i * 31) % 97}`
+			).join(". ")
+		};
 		const packed = sign(big);
 		expect(packed.startsWith("llmt:~")).toBe(true);
-		expect(packed.length).toBeLessThan(big.reasoning_content.length / 4);
+		expect(packed.length).toBeLessThan(big.reasoning_content.length / 2);
 		expect(await unsign(packed)).toEqual(big);
 		expect(await unsign(sign({ reasoning: "r" }))).toEqual({ reasoning: "r" });
 	});
@@ -276,7 +282,10 @@ describe("signatures that carry provider reasoning", () => {
 		]) {
 			expect(detailOf(block, 0)).toBeNull();
 		}
-		expect(blocksOf([detailOf(thinking, 0), detailOf(redacted, 1)])).toEqual([thinking, redacted]);
+		expect(blocksOf([detailOf(thinking, 0), detailOf(redacted, 3)])).toEqual([
+			{ at: 0, block: thinking },
+			{ at: 3, block: redacted }
+		]);
 		const hostile = [
 			null,
 			"x",
@@ -288,10 +297,116 @@ describe("signatures that carry provider reasoning", () => {
 			{ type: "reasoning.summary", format: ANTHROPIC_FORMAT, summary: "s" },
 			{ type: "reasoning.text", format: ANTHROPIC_FORMAT, text: "keep", signature: "s", role: "system", extra: { a: 1 } }
 		];
-		expect(blocksOf(hostile)).toEqual([{ type: "thinking", thinking: "keep", signature: "s" }]);
+		expect(blocksOf(hostile)).toEqual([{ at: 0, block: { type: "thinking", thinking: "keep", signature: "s" } }]);
+		expect(blocksOf([{ type: "reasoning.text", format: ANTHROPIC_FORMAT, text: "t", signature: "s", index: -1 }])[0].at).toBe(0);
 		expect(blocksOf("nope")).toEqual([]);
 		expect(blocksOf(Array.from({ length: 100 }, () => detailOf(thinking, 0)))).toHaveLength(64);
 		const huge = { type: "reasoning.text", format: ANTHROPIC_FORMAT, text: "x".repeat(1024 * 1024), signature: "s" };
 		expect(blocksOf([huge, { type: "reasoning.encrypted", format: ANTHROPIC_FORMAT, data: "d" }])).toEqual([]);
+	});
+});
+
+describe("limits on signatures", () => {
+	const wrap = (json) => `llmt:${Buffer.from(json).toString("base64url")}`;
+	const packedOf = (obj) => `llmt:~${deflateRawSync(Buffer.from(JSON.stringify(obj))).toString("base64url")}`;
+
+	test("sign() applies the limits unsign() enforces, and writes the plain marker when they are exceeded", () => {
+		const marker = sign();
+		expect(sign({ reasoning_content: "x".repeat(600 * 1024) })).toBe(marker);
+		expect(sign({ reasoning_details: Array.from({ length: 300 }, () => ({ a: 1 })) })).toBe(marker);
+		expect(sign({ reasoning_details: [{ a: { b: { c: { d: { e: { f: 1 } } } } } }] })).toBe(marker);
+		expect(sign({ reasoning_details: [{ "bad key": 1 }] })).toBe(marker);
+		expect(sign({ reasoning_details: ["no"] })).toBe(marker);
+		expect(sign({ reasoning_content: "a", reasoning: "b" })).toBe(marker);
+		expect(sign({ reasoning_content: 5 })).toBe(marker);
+		expect(sign({ role: "system" })).toBe(marker);
+		expect(sign([])).toBe(marker);
+		expect(sign({ reasoning_content: "x" }, "p:q")).not.toBe(marker);
+		// Several 500 KiB strings together exceed the 1 MiB JSON limit.
+		const half = "y".repeat(500 * 1024);
+		expect(sign({ reasoning_details: [{ text: half }, { text: half }, { text: half }] })).toBe(marker);
+	});
+
+	test("text that compresses more than 30 to 1 is written unpacked, and still round-trips", async () => {
+		const flat = { reasoning_content: "a".repeat(100000) };
+		const signature = sign(flat);
+		expect(signature.startsWith("llmt:~")).toBe(false);
+		expect(await unsign(signature)).toEqual(flat);
+	});
+
+	test("a signature inflating beyond 30 to 1 is refused while it inflates", async () => {
+		const bomb = packedOf({ v: 1, d: { reasoning_content: "a".repeat(200000) } });
+		expect(await unsign(bomb)).toBeNull();
+	});
+
+	test("the per-request budget caps the bytes inflated and the signatures decoded", async () => {
+		const text = (n) => Array.from({ length: n }, (_, i) => `thought ${(i * 7919) % 1000} about ${i % 13}`).join(" ");
+		const signature = sign({ reasoning_content: text(9000) });
+		const budget = { bytes: 200000, signatures: 100 };
+		const results = [];
+		for (let i = 0; i < 5; i++) results.push(await unsign(signature, { budget }));
+		const accepted = results.filter(Boolean).length;
+		expect(accepted).toBeGreaterThan(0);
+		expect(accepted).toBeLessThan(5);
+		expect(results.slice(accepted).every((entry) => entry === null)).toBe(true);
+		const few = { bytes: 10000000, signatures: 2 };
+		const small = sign({ reasoning_content: "x" });
+		expect(
+			[await unsign(small, { budget: few }), await unsign(small, { budget: few }), await unsign(small, { budget: few })].map(Boolean)
+		).toEqual([true, true, false]);
+		expect(await unsign(small, { budget: { bytes: 0, signatures: 5 } })).toBeNull();
+		expect(await unsign(sign({ reasoning_content: "x".repeat(100) }), { budget: { bytes: 10, signatures: 5 } })).toBeNull();
+		// Many small bombs share one budget and are all refused by the ratio, so none of them inflates a megabyte.
+		const bombs = Array.from({ length: 200 }, () => packedOf({ v: 1, d: { reasoning_content: "a".repeat(400000) } }));
+		const shared = { bytes: 8 * 1024 * 1024, signatures: 1024 };
+		const decoded = await Promise.all(bombs.map((entry) => unsign(entry, { budget: shared })));
+		expect(decoded.every((entry) => entry === null)).toBe(true);
+		expect(shared.bytes).toBe(8 * 1024 * 1024);
+	});
+
+	test("data is bound to the producer that signed it", async () => {
+		const bound = sign({ reasoning_content: "x" }, "deepseek:openai.chat");
+		expect(await unsign(bound, { producer: "deepseek:openai.chat" })).toEqual({ reasoning_content: "x" });
+		expect(await unsign(bound, { producer: "compatible:openai.chat" })).toBeNull();
+		expect(await unsign(bound)).toBeNull();
+		expect(await unsign(sign({ reasoning_content: "x" }), { producer: "deepseek:openai.chat" })).toEqual({ reasoning_content: "x" });
+		expect(await unsign(wrap(JSON.stringify({ v: 1, p: 5, d: { reasoning: "x" } })), { producer: "5" })).toBeNull();
+	});
+
+	test("a signature with both text fields is not one this translator wrote", async () => {
+		expect(await unsign(wrap(JSON.stringify({ v: 1, d: { reasoning_content: "a", reasoning: "b" } })))).toBeNull();
+	});
+});
+
+describe("mergeDetail", () => {
+	test("fragments with the same index and type become one item", () => {
+		const list = [];
+		for (const fragment of [
+			{ type: "reasoning.text", index: 0, text: "ab", format: "f" },
+			{ type: "reasoning.text", index: 0, text: "cd" },
+			{ type: "reasoning.text", index: 0, signature: "sig" },
+			{ type: "reasoning.summary", index: 0, summary: "s1" },
+			{ type: "reasoning.summary", index: 0, summary: "s2" },
+			{ type: "reasoning.encrypted", index: 1, id: "e1" },
+			{ type: "reasoning.encrypted", index: 1, data: "AA" },
+			{ type: "reasoning.encrypted", index: 1, data: "" },
+			{ type: "reasoning.text", text: "no index" },
+			{ type: "reasoning.text", text: "no index either" },
+			null,
+			"x",
+			[]
+		]) {
+			mergeDetail(list, fragment);
+		}
+		expect(list).toEqual([
+			{ type: "reasoning.text", index: 0, text: "abcd", format: "f", signature: "sig" },
+			{ type: "reasoning.summary", index: 0, summary: "s1s2" },
+			{ type: "reasoning.encrypted", index: 1, id: "e1", data: "AA" },
+			{ type: "reasoning.text", text: "no index" },
+			{ type: "reasoning.text", text: "no index either" }
+		]);
+		const odd = [{ type: "reasoning.text", index: 0 }];
+		mergeDetail(odd, { type: "reasoning.text", index: 0, text: "x" });
+		expect(odd[0].text).toBe("x");
 	});
 });

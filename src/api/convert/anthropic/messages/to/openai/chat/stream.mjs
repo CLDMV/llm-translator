@@ -48,7 +48,6 @@ export async function* stream(source, state, settings) {
 	let finished = false;
 	// The thinking or redacted thinking block being read, replayed as one `reasoning_details` item when it stops (`reasoningRoundTrip`).
 	let reasoningBlock = null;
-	let detailIndex = 0;
 
 	const chunk = (delta, finishReason = null, extra = {}) => ({
 		data: {
@@ -95,11 +94,8 @@ export async function* stream(source, state, settings) {
 					yield chunk({ tool_calls: [{ index: tools.get(data.index), function: { arguments: delta.partial_json } }] });
 				}
 			} else if (data.type === "content_block_stop") {
-				const detail = s.reasoningRoundTrip && reasoningBlock ? detailOf(reasoningBlock, detailIndex) : null;
-				if (detail) {
-					detailIndex++;
-					yield chunk({ reasoning_details: [detail] });
-				}
+				const detail = s.reasoningRoundTrip && reasoningBlock ? detailOf(reasoningBlock, data.index) : null;
+				if (detail) yield chunk({ reasoning_details: [detail] });
 				reasoningBlock = null;
 			} else if (data.type === "message_delta") {
 				for (const [key, value] of Object.entries(data.usage ?? {})) if (value !== null && value !== undefined) usage[key] = value;

@@ -39,28 +39,75 @@ const MAX_TEXT = 512 * 1024;
 const MAX_ITEMS = 256;
 const MAX_KEYS = 32;
 const MAX_DEPTH = 5;
+/** Per request: most bytes inflated or decoded in total, most marked signatures decoded, and the largest output-to-input ratio of an inflated signature. */
+const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
+const MAX_REQUEST_SIGNATURES = 1024;
+const MAX_RATIO = 30;
 /** `format` of the `reasoning_details` items that carry an Anthropic thinking block (text with its signature) or redacted thinking (data). */
 export const ANTHROPIC_FORMAT = "anthropic-claude-v1";
 /** Fields of an OpenAI assistant message that carry provider reasoning. */
 const TEXT_FIELDS = ["reasoning_content", "reasoning"];
 
 /**
- * Create the signature attached to a thinking block produced from upstream reasoning. It is clearly marked as not coming from Anthropic.
- *
- * Format: `llmt:` followed by the base64url of a JSON payload `{"v":1}`, or `{"v":1,"d":{...}}` when provider reasoning data has to come
- * back with the block. `d` holds only `reasoning_content` and `reasoning` (strings) and `reasoning_details` (a list of JSON objects).
- * A payload longer than 512 characters is deflated and written as `llmt:~` plus base64url. When the result would exceed 256 KiB the data
- * is left out and the plain marker is returned.
- * @param {{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] }} [data] - Provider reasoning data to carry.
+ * The signature with no provider data: the plain marker `{"v":1}`.
  * @returns {string} Signature string.
  */
-export function sign(data) {
-	const payload = data === undefined ? { v: 1 } : { v: 1, d: data };
-	const json = JSON.stringify(payload);
-	const body =
-		json.length > PACK_AT ? PACKED + deflateRawSync(Buffer.from(json)).toString("base64url") : Buffer.from(json).toString("base64url");
+function marker() {
+	return PREFIX + Buffer.from('{"v":1}').toString("base64url");
+}
+
+/**
+ * Check provider reasoning data against the limits both {@link sign} and {@link unsign} enforce, and copy it. At most one text field
+ * (`reasoning_content` or `reasoning`, a string of at most 512 KiB) and `reasoning_details` (at most 256 JSON objects, nested at most 5 levels,
+ * at most 32 keys each with plain identifier keys, strings of at most 512 KiB); nothing else is kept.
+ * @param {any} data - Candidate data.
+ * @returns {{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] } | null} The cleaned copy, or null when it is not acceptable or empty.
+ */
+function validate(data) {
+	if (data === null || typeof data !== "object" || Array.isArray(data)) return null;
+	try {
+		const out = {};
+		for (const key of TEXT_FIELDS) {
+			if (data[key] === undefined) continue;
+			if (typeof data[key] !== "string" || data[key].length > MAX_TEXT) return null;
+			out[key] = data[key];
+		}
+		if (Object.keys(out).length > 1) return null;
+		if (data.reasoning_details !== undefined) {
+			const details = plain(data.reasoning_details, 0);
+			if (!Array.isArray(details) || details.some((item) => item === null || typeof item !== "object" || Array.isArray(item))) return null;
+			out.reasoning_details = details;
+		}
+		return Object.keys(out).length > 0 ? out : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Create the signature attached to a thinking block produced from upstream reasoning. It is clearly marked as not coming from Anthropic.
+ *
+ * Format: `llmt:` followed by the base64url of a JSON payload `{"v":1}`, or `{"v":1,"p":"<producer>","d":{...}}` when provider reasoning data has to
+ * come back with the block. `p` names the driver and protocol that produced the data (so it is restored only for the same producer) and `d` holds
+ * one text field (`reasoning_content` or `reasoning`) and/or `reasoning_details`. A payload longer than 512 characters is deflated and written
+ * as `llmt:~` plus base64url, unless that would not shrink it or would exceed the 30:1 inflation ratio {@link unsign} accepts. Data that
+ * {@link unsign} would reject (over the size limits, unknown shape) or a result over 256 KiB leaves the plain marker.
+ * @param {{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] }} [data] - Provider reasoning data to carry.
+ * @param {string} [producer] - Producer binding, `driver:protocol`.
+ * @returns {string} Signature string.
+ */
+export function sign(data, producer) {
+	const clean = data === undefined ? null : validate(data);
+	if (clean === null) return marker();
+	const json = JSON.stringify(producer === undefined ? { v: 1, d: clean } : { v: 1, p: producer, d: clean });
+	if (json.length > MAX_JSON) return marker();
+	let body = Buffer.from(json).toString("base64url");
+	if (json.length > PACK_AT) {
+		const packed = deflateRawSync(Buffer.from(json));
+		if (json.length <= MAX_RATIO * packed.length && packed.length < json.length) body = PACKED + packed.toString("base64url");
+	}
 	const out = PREFIX + body;
-	return out.length > MAX_SIGNATURE ? sign() : out;
+	return out.length > MAX_SIGNATURE ? marker() : out;
 }
 
 /**
@@ -96,37 +143,42 @@ function plain(value, depth) {
 }
 
 /**
+ * The limits on decoding signatures within one request: how many bytes may be inflated or decoded in total and how many marked signatures
+ * may be decoded. Once either is spent, further signatures are not decoded and the caller falls back to the thinking text.
+ * @returns {{ bytes: number, signatures: number }} A fresh budget for one request.
+ */
+export function createBudget() {
+	return { bytes: MAX_REQUEST_BYTES, signatures: MAX_REQUEST_SIGNATURES };
+}
+
+/**
  * Read the provider reasoning data out of a signature made by {@link sign}. Strict: the signature must carry the mark, be within the size
- * limits and decode to `{"v":1,"d":{...}}` with only the known fields, each well formed; anything else (a real Anthropic signature, a plain
- * marker, a forged or garbled one) gives null and the caller falls back to the thinking text.
+ * limits and decode to `{"v":1,"d":{...}}` with only the known fields, each well formed; a payload bound to a producer is returned only for that
+ * same producer. Anything else (a real Anthropic signature, a plain marker, a forged, garbled or foreign one) gives null and the caller falls back to
+ * the thinking text. Inflation is bounded while it runs: by 1 MiB per signature, by the rest of the per-request budget, and by a 30:1 ratio of
+ * output to compressed input, so a small signature cannot expand into a large allocation.
  * @param {unknown} signature - Signature value from a thinking block.
+ * @param {{ producer?: string, budget?: { bytes: number, signatures: number } }} [options] - `producer` is the current `driver:protocol`; `budget` is shared by all signatures of one request (see {@link createBudget}).
  * @returns {Promise<{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] } | null>} The data, or null.
  */
-export async function unsign(signature) {
-	if (!isOurs(signature) || signature.length > MAX_SIGNATURE) return null;
+export async function unsign(signature, { producer, budget = createBudget() } = {}) {
+	if (!isOurs(signature) || signature.length > MAX_SIGNATURE || budget.signatures <= 0) return null;
+	budget.signatures--;
 	try {
 		let body = signature.slice(PREFIX.length);
 		const packed = body.startsWith(PACKED);
 		if (packed) body = body.slice(PACKED.length);
 		if (!BASE64URL.test(body)) return null;
 		const raw = Buffer.from(body, "base64url");
-		const json = (packed ? await inflate(raw, { maxOutputLength: MAX_JSON }) : raw).toString("utf8");
-		const payload = JSON.parse(json);
+		const limit = Math.min(MAX_JSON, budget.bytes);
+		if (limit <= 0) return null;
+		const bytes = packed ? await inflate(raw, { maxOutputLength: Math.max(1, Math.min(limit, MAX_RATIO * raw.length)) }) : raw;
+		if (bytes.length > limit) return null;
+		budget.bytes -= bytes.length;
+		const payload = JSON.parse(bytes.toString("utf8"));
 		if (payload?.v !== 1 || payload.d === undefined) return null;
-		const data = payload.d;
-		if (data === null || typeof data !== "object" || Array.isArray(data)) return null;
-		const out = {};
-		for (const key of TEXT_FIELDS) {
-			if (data[key] === undefined) continue;
-			if (typeof data[key] !== "string" || data[key].length > MAX_TEXT) return null;
-			out[key] = data[key];
-		}
-		if (data.reasoning_details !== undefined) {
-			const details = plain(data.reasoning_details, 0);
-			if (!Array.isArray(details) || details.some((item) => item === null || typeof item !== "object" || Array.isArray(item))) return null;
-			out.reasoning_details = details;
-		}
-		return Object.keys(out).length > 0 ? out : null;
+		if (payload.p !== undefined && (typeof payload.p !== "string" || payload.p !== producer)) return null;
+		return validate(payload.d);
 	} catch {
 		return null;
 	}
@@ -135,7 +187,7 @@ export async function unsign(signature) {
 /**
  * The `reasoning_details` item for an Anthropic thinking block or redacted thinking block, in the form an OpenAI client replays.
  * @param {any} block - Anthropic `thinking` or `redacted_thinking` content block (with its signature or data).
- * @param {number} index - Position among the message's reasoning items.
+ * @param {number} index - Position of the block among all content blocks of its message.
  * @returns {object | null} The item, or null for a block that cannot be replayed (no signature or data).
  */
 export function detailOf(block, index) {
@@ -159,9 +211,10 @@ export function detailOf(block, index) {
  * translator's Anthropic format with the expected string fields become blocks, only their known fields are copied, and at most 64 items
  * totalling 1 MiB of text are taken; anything else is ignored.
  * @param {unknown} details - `reasoning_details` of an assistant message.
- * @returns {any[]} Anthropic content blocks (possibly empty).
+ * @returns {{ at: number, block: any }[]} Anthropic content blocks with the position (`index`) they had in the original message, which the caller uses to keep thinking in place between text and tool use (possibly empty).
  */
 export function blocksOf(details) {
+	const position = (item) => (Number.isInteger(item.index) && item.index >= 0 ? item.index : 0);
 	if (!Array.isArray(details)) return [];
 	const blocks = [];
 	let size = 0;
@@ -169,10 +222,11 @@ export function blocksOf(details) {
 		if (item === null || typeof item !== "object" || item.format !== ANTHROPIC_FORMAT) continue;
 		if (item.type === "reasoning.text" && typeof item.text === "string" && typeof item.signature === "string" && item.signature !== "") {
 			size += item.text.length + item.signature.length;
-			if (size <= MAX_JSON) blocks.push({ type: "thinking", thinking: item.text, signature: item.signature });
+			if (size <= MAX_JSON)
+				blocks.push({ at: position(item), block: { type: "thinking", thinking: item.text, signature: item.signature } });
 		} else if (item.type === "reasoning.encrypted" && typeof item.data === "string" && item.data !== "") {
 			size += item.data.length;
-			if (size <= MAX_JSON) blocks.push({ type: "redacted_thinking", data: item.data });
+			if (size <= MAX_JSON) blocks.push({ at: position(item), block: { type: "redacted_thinking", data: item.data } });
 		}
 	}
 	return blocks;
@@ -187,6 +241,29 @@ export function reasoningKey(part) {
 	if (typeof part?.reasoning === "string" && part.reasoning !== "") return "reasoning";
 	if (typeof part?.reasoning_content === "string" && part.reasoning_content !== "") return "reasoning_content";
 	return null;
+}
+
+/**
+ * Add a streamed `reasoning_details` fragment to the list being built, so a stream yields the same items as a JSON reply. Fragments with the
+ * same `index` and `type` are one item: `text` and `summary` are concatenated and `signature`, `data`, `format` and `id` are taken from the
+ * fragment that carries them. A fragment without an `index`, or a new one, is appended; anything that is not an object is skipped.
+ * @param {any[]} list - Items so far (mutated).
+ * @param {any} fragment - One element of a streamed `reasoning_details` array.
+ * @returns {any[]} The same list.
+ */
+export function mergeDetail(list, fragment) {
+	if (fragment === null || typeof fragment !== "object" || Array.isArray(fragment)) return list;
+	const into =
+		fragment.index === undefined ? undefined : list.find((entry) => entry.index === fragment.index && entry.type === fragment.type);
+	if (into === undefined) {
+		list.push({ ...fragment });
+		return list;
+	}
+	for (const key of ["text", "summary"])
+		if (typeof fragment[key] === "string") into[key] = (typeof into[key] === "string" ? into[key] : "") + fragment[key];
+	for (const key of ["signature", "data", "format", "id"])
+		if (typeof fragment[key] === "string" && fragment[key] !== "") into[key] = fragment[key];
+	return list;
 }
 
 /**

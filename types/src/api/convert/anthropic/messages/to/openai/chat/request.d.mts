@@ -19,10 +19,13 @@
  * tool-name map, thinking mode, fields that were dropped).
  * @param {any} body - Anthropic `POST /v1/messages` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
+ * @param {{ producer?: string }} [context] - `producer` is the `driver:protocol` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them.
  * @returns {Promise<{ body: any, state: any }>} OpenAI request body and conversion state.
  * @throws {TranslatorError} For malformed requests, unsupported content when configured to error, or PDF limit violations.
  */
-export declare function request(body: any, settings?: Partial<import("../../../../../../../lib/settings.mjs").Settings>): Promise<{
+export declare function request(body: any, settings?: Partial<import("../../../../../../../lib/settings.mjs").Settings>, context?: {
+    producer?: string;
+}): Promise<{
     body: any;
     state: any;
 }>;

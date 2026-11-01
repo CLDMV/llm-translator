@@ -23,7 +23,7 @@ import { createNameFitter } from "../../../../../../../lib/ids.mjs";
 import { sanitize } from "../../../../../../../lib/schema.mjs";
 import { NOTE } from "../../../../../../../lib/images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
-import { unsign } from "../../../../../../../lib/thinking.mjs";
+import { createBudget, unsign } from "../../../../../../../lib/thinking.mjs";
 
 const HANDLED = new Set([
 	"model",
@@ -53,10 +53,11 @@ const BILLING = "x-anthropic-billing-header:";
  * tool-name map, thinking mode, fields that were dropped).
  * @param {any} body - Anthropic `POST /v1/messages` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
+ * @param {{ producer?: string }} [context] - `producer` is the `driver:protocol` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them.
  * @returns {Promise<{ body: any, state: any }>} OpenAI request body and conversion state.
  * @throws {TranslatorError} For malformed requests, unsupported content when configured to error, or PDF limit violations.
  */
-export async function request(body, settings) {
+export async function request(body, settings, context) {
 	const s = resolve(settings);
 	if (body === null || typeof body !== "object" || !Array.isArray(body.messages)) {
 		throw new TranslatorError("messages: Field required", { code: "invalid_request", param: "messages" });
@@ -70,6 +71,8 @@ export async function request(body, settings) {
 		toolNames: {},
 		dropped: []
 	};
+	// Names the producer of the reply this request answers (signed into reasoning data) and the one a signature must match to be restored.
+	if (context?.producer !== undefined) state.producer = context.producer;
 	const fit = createNameFitter({ max: 64, map: state.toolNames });
 
 	for (const key of Object.keys(body)) {
@@ -82,7 +85,15 @@ export async function request(body, settings) {
 
 	const out = { model: body.model };
 	const system = textOf(body.system, s);
-	const conversation = await convertMessages(body.messages, s, state, fit, system, thinkingTurnsToKeep(body.context_management, state));
+	const conversation = await convertMessages(
+		body.messages,
+		s,
+		state,
+		fit,
+		system,
+		thinkingTurnsToKeep(body.context_management, state),
+		createBudget()
+	);
 	out.messages = conversation.messages;
 	if (conversation.prefill) {
 		out.continue_final_message = true;
@@ -176,7 +187,7 @@ function asBlocks(content) {
  * @param {number} keepThinking - Reasoning-bearing assistant turns to keep.
  * @returns {Promise<{ messages: any[], prefill: boolean }>} OpenAI messages and whether the last message is a prefill.
  */
-async function convertMessages(messages, s, state, fit, system, keepThinking) {
+async function convertMessages(messages, s, state, fit, system, keepThinking, budget) {
 	const out = [];
 	const hoisted = [];
 	const toolInputs = new Map();
@@ -250,16 +261,16 @@ async function convertMessages(messages, s, state, fit, system, keepThinking) {
 			const all = [...toolParts, ...parts];
 			if (all.length > 0) pushUser(all);
 		} else if (message.role === "assistant") {
-			const turn = { role: "assistant", texts: [], reasoning: [], restored: [], tool_calls: [] };
+			const turn = { role: "assistant", texts: [], parts: [], tool_calls: [] };
 			for (const block of asBlocks(message.content)) {
 				if (block.type === "text") {
 					if (block.text !== "") turn.texts.push(block.text);
 				} else if (block.type === "thinking") {
 					// A translator signature that carries the provider's own reasoning fields restores them exactly, whatever the client did to
 					// the thinking text; anything else (a real Anthropic signature, a forged or garbled mark) falls back to the text.
-					const restored = s.reasoningRoundTrip ? await unsign(block.signature) : null;
-					if (restored) turn.restored.push(restored);
-					else if (block.thinking) turn.reasoning.push(block.thinking);
+					const restored = s.reasoningRoundTrip ? await unsign(block.signature, { producer: state.producer, budget }) : null;
+					if (restored) turn.parts.push({ restored });
+					else if (block.thinking) turn.parts.push({ text: block.thinking });
 				} else if (block.type === "redacted_thinking") {
 					drop(state, "redacted_thinking");
 				} else if (block.type === "tool_use") {
@@ -276,8 +287,7 @@ async function convertMessages(messages, s, state, fit, system, keepThinking) {
 			const last = out.at(-1);
 			if (last?.role === "assistant") {
 				last.texts.push(...turn.texts);
-				last.reasoning.push(...turn.reasoning);
-				last.restored.push(...turn.restored);
+				last.parts.push(...turn.parts);
 				last.tool_calls.push(...turn.tool_calls);
 			} else out.push(turn);
 		} else {
@@ -306,17 +316,32 @@ function thinkingTurnsToKeep(contextManagement, state) {
 }
 
 /**
- * Merge the reasoning fields restored from several signatures of one assistant turn: text fields are joined without a separator (the
- * pieces are consecutive parts of one string), `reasoning_details` lists are concatenated.
- * @param {{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] }[]} list - Decoded signature data.
+ * The reasoning fields of one assistant turn, from its thinking blocks in order. A block whose signature restored provider data contributes
+ * that data's text; any other block contributes its thinking text. There is one text field: the one the first restored block used
+ * (`reasoning_content` or `reasoning`), else `reasoningField`. Restored pieces that follow one another are joined directly (they are consecutive
+ * parts of one string), everything else with a blank line. `reasoning_details` lists are concatenated.
+ * @param {{ restored?: { reasoning_content?: string, reasoning?: string, reasoning_details?: object[] }, text?: string }[]} parts - Thinking blocks of the turn: restored data, or plain text.
+ * @param {string} fallbackField - Field for the text when no restored block names one.
  * @returns {Record<string, any>} Fields to set on the assistant message.
  */
-function restoredFields(list) {
-	const out = {};
-	for (const data of list) {
-		for (const key of ["reasoning_content", "reasoning"]) if (data[key] !== undefined) out[key] = (out[key] ?? "") + data[key];
-		if (data.reasoning_details) out.reasoning_details = [...(out.reasoning_details ?? []), ...data.reasoning_details];
+function reasoningFields(parts, fallbackField) {
+	const named = parts.find(
+		(part) => part.restored && (part.restored.reasoning_content !== undefined || part.restored.reasoning !== undefined)
+	);
+	const field = named ? (named.restored.reasoning_content !== undefined ? "reasoning_content" : "reasoning") : fallbackField;
+	let text = "";
+	let details;
+	let previous = null;
+	for (const part of parts) {
+		const piece = part.restored ? (part.restored.reasoning_content ?? part.restored.reasoning) : part.text;
+		if (part.restored?.reasoning_details) details = [...(details ?? []), ...part.restored.reasoning_details];
+		if (piece === undefined) continue;
+		text += (previous !== null && !(previous.restored && part.restored) ? "\n\n" : "") + piece;
+		previous = part;
 	}
+	const out = {};
+	if (text !== "") out[field] = text;
+	if (details) out.reasoning_details = details;
 	return out;
 }
 
@@ -343,12 +368,9 @@ function reasoningSent(message) {
 function finalize(out, s, system, hoisted, keepThinking, state) {
 	let remaining = keepThinking;
 	for (let i = out.length - 1; i >= 0; i--) {
-		if (out[i].role !== "assistant" || (out[i].reasoning.length === 0 && out[i].restored.length === 0)) continue;
+		if (out[i].role !== "assistant" || out[i].parts.length === 0) continue;
 		if (remaining > 0) remaining--;
-		else {
-			out[i].reasoning = [];
-			out[i].restored = [];
-		}
+		else out[i].parts = [];
 	}
 	const messages = [];
 	const lead = [system, ...hoisted].filter((t) => t !== "").join("\n\n");
@@ -359,8 +381,7 @@ function finalize(out, s, system, hoisted, keepThinking, state) {
 			messages.push({ role: "user", content: plain ? m.parts.map((p) => p.text).join("\n\n") : m.parts });
 		} else if (m.role === "assistant") {
 			const message = { role: "assistant", content: m.texts.join("\n\n") };
-			if (m.restored.length > 0) Object.assign(message, restoredFields(m.restored));
-			if (m.reasoning.length > 0 && message[s.reasoningField] === undefined) message[s.reasoningField] = m.reasoning.join("\n\n");
+			if (m.parts.length > 0) Object.assign(message, reasoningFields(m.parts, s.reasoningField));
 			// A turn that made tool calls and has no reasoning to send back (the client dropped its thinking blocks or their signatures)
 			// is counted, so the caller can warn: servers that require reasoning with tools will refuse the request.
 			if (s.reasoningRoundTrip && m.tool_calls.length > 0 && !reasoningSent(message))

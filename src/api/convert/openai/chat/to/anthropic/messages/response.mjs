@@ -59,7 +59,11 @@ export function response(completion, state, settings) {
 	if (reasoning === "" && s.thinkTags) ({ reasoning, text } = splitThink(text, s.thinkOpen));
 	if (reasoning === "" && carry.reasoning_details) reasoning = detailsText(carry.reasoning_details);
 	if (reasoning !== "" || carry.reasoning_details) {
-		content.push({ type: "thinking", thinking: reasoning, signature: sign(Object.keys(carry).length > 0 ? carry : undefined) });
+		content.push({
+			type: "thinking",
+			thinking: reasoning,
+			signature: sign(Object.keys(carry).length > 0 ? carry : undefined, state?.producer)
+		});
 		text = text.trimStart();
 	}
 	if (text === "" && typeof message.refusal === "string") text = message.refusal;

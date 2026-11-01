@@ -106,11 +106,12 @@ export async function request(chatBody, settings) {
 			case "assistant": {
 				// Thinking blocks come first, as Anthropic requires. They exist only when the client replayed `reasoning_details`
 				// items this translator made (`reasoningRoundTrip`); plain reasoning text has no signature and is still dropped.
-				const blocks = s.reasoningRoundTrip ? blocksOf(message.reasoning_details) : [];
+				const thinking = s.reasoningRoundTrip ? blocksOf(message.reasoning_details) : [];
+				const blocks = [];
 				const text = plainText(message.content);
 				if (text !== "") blocks.push({ type: "text", text });
 				else if (typeof message.refusal === "string" && message.refusal !== "") blocks.push({ type: "text", text: message.refusal });
-				if (reasoningPresent(message) && !blocks.some((block) => block.type === "thinking")) drop(state, "reasoning");
+				if (reasoningPresent(message) && !thinking.some((entry) => entry.block.type === "thinking")) drop(state, "reasoning");
 				for (const call of message.tool_calls ?? []) {
 					blocks.push({
 						type: "tool_use",
@@ -119,7 +120,8 @@ export async function request(chatBody, settings) {
 						input: parseArguments(call.function.arguments)
 					});
 				}
-				if (blocks.length > 0) push("assistant", blocks);
+				const ordered = interleave(thinking, blocks);
+				if (ordered.length > 0) push("assistant", ordered);
 				break;
 			}
 			case "tool": {
@@ -186,6 +188,25 @@ export async function request(chatBody, settings) {
  */
 function drop(state, name) {
 	if (!state.dropped.includes(name)) state.dropped.push(name);
+}
+
+/**
+ * Put replayed thinking blocks back where they were: each goes at the position it had among the original message's blocks (its `index`), ahead of
+ * the text and tool calls that follow it. The message's text and tool calls keep their order; positions past the end go last.
+ * @param {{ at: number, block: any }[]} thinking - Thinking blocks with their original positions.
+ * @param {any[]} rest - The assistant message's text and tool_use blocks.
+ * @returns {any[]} Content blocks in order.
+ */
+function interleave(thinking, rest) {
+	const ordered = [...thinking].sort((left, right) => left.at - right.at);
+	const out = [];
+	let next = 0;
+	let other = 0;
+	while (next < ordered.length || other < rest.length) {
+		if (next < ordered.length && (other >= rest.length || ordered[next].at <= out.length)) out.push(ordered[next++].block);
+		else out.push(rest[other++]);
+	}
+	return out;
 }
 
 /**

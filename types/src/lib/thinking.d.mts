@@ -17,18 +17,20 @@ export declare const ANTHROPIC_FORMAT = "anthropic-claude-v1";
 /**
  * Create the signature attached to a thinking block produced from upstream reasoning. It is clearly marked as not coming from Anthropic.
  *
- * Format: `llmt:` followed by the base64url of a JSON payload `{"v":1}`, or `{"v":1,"d":{...}}` when provider reasoning data has to come
- * back with the block. `d` holds only `reasoning_content` and `reasoning` (strings) and `reasoning_details` (a list of JSON objects).
- * A payload longer than 512 characters is deflated and written as `llmt:~` plus base64url. When the result would exceed 256 KiB the data
- * is left out and the plain marker is returned.
+ * Format: `llmt:` followed by the base64url of a JSON payload `{"v":1}`, or `{"v":1,"p":"<producer>","d":{...}}` when provider reasoning data has to
+ * come back with the block. `p` names the driver and protocol that produced the data (so it is restored only for the same producer) and `d` holds
+ * one text field (`reasoning_content` or `reasoning`) and/or `reasoning_details`. A payload longer than 512 characters is deflated and written
+ * as `llmt:~` plus base64url, unless that would not shrink it or would exceed the 30:1 inflation ratio {@link unsign} accepts. Data that
+ * {@link unsign} would reject (over the size limits, unknown shape) or a result over 256 KiB leaves the plain marker.
  * @param {{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] }} [data] - Provider reasoning data to carry.
+ * @param {string} [producer] - Producer binding, `driver:protocol`.
  * @returns {string} Signature string.
  */
 export declare function sign(data?: {
     reasoning_content?: string;
     reasoning?: string;
     reasoning_details?: object[];
-}): string;
+}, producer?: string): string;
 /**
  * Whether a signature was produced by {@link sign}.
  * @param {unknown} signature - Signature value.
@@ -36,13 +38,31 @@ export declare function sign(data?: {
  */
 export declare function isOurs(signature: unknown): signature is string;
 /**
+ * The limits on decoding signatures within one request: how many bytes may be inflated or decoded in total and how many marked signatures
+ * may be decoded. Once either is spent, further signatures are not decoded and the caller falls back to the thinking text.
+ * @returns {{ bytes: number, signatures: number }} A fresh budget for one request.
+ */
+export declare function createBudget(): {
+    bytes: number;
+    signatures: number;
+};
+/**
  * Read the provider reasoning data out of a signature made by {@link sign}. Strict: the signature must carry the mark, be within the size
- * limits and decode to `{"v":1,"d":{...}}` with only the known fields, each well formed; anything else (a real Anthropic signature, a plain
- * marker, a forged or garbled one) gives null and the caller falls back to the thinking text.
+ * limits and decode to `{"v":1,"d":{...}}` with only the known fields, each well formed; a payload bound to a producer is returned only for that
+ * same producer. Anything else (a real Anthropic signature, a plain marker, a forged, garbled or foreign one) gives null and the caller falls back to
+ * the thinking text. Inflation is bounded while it runs: by 1 MiB per signature, by the rest of the per-request budget, and by a 30:1 ratio of
+ * output to compressed input, so a small signature cannot expand into a large allocation.
  * @param {unknown} signature - Signature value from a thinking block.
+ * @param {{ producer?: string, budget?: { bytes: number, signatures: number } }} [options] - `producer` is the current `driver:protocol`; `budget` is shared by all signatures of one request (see {@link createBudget}).
  * @returns {Promise<{ reasoning_content?: string, reasoning?: string, reasoning_details?: object[] } | null>} The data, or null.
  */
-export declare function unsign(signature: unknown): Promise<{
+export declare function unsign(signature: unknown, { producer, budget }?: {
+    producer?: string;
+    budget?: {
+        bytes: number;
+        signatures: number;
+    };
+}): Promise<{
     reasoning_content?: string;
     reasoning?: string;
     reasoning_details?: object[];
@@ -50,7 +70,7 @@ export declare function unsign(signature: unknown): Promise<{
 /**
  * The `reasoning_details` item for an Anthropic thinking block or redacted thinking block, in the form an OpenAI client replays.
  * @param {any} block - Anthropic `thinking` or `redacted_thinking` content block (with its signature or data).
- * @param {number} index - Position among the message's reasoning items.
+ * @param {number} index - Position of the block among all content blocks of its message.
  * @returns {object | null} The item, or null for a block that cannot be replayed (no signature or data).
  */
 export declare function detailOf(block: any, index: number): object | null;
@@ -59,9 +79,12 @@ export declare function detailOf(block: any, index: number): object | null;
  * translator's Anthropic format with the expected string fields become blocks, only their known fields are copied, and at most 64 items
  * totalling 1 MiB of text are taken; anything else is ignored.
  * @param {unknown} details - `reasoning_details` of an assistant message.
- * @returns {any[]} Anthropic content blocks (possibly empty).
+ * @returns {{ at: number, block: any }[]} Anthropic content blocks with the position (`index`) they had in the original message, which the caller uses to keep thinking in place between text and tool use (possibly empty).
  */
-export declare function blocksOf(details: unknown): any[];
+export declare function blocksOf(details: unknown): {
+    at: number;
+    block: any;
+}[];
 /**
  * Which field of an OpenAI message or delta carries its reasoning text (`reasoning` or the older `reasoning_content`), if any.
  * @param {{ reasoning?: unknown, reasoning_content?: unknown }|undefined} part - Message or delta.
@@ -71,6 +94,15 @@ export declare function reasoningKey(part: {
     reasoning?: unknown;
     reasoning_content?: unknown;
 } | undefined): "reasoning" | "reasoning_content" | null;
+/**
+ * Add a streamed `reasoning_details` fragment to the list being built, so a stream yields the same items as a JSON reply. Fragments with the
+ * same `index` and `type` are one item: `text` and `summary` are concatenated and `signature`, `data`, `format` and `id` are taken from the
+ * fragment that carries them. A fragment without an `index`, or a new one, is appended; anything that is not an object is skipped.
+ * @param {any[]} list - Items so far (mutated).
+ * @param {any} fragment - One element of a streamed `reasoning_details` array.
+ * @returns {any[]} The same list.
+ */
+export declare function mergeDetail(list: any[], fragment: any): any[];
 /**
  * Readable text of a `reasoning_details` list (`reasoning.text` and `reasoning.summary` items), for a thinking block whose reasoning
  * arrived only as structured details.

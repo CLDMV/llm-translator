@@ -308,6 +308,35 @@ describe("deepseek reasoning round trip through the signature (#45)", () => {
 		}
 	});
 
+	it("a signature made for DeepSeek is not restored on another backend", async () => {
+		const transport = conversation();
+		const api = await make({
+			upstreams: [url, { url: "http://other.test", backend: "compatible", name: "other", settings: { reasoningRoundTrip: true } }],
+			transport
+		});
+		const first = await api.send({
+			model: "deepseek-reasoner",
+			max_tokens: 64,
+			tools: [tool],
+			messages: [{ role: "user", content: "read /a" }]
+		});
+		const other = fakeTransport(() => ({ body: completion() }));
+		const elsewhere = await make({
+			upstreams: [{ url: "http://other.test", backend: "compatible", settings: { reasoningRoundTrip: true } }],
+			transport: other
+		});
+		await elsewhere.send({
+			model: "m",
+			max_tokens: 8,
+			tools: [tool],
+			messages: second(first, (b) => (b.type === "thinking" ? { ...b, thinking: "visible text" } : b))
+		});
+		const sent = JSON.parse(other.calls.at(-1).init.body);
+		const turn = sent.messages.find((m) => m.role === "assistant");
+		expect(turn.reasoning_content).toBeUndefined();
+		expect(turn.reasoning).toBe("visible text");
+	});
+
 	it("reasoning_details from another provider round-trip exactly through any upstream that switches the setting on", async () => {
 		const details = [
 			{ type: "reasoning.encrypted", id: "r1", data: "AAECAw==", format: "openai-responses-v1", index: 0 },
