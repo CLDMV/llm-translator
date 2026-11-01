@@ -71,6 +71,12 @@ describe("settings", () => {
 		}
 	});
 
+	test("thinkOpen defaults to off and must be a boolean", () => {
+		expect(resolve().thinkOpen).toBe(false);
+		expect(resolve({ thinkOpen: true }).thinkOpen).toBe(true);
+		expect(() => resolve({ thinkOpen: "yes" })).toThrow(/Invalid setting thinkOpen/);
+	});
+
 	test("rejects invalid enumerated values", () => {
 		expect(() => resolve({ inlineSystem: "sideways" })).toThrow(/Invalid setting inlineSystem/);
 		try {

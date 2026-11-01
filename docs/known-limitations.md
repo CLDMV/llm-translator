@@ -4,7 +4,7 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 
 ## Reasoning
 
-- Only a leading `<think>...</think>` block in content is parsed as reasoning. A model whose chat template opens the think block in the prompt, so the reply contains only a closing `</think>`, keeps that text in the answer (FI-081, [#23](https://github.com/CLDMV/llm-translator/issues/23)).
+- Only a leading `<think>...</think>` block in content is parsed as reasoning. A model whose chat template opens the think block in the prompt, so the reply contains only a closing `</think>`, needs `thinkOpen: true`; the stream then emits nothing until the `</think>` arrives or the stream ends (FI-081, [#23](https://github.com/CLDMV/llm-translator/issues/23)).
 - Reasoning blocks produced by the translator carry a marked signature (`llmt:...`). They are not Anthropic signatures and are not accepted by real Anthropic endpoints. When an OpenAI client talks to an Anthropic upstream, assistant reasoning in history is dropped.
 - `redacted_thinking` blocks are dropped. Thinking `display` modes and `between_tools` thinking have no effect.
 - Servers that require reasoning to be sent back on every turn (DeepSeek with tools, OpenRouter's structured `reasoning_details`) are not supported yet; reasoning goes back as plain text only.

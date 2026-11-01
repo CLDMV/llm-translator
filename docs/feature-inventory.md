@@ -120,7 +120,7 @@ Source: Anthropic API inventory sections 5 to 8.
 | FI-078 | Stream delta `citations_delta`                                                             | ANT-STR-deltas      | not implemented | Not produced Tracked: [#16](https://github.com/CLDMV/llm-translator/issues/16).                                                       |
 | FI-079 | `ping` events                                                                              | ANT-STR-flow        | implemented     | SSE writer, not the pure converter                                                                                                    |
 | FI-080 | Interleaved parallel tool-call fragments                                                   | vLLM §3, LAND A.17  | implemented     | Buffered and emitted as complete blocks                                                                                               |
-| FI-081 | Template-injected opening `<think>` (only `</think>` appears in content)                   | vLLM §4             | not implemented | Only a leading `<think>...</think>` is parsed Tracked: [#23](https://github.com/CLDMV/llm-translator/issues/23).                      |
+| FI-081 | Template-injected opening `<think>` (only `</think>` appears in content)                   | vLLM §4             | implemented     | `thinkOpen` setting: reasoning runs to the first `</think>`; no close tag falls back to text                                          |
 | FI-082 | Error shape, error types, `request-id`, `retry-after`                                      | ANT §8              | implemented     | `api/error/**`, `lib/errors.mjs`, `lib/upstream-error.mjs`                                                                            |
 
 ## Anthropic other endpoints

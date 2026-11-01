@@ -48,7 +48,7 @@ import { messages } from "../../../../../../../lib/sse.mjs";
 export async function* stream(source, state, settings) {
 	const s = resolve(settings);
 	const toolNames = state?.toolNames ?? {};
-	const splitter = s.thinkTags ? createThinkSplitter() : null;
+	const splitter = s.thinkTags ? createThinkSplitter(s.thinkOpen) : null;
 	const tools = new Map();
 	let started = false;
 	let nextIndex = 0;

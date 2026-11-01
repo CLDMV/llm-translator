@@ -36,19 +36,28 @@ export declare function reasoningOf(part: {
 /**
  * Split a complete content string into reasoning and answer. Only a LEADING `<think>...</think>` is recognised
  * (whitespace before it and after it is ignored); an unterminated `<think>` treats everything as reasoning.
+ *
+ * With `open` the output is taken to start inside a thought (the chat template already wrote `<think>` into the
+ * generation prompt): everything before the first `</think>` is reasoning. When no `</think>` appears the whole
+ * content is answer text. A literal leading `<think>` is still honoured.
  * @param {string} content - Full message content.
+ * @param {boolean} [open] - The output starts inside a thought.
  * @returns {{ reasoning: string, text: string }} Split result.
  */
-export declare function splitThink(content: string): {
+export declare function splitThink(content: string, open?: boolean): {
     reasoning: string;
     text: string;
 };
 /**
  * Incremental version of {@link splitThink} for streamed content. Feed content deltas to `push()` and call `end()`
  * once; each call returns `{ reasoning, text }` pieces that are safe to emit now (partial tags are held back).
+ *
+ * With `open` (see {@link splitThink}) nothing is emitted until the first `</think>` arrives, because only then is it known
+ * that the content so far was reasoning; if the stream ends first, everything held is released as answer text.
+ * @param {boolean} [open] - The output starts inside a thought.
  * @returns {{ push: (delta: string) => { reasoning: string, text: string }, end: () => { reasoning: string, text: string } }} Splitter.
  */
-export declare function createThinkSplitter(): {
+export declare function createThinkSplitter(open?: boolean): {
     push: (delta: string) => {
         reasoning: string;
         text: string;

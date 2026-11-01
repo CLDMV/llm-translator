@@ -68,6 +68,67 @@ function run(text, size) {
 	return { reasoning: reasoning + tail.reasoning, text: out + tail.text };
 }
 
+describe("splitThink with open: true", () => {
+	test("reasoning runs up to the first close tag", () => {
+		expect(splitThink("plan it</think>\n\nanswer </think> more", true)).toEqual({ reasoning: "plan it", text: "answer </think> more" });
+		expect(splitThink("</think>answer", true)).toEqual({ reasoning: "", text: "answer" });
+	});
+
+	test("no close tag falls back to plain text", () => {
+		expect(splitThink("just an answer", true)).toEqual({ reasoning: "", text: "just an answer" });
+		expect(splitThink("", true)).toEqual({ reasoning: "", text: "" });
+	});
+
+	test("a literal leading open tag is still honoured", () => {
+		expect(splitThink("<think>plan</think>answer", true)).toEqual({ reasoning: "plan", text: "answer" });
+	});
+
+	test("without open a bare close tag stays in the text", () => {
+		expect(splitThink("plan</think>answer")).toEqual({ reasoning: "", text: "plan</think>answer" });
+	});
+});
+
+describe("createThinkSplitter with open: true", () => {
+	const feed = (text, size) => {
+		const splitter = createThinkSplitter(true);
+		let reasoning = "";
+		let out = "";
+		for (const chunk of size ? slices(text, size) : [text]) {
+			const piece = splitter.push(chunk);
+			reasoning += piece.reasoning;
+			out += piece.text;
+		}
+		const tail = splitter.end();
+		return { reasoning: reasoning + tail.reasoning, text: out + tail.text };
+	};
+	const cases = [
+		["plan it</think>\n\nanswer", { reasoning: "plan it", text: "answer" }],
+		["</think>answer", { reasoning: "", text: "answer" }],
+		["plan</think>a</think>b", { reasoning: "plan", text: "a</think>b" }],
+		["<think>plan</think>answer", { reasoning: "plan", text: "answer" }],
+		["no close tag here", { reasoning: "", text: "no close tag here" }],
+		["  <thi", { reasoning: "", text: "  <thi" }],
+		["", { reasoning: "", text: "" }]
+	];
+	test.each(cases)("%j agrees with splitThink at every chunk size", (input, expected) => {
+		expect(splitThink(input, true)).toEqual(expected);
+		for (const size of [0, 1, 2, 3, 5, 11]) expect(feed(input, size)).toEqual(expected);
+	});
+
+	test("holds everything until the close tag, then releases it", () => {
+		const splitter = createThinkSplitter(true);
+		expect(splitter.push("abc</th")).toEqual({ reasoning: "", text: "" });
+		expect(splitter.push("ink>  hi")).toEqual({ reasoning: "abc", text: "hi" });
+		expect(splitter.end()).toEqual({ reasoning: "", text: "" });
+	});
+
+	test("releases held content as text when the stream ends without a close tag", () => {
+		const splitter = createThinkSplitter(true);
+		expect(splitter.push("an answer")).toEqual({ reasoning: "", text: "" });
+		expect(splitter.end()).toEqual({ reasoning: "", text: "an answer" });
+	});
+});
+
 describe("createThinkSplitter", () => {
 	const cases = [
 		["<think>plan A</think>\n\nanswer", { reasoning: "plan A", text: "answer" }],

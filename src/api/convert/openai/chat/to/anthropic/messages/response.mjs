@@ -27,7 +27,7 @@ import { toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/fini
 /**
  * Convert a (non-streaming) OpenAI chat completion into an Anthropic message.
  *
- * Reasoning (`reasoning`, `reasoning_content`, or a leading `<think>` block when `thinkTags` is on) becomes a
+ * Reasoning (`reasoning`, `reasoning_content`, or a leading `<think>` block when `thinkTags` is on, or a block closed by `</think>` when `thinkOpen` is also on) becomes a
  * `thinking` block with a translator-marked signature. Tool calls become `tool_use` blocks; arguments that are not
  * a JSON object are passed through under `_raw_arguments` so the client reports a tool error the model can recover
  * from.
@@ -48,7 +48,7 @@ export function response(completion, state, settings) {
 
 	let reasoning = reasoningOf(message);
 	let text = typeof message.content === "string" ? message.content : "";
-	if (reasoning === "" && s.thinkTags) ({ reasoning, text } = splitThink(text));
+	if (reasoning === "" && s.thinkTags) ({ reasoning, text } = splitThink(text, s.thinkOpen));
 	if (reasoning !== "") {
 		content.push({ type: "thinking", thinking: reasoning, signature: sign() });
 		text = text.trimStart();

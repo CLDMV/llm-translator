@@ -102,8 +102,9 @@ Scope: the library translates between Anthropic Messages and OpenAI Chat Complet
 ### D-15 Only a leading think block is parsed
 
 - **Decision.** With `thinkTags`, only a leading `<think>...</think>` (whitespace tolerated, unterminated treated as all reasoning) is recognised, in both streaming and non-streaming conversion.
-- **Rationale.** A closing tag alone cannot be classified while streaming. Tracked as FI-081.
+- **Rationale.** A closing tag alone cannot be classified while streaming without knowing the output started inside a thought. Tracked as FI-081.
 - **Alternatives.** A heuristic on a bare `</think>` (misclassifies ordinary text).
+- **Amendment.** Chat templates that write `<think>` into the generation prompt produce replies with only a closing `</think>`. The explicit setting `thinkOpen` (off by default, needs `thinkTags`) declares that the output starts inside a thought. Reasoning then runs to the first `</think>`; with no close tag the content is answer text. Streaming holds all content until the close tag arrives or the stream ends (then it is flushed as text), so streaming and non-streaming produce the same blocks. This is a declaration rather than a heuristic, so ordinary text is not misclassified.
 
 ### D-16 Tool arguments that are not an object are preserved, not invented
 

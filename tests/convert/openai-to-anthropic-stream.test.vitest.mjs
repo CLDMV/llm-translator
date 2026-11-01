@@ -210,6 +210,33 @@ describe("reasoning", () => {
 		expect(deltas(events)).toEqual([{ type: "text_delta", text: "<think>x</think>y" }]);
 	});
 
+	test("thinkOpen: a bare </think> split across chunks closes the reasoning", async () => {
+		const events = await run(
+			[
+				chunk({ content: "plan " }),
+				chunk({ content: "it</th" }),
+				chunk({ content: "ink>\n\nThe " }),
+				chunk({ content: "answer" }),
+				chunk({}, {}, "stop")
+			],
+			undefined,
+			{ thinkOpen: true }
+		);
+		expect(deltas(events).filter((d) => d.type !== "signature_delta")).toEqual([
+			{ type: "thinking_delta", thinking: "plan it" },
+			{ type: "text_delta", text: "The " },
+			{ type: "text_delta", text: "answer" }
+		]);
+	});
+
+	test("thinkOpen: content without a close tag is flushed as text when the stream ends", async () => {
+		const events = await run([chunk({ content: "just " }), chunk({ content: "text" }), chunk({}, {}, "stop")], undefined, {
+			thinkOpen: true
+		});
+		expect(deltas(events)).toEqual([{ type: "text_delta", text: "just text" }]);
+		expect(events.at(-1).event).toBe("message_stop");
+	});
+
 	test("an unterminated think block ends as reasoning only", async () => {
 		const events = await run([chunk({ content: "<think>never ends" }), chunk({}, {}, "length")]);
 		expect(types(events).slice(1, 5)).toEqual(["content_block_start", "content_block_delta", "content_block_delta", "content_block_stop"]);
