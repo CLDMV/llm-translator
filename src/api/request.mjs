@@ -26,6 +26,7 @@ import * as images from "../lib/images.mjs";
 import * as tools from "../lib/tools.mjs";
 import { LIMITS } from "../lib/toolsearch.mjs";
 import { warn } from "../lib/warn.mjs";
+import { fit, pinBody } from "../lib/effort.mjs";
 
 /**
  * Who produced reasoning data signed for this endpoint: driver, protocol and host, so two upstreams on the generic driver stay apart.
@@ -66,19 +67,26 @@ export async function request(body, options = {}) {
  * @returns {Promise<any>} The `request` result.
  */
 async function prepare(c, body, options, picked) {
-	const { endpoint, model, unserved, convert, pool } = picked;
+	const { endpoint, model, unserved, convert, pool, pin } = picked;
+	const levels = Object.hasOwn(c.config.efforts, model) ? c.config.efforts[model] : undefined;
+	// An alias that pins settings overrides what the request asked for, before conversion; a pinned effort is always mapped.
+	if (pin) body = pinBody(body, pin, c.front);
 	const driver = c.driver(endpoint);
 	const key = `${endpoint.name}\n${model}`;
 	// A refusal remembered earlier in this process, or an explicit `images: false`, sends the request without images.
 	const text = options.images === false || (c.state.textOnly.has(key) && c.settings(endpoint).imageFallback);
-	const settings = text ? { ...c.settings(endpoint), images: false } : c.settings(endpoint);
+	const settings = {
+		...(text ? { ...c.settings(endpoint), images: false } : c.settings(endpoint)),
+		...(pin?.effort === undefined ? {} : { effort: true })
+	};
 	const stream = body.stream === true;
 	let upstream;
 	let converted;
 	if (convert) {
 		({ body: upstream, state: converted } = await convert.request(body, settings, {
 			producer: producerOf(endpoint),
-			budget: options.budget
+			budget: options.budget,
+			listed: levels !== undefined
 		}));
 		if (converted.toolSearch?.capped) {
 			warn(
@@ -105,6 +113,8 @@ async function prepare(c, body, options, picked) {
 	if (text && !convert && c.front === "openai") upstream = images.strip(upstream);
 	if (options.tools === false) upstream = tools.strip(upstream);
 	upstream.model = model;
+	// A model with a configured level list gets an effort it supports (and the default one when the request names none).
+	if (levels && endpoint.protocol === "openai.chat") fit(upstream, levels, model, (message) => warn(c.config, c.state, message));
 	if (converted?.reasoningMissing) {
 		warn(
 			c.config,
@@ -116,6 +126,7 @@ async function prepare(c, body, options, picked) {
 		upstream = await driver.request(upstream, {
 			endpoint,
 			settings,
+			levels,
 			state: converted,
 			warn: (message) => warn(c.config, c.state, message)
 		});

@@ -109,7 +109,7 @@ describe("lib/route", () => {
 	const health = () => ({ until: 0, inflight: 0 });
 	const anthropic = { name: "a", protocol: "anthropic.messages", default: false, health: health() };
 	const vllm = { name: "v", protocol: "openai.chat", facts: { models: ["m"] }, default: true, health: health() };
-	const config = { aliases: { alias: "m" }, pool: { strategy: "failover", models: {} } };
+	const config = { aliases: { alias: "m" }, pins: {}, pool: { strategy: "failover", models: {} } };
 	const state = { cursors: new Map() };
 
 	it("serves models", () => {

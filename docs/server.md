@@ -47,6 +47,32 @@ Flags win over environment variables, which win over the config file. The config
 
 The process runs until SIGINT or SIGTERM, then closes the server and the translator.
 
+### Aliases that pin settings
+
+Claude Code asks for tier names (`ANTHROPIC_DEFAULT_{FABLE,OPUS,SONNET,HAIKU}_MODEL`). With one local model the tiers can map to the same model at different efforts:
+
+```json
+{
+	"aliases": {
+		"glm-flash-max": { "model": "GLM-5.3-Flash", "effort": "max" },
+		"glm-flash-high": { "model": "GLM-5.3-Flash", "effort": "high" },
+		"glm-flash-low": { "model": "GLM-5.3-Flash", "effort": "low" },
+		"glm-flash-plain": "GLM-5.3-Flash"
+	},
+	"efforts": { "GLM-5.3-Flash": ["low", "high", "max"] }
+}
+```
+
+`GET /v1/models` and `GET /v1/models/{id}` list the alias names next to the real models. In both client shapes an entry adds these fields when they apply:
+
+| Field            | On                             | Meaning                                                                                                     |
+| ---------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `efforts`        | a model with an `efforts` list | The supported levels, lowest to highest. An alias that pins an effort lists just that one (after snapping). |
+| `default_effort` | the same entries               | The level sent when the request names none, or `null` when the model's own default applies.                 |
+| `alias_of`       | every alias                    | The model name the alias points at.                                                                         |
+| `effort`         | an alias that pins an effort   | The pinned level, after snapping to the model's list.                                                       |
+| `thinking`       | an alias that pins `thinking`  | `true` or `false`. An alias that turns thinking off has no `efforts`.                                       |
+
 ## Authentication
 
 Listening on anything other than a loopback address (`127.x`, `::1`, `localhost`) requires an `apiKey` or an `authorize` hook: the start-up is refused otherwise, because anyone who can reach the port could spend your GPU. Pass `--allow-unauthenticated` (`allowUnauthenticated: true`) to opt out, for example behind a trusted network or an authenticating reverse proxy.

@@ -222,7 +222,7 @@ Error type correspondence used by the converters: `400` and `invalid_request_err
 | `POST /v1/messages`                                                  | mapped          | Anthropic front.                                                               |
 | `POST /v1/chat/completions`                                          | mapped          | OpenAI front.                                                                  |
 | `POST /v1/messages/count_tokens`                                     | best-effort     | vLLM `/tokenize` when available, otherwise a character-based estimate.         |
-| `GET /v1/models`                                                     | mapped          | Client-shaped list across upstreams plus aliases.                              |
+| `GET /v1/models`                                                     | mapped          | Client-shaped list across upstreams plus aliases, with effort levels.          |
 | `GET /v1/models/{id}`                                                | mapped          | One entry of that list; 404 in the front's error format for an unknown id.     |
 | `HEAD` / `GET /` and `/api/hello`                                    | mapped          | Claude Code warm-up probe.                                                     |
 | Message Batches, Files, Skills, Responses, Embeddings, Audio, Images | not implemented | See [feature-inventory.md](feature-inventory.md).                              |
