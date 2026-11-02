@@ -6,10 +6,10 @@ The translator can run as a standalone HTTP server, as a Fastify plugin inside a
 
 The server speaks one client protocol, the front, chosen with `front` (default `anthropic`).
 
-| Front       | Routes                                                                                                            |
-| ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET` and `HEAD` on `/` and `/api/hello` |
-| `openai`    | `POST /v1/chat/completions`, `GET /v1/models`, `GET` and `HEAD` on `/`                                            |
+| Front       | Routes                                                                                                                                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` and `/api/hello` |
+| `openai`    | `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/`                                            |
 
 Streaming replies use `content-type: text/event-stream`. Errors are always returned in the front's own error shape.
 
@@ -49,9 +49,79 @@ The process runs until SIGINT or SIGTERM, then closes the server and the transla
 
 ## Authentication
 
-Listening on anything other than a loopback address (`127.x`, `::1`, `localhost`) requires an `apiKey`: the start-up is refused otherwise, because anyone who can reach the port could spend your GPU. Pass `--allow-unauthenticated` (`allowUnauthenticated: true`) to opt out, for example behind a trusted network or an authenticating reverse proxy.
+Listening on anything other than a loopback address (`127.x`, `::1`, `localhost`) requires an `apiKey` or an `authorize` hook: the start-up is refused otherwise, because anyone who can reach the port could spend your GPU. Pass `--allow-unauthenticated` (`allowUnauthenticated: true`) to opt out, for example behind a trusted network or an authenticating reverse proxy.
 
 `apiKey` (a string or an array) makes the server require the key as `x-api-key` or `Authorization: Bearer <key>` on the API routes. `/` and `/api/hello` stay open. Upstream keys are configured separately on each upstream and never reach the client.
+
+### `authorize` hook and `onUsage`
+
+An app with its own key system passes `authorize(request)` (sync or async) to `server.start` or `server.plugin` instead of rebuilding the routes. It runs on the API routes after the `apiKey` check (when one is set) and after the body is parsed; `/` and `/api/hello` skip it.
+
+```js
+const server = await api.server.start({
+	host: "0.0.0.0",
+	authorize: async (request) => {
+		const key = await keys.lookup(request.headers["x-api-key"]);
+		if (!key) return { ok: false, status: 401, message: "invalid key" };
+		if (request.method === "POST" && !request.route) return { ok: false, status: 400, message: "unroutable request" };
+		if (request.route && !key.models.includes(request.route.model)) return { ok: false, status: 403, message: "model not allowed" };
+		return { ok: true, context: { keyId: key.id } };
+	},
+	onUsage: (report, context) => meter.add(context?.keyId, report)
+});
+```
+
+`request` is `{ method, url, headers, body, front, route }`. `body` is the parsed body (`undefined` for `GET`). `route` is the result of `api.route(body)` (see below) for every object body, with or without a `model` (a body without one is routed like `request` routes it, which may substitute the only model an upstream serves). `route` is `null` only for a body that is not an object or cannot be routed; the normal handler then answers it with a 400. A hook that enforces a model allow-list should therefore refuse a `POST` whose `request.route` is `null`, as the example above does.
+
+| Return value                                | Result                                                      |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| `true`, `{ ok: true, context? }`            | The request proceeds; `context` is kept for `onUsage`.      |
+| `false`, `{ ok: false, status?, message? }` | Refused; defaults are status `401`, message `unauthorized`. |
+| anything else                               | Refused with `401`.                                         |
+| a thrown or rejected hook                   | Refused with `401`; the error goes to the request logger.   |
+
+A refusal is delivered through `api.error.build`, so each front gets its own error format (Anthropic `{"type":"error",…}`, OpenAI `{"error":{…}}`). `onUsage(report, context)` is called once per request with the usage report described under [usage reporting](#usage-reporting-and-model-allow-lists) and the `context` the hook returned (`undefined` without a hook); it also works without `authorize`. With `authorize` set, a non-loopback bind no longer needs an `apiKey`.
+
+## Endpoint pools: failover and load balancing
+
+Upstreams that serve the same model (after aliases) form a pool for that model. The `pool` key of the translator config (also accepted in the CLI's JSON file) chooses how a request is spread over them:
+
+```json
+{
+	"upstreams": [
+		{ "name": "gpu1", "url": "http://gpu1:8000", "models": ["qwen3-coder"] },
+		{ "name": "gpu2", "url": "http://gpu2:8000", "models": ["qwen3-coder"] }
+	],
+	"pool": {
+		"strategy": "round_robin",
+		"backoff": { "base": 1000, "max": 60000 },
+		"connectTimeout": 10000,
+		"headersTimeout": 0,
+		"models": { "qwen3-coder": "least_busy" }
+	}
+}
+```
+
+| Key              | Default      | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `strategy`       | `"failover"` | `failover`: configuration order, so the first endpoint is used until it fails. `round_robin`: rotate per model. `least_busy`: the endpoint with the fewest requests in flight, ties in configuration order.                                                                                                                                                                                                                                                                                                                                                               |
+| `models`         | `{}`         | Strategy per model, keyed by the model name after aliases. Models not listed use `strategy`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `backoff.base`   | `1000`       | Milliseconds a failing endpoint is skipped after its first failure. Each further consecutive failure doubles it.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `backoff.max`    | `60000`      | Upper limit of the backoff in milliseconds.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `connectTimeout` | `10000`      | Milliseconds to wait for the TCP connection of a request to an endpoint that has pool mates; `0` disables. A powered-off or unroutable host would otherwise hold each request for the operating system's connect timeout (about two minutes). Applied by the default transport, and for https it covers the TLS handshake too; a custom `transport` receives it as `init.connectTimeout` and may ignore it.                                                                                                                                                               |
+| `headersTimeout` | `0`          | Milliseconds to wait for the response headers of such a request; `0` (off) by default. A server that accepts the connection and never answers is only failed over from when this is set. It is off because vLLM sends the headers together with the first token, so a long prompt on a slow machine can legitimately take minutes; set it to the longest time to first token you accept. Nothing caps the reply once its headers have arrived, and it is not applied to the last endpoint left to try (nothing to fail over to, so a long prefill must not become a 502). |
+
+With no `pool` key nothing changes: the first endpoint that serves the model is used, and requests only move on when it fails.
+
+**When a request moves on.** A connection error or an HTTP 5xx from an endpoint, received before anything was sent to the client, sends the same request to the next endpoint of the pool. Each endpoint is tried at most once per request. Nothing else moves on: a 4xx (including 429) is the answer, a stream that fails after its first event is not replayed, and nothing is tried once the caller's abort signal has fired. The retry without images or tools ([decision D-38](decisions.md), `toolFallback`) happens on the endpoint that refused, before any failover, and the next endpoint starts with the full request. If every endpoint fails, the last endpoint's failure is the reply.
+
+**Health.** An endpoint that failed is skipped by `request`, `send` and `route` until its backoff has passed; the next success resets it. Healthy endpoints are always tried before unhealthy ones, and when no endpoint of the pool is healthy they are all still tried, the one that recovers soonest first. A request takes its endpoint's in-flight slot when the endpoint is picked, so concurrent requests see each other, and keeps it until its reply is over (the JSON reply built, or the stream finished, failed or closed). A stream that is never read, or a library caller that never reads the reply or its `usage`, keeps the slot for good and makes that endpoint look busier to `least_busy` than it is: always consume or `return()` the stream. `request`, `route` and `token.count` take no slot and do not advance a round robin; only `send` does.
+
+**Timeouts.** `connectTimeout` and `headersTimeout` apply only to requests whose model has more than one endpoint in its pool; a single endpoint keeps the transport's no-timeout behaviour. A timeout counts as a connection error: the request moves on to the next endpoint and the endpoint is marked unhealthy.
+
+**Seeing it.** `api.endpoint.status()` returns the pool config and one record per endpoint: `healthy`, `failures`, `retryAt`, `inflight`, `requests`, `errors`, `lastError`, `lastFailure`, `lastSuccess`. `api.status().upstreams[].health` carries the same record. The server has no route for it; serve it from your own handler (behind the same `apiKey` or `authorize` as everything else) if you want one.
+
+**Usage and `authorize`.** The usage report's `upstream` (and `reply.usage`) names the endpoint that answered, or the last one tried when all failed. `authorize` runs once per HTTP request, before `send`, and failover never runs it again. `api.route(body)` returns `pool`, the endpoint names in the order they would be tried right now, and `upstream` is the first of them. It is a snapshot: it does not advance a round robin, and `send` decides again, so a different member can answer (use `usage.upstream` for the one that did).
 
 ## Forwarded requests and header allow-list
 
@@ -76,7 +146,7 @@ The default transport is built on `node:http` and applies no timeouts of its own
 
 ## Client disconnects
 
-When the client goes away the upstream request is aborted, so the GPU stops generating tokens nobody reads. This works while waiting for the upstream, while streaming, and after an early commit.
+When the client goes away the upstream request is aborted, so the GPU stops generating tokens nobody reads. This works while waiting for the upstream, while streaming, and after an early commit. A request whose client left before the route handler ran makes no upstream call and gets no `onUsage` call. Once an upstream call has been made, `onUsage` is called exactly once, also when the client left.
 
 ## Programmatic use
 
@@ -91,7 +161,7 @@ await server.close(); // one server
 await api.server.stop(); // every server started through this translator; open connections are closed, not waited for
 ```
 
-`start` options are `host`, `port`, `front`, `apiKey`, `bodyLimit` (default 64 MiB, large enough for images and PDFs), `logger` and `allowUnauthenticated`. `front` applies to that server only, so one translator can serve an Anthropic port and an OpenAI port at the same time; `api.status().front` keeps reporting the configured front.
+`start` options are `host`, `port`, `front`, `apiKey`, `bodyLimit` (default 64 MiB, large enough for images and PDFs), `logger`, `allowUnauthenticated`, `authorize` and `onUsage`. `front` applies to that server only, so one translator can serve an Anthropic port and an OpenAI port at the same time; `api.status().front` keeps reporting the configured front.
 
 ## Fastify plugin
 
@@ -105,11 +175,11 @@ await app.register(api.server.plugin, { prefix: "/llm", apiKey: "change-me" });
 await app.listen({ port: 3000 }); // POST /llm/v1/messages
 ```
 
-The plugin is encapsulated: its error handler and auth hook apply only to its own routes. Options are `front`, `apiKey` and `bodyLimit`.
+The plugin is encapsulated: its error handler and auth hook apply only to its own routes. Options are `front`, `apiKey`, `bodyLimit`, `authorize` and `onUsage`.
 
 ## Your own server with the helper leaves
 
-Any HTTP framework can use the pieces directly. `api.send(body, { signal })` does the full round trip and returns either `{ status, headers, body }` or `{ status, headers, stream }`; `api.sse` and `api.error` provide the wire helpers.
+Any HTTP framework can use the pieces directly. `api.send(body, { signal, onUsage })` does the full round trip and returns either `{ status, headers, body }` or `{ status, headers, stream }`; `api.route(body)` resolves where a request would go without sending it; `api.sse` and `api.error` provide the wire helpers.
 
 ```js
 import http from "node:http";
@@ -136,6 +206,40 @@ http
 	})
 	.listen(8787);
 ```
+
+### Usage reporting and model allow-lists
+
+Every reply from `send`, including error replies, has a `usage` property: a promise of one normalized report that never rejects. `onUsage(report)` receives the same report exactly once. For JSON and error replies the report is ready when `send` returns; for a stream it is delivered when the stream ends, fails or is stopped early (`break` or `return()`). A stream nobody iterates never settles. The stream is passed through unchanged, so `api.sse.write` works as before.
+
+```js
+const allowed = new Set(["qwen3-coder"]);
+
+const body = JSON.parse(raw);
+const { model, upstream } = api.route(body); // no I/O; throws TranslatorError (400) for a body that is not an object
+if (!allowed.has(model)) return deny(403);
+
+const reply = await api.send(body, {
+	signal: controller.signal,
+	onUsage: (report) => meter.add(apiKey, report) // or: reply.usage.then(...)
+});
+```
+
+`api.route(body)` returns `{ upstream, model, requested, protocol, backend, native, unserved, pool }`: the upstream endpoint name, the model name sent upstream (after aliases and routing), the model the client asked for, the upstream protocol, its backend, whether the body is forwarded without conversion and whether no upstream lists the model. `pool` lists the endpoints that serve the model in the order they would be tried (see [Endpoint pools](#endpoint-pools-failover-and-load-balancing)).
+
+The report:
+
+| Field                                                                                     | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` | Numbers, or `null` when unknown (never `0` for unknown). `input_tokens` excludes cached tokens. A field the source did not carry stays `null`: for an upstream on the OpenAI protocol `cache_creation_input_tokens` is always `null` (cache creation is folded into `input_tokens`) and `cache_read_input_tokens` is `null` unless the upstream reported cached tokens. On the OpenAI front the numbers come from the OpenAI-shaped reply, so `cache_read_input_tokens` is `null` when no cached tokens were reported. |
+| `reported`                                                                                | `false` when the reply carried no usage; every token field is then `null`.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `estimated`                                                                               | `{ input_tokens, output_tokens }` for the sides the upstream did not report and the translator estimated in the client reply (see below), `null` for a side that was real; `null` altogether when nothing was estimated. Never mixed into the token fields.                                                                                                                                                                                                                                                            |
+| `complete`                                                                                | `true` only when the reply finished normally. A stream counts as finished only once its terminal marker was seen: `message_stop` (Anthropic front), the `[DONE]` sentinel (OpenAI front; every stream the translator produces ends with it when it finishes normally, so an upstream that closes without it counts as truncated). A stream that ends without it is reported with reason `error`.                                                                                                                       |
+| `reason`                                                                                  | `"done"`, `"aborted"` (signal aborted, or the consumer stopped iterating), `"error"` (stream failure, connection failure, conversion failure) or `"upstream_error"` (non-OK upstream status).                                                                                                                                                                                                                                                                                                                          |
+| `model`, `requested`, `upstream`, `front`, `stream`                                       | Model sent upstream, model the client asked for, upstream endpoint name, client protocol, and whether a stream was requested.                                                                                                                                                                                                                                                                                                                                                                                          |
+
+When a converted reply's upstream did not report a side of the usage (input or output: the field is absent, so a reported 0 stays 0; a usage object with every field absent or zero counts as nothing reported, like the `reported` flag), the client-protocol reply carries an estimate for that side instead of zero, and a side the upstream did report is left alone. The input estimate is the server tokenizer's count when the driver has one (vLLM `/tokenize`, Anthropic `count_tokens`; skipped for an OpenAI-front stream whose client did not ask for usage, so the end of the stream is not delayed), else one token per four characters of the upstream request (the estimate `token.count` uses). The output estimate is one token per four characters of generated text, reasoning and tool arguments (at least 1). On the Anthropic front a stream carries them in the final `message_delta` (`message_start` is sent before the output is known and still shows 0 input tokens); on the OpenAI front they go in the final usage chunk, with `total_tokens` the sum of the two sides. The report itself never presents them as counts: its token fields keep only what the upstream reported, and `estimated` holds `{ input_tokens, output_tokens }` with `null` for a side that was real (and is `null` altogether when nothing was estimated), so a metering caller can choose to use or ignore them. Replies passed through without conversion are not altered and have `estimated: null`.
+
+A partial stream reports the usage seen so far (cumulative; the last values win). Counts are read from the client-protocol output, except for an Anthropic-front reply converted from an OpenAI-protocol upstream, where the upstream's own `usage` is used. On the OpenAI front the translator always asks the upstream for the final usage chunk of a stream, so the report is complete whatever the client sent; the client receives that chunk only when it sent `stream_options.include_usage`. With the `streamUsage` setting off (for upstreams that reject `stream_options`) the translator does not add the option to a pass-through request, so such streams report `reported: false` unless the client asked for usage itself. Usage that is absent or all zero counts as not reported. An exception in `onUsage` is reported as a warning and never breaks the reply. When `send` throws (the caller aborted), `onUsage` is still called.
 
 - `api.sse.encode(event)` formats one frame, `api.sse.parse(source)` reads frames, `api.sse.ping(events, { interval })` adds pings to any event stream, and `api.sse.write(target, events)` pumps a stream into a writable with backpressure.
 - `api.error.build(status, message, { type, code, param })` creates an error reply in the front's shape for failures that originate in your server, such as authentication.

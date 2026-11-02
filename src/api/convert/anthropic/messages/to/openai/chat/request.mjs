@@ -23,6 +23,8 @@ import { createNameFitter } from "../../../../../../../lib/ids.mjs";
 import { sanitize } from "../../../../../../../lib/schema.mjs";
 import { NOTE } from "../../../../../../../lib/images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
+import { createBudget, unsign } from "../../../../../../../lib/thinking.mjs";
+import { plan, scan } from "../../../../../../../lib/toolsearch.mjs";
 
 const HANDLED = new Set([
 	"model",
@@ -52,10 +54,11 @@ const BILLING = "x-anthropic-billing-header:";
  * tool-name map, thinking mode, fields that were dropped).
  * @param {any} body - Anthropic `POST /v1/messages` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
+ * @param {{ producer?: string, budget?: ReturnType<typeof createBudget> }} [context] - `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts).
  * @returns {Promise<{ body: any, state: any }>} OpenAI request body and conversion state.
  * @throws {TranslatorError} For malformed requests, unsupported content when configured to error, or PDF limit violations.
  */
-export async function request(body, settings) {
+export async function request(body, settings, context) {
 	const s = resolve(settings);
 	if (body === null || typeof body !== "object" || !Array.isArray(body.messages)) {
 		throw new TranslatorError("messages: Field required", { code: "invalid_request", param: "messages" });
@@ -69,7 +72,15 @@ export async function request(body, settings) {
 		toolNames: {},
 		dropped: []
 	};
+	// Names the producer of the reply this request answers (signed into reasoning data) and the one a signature must match to be restored.
+	if (context?.producer !== undefined) state.producer = context.producer;
 	const fit = createNameFitter({ max: 64, map: state.toolNames });
+	// Every tool name is fitted in request order before anything else, whether or not the tool is offered, so a name's wire form never
+	// depends on which deferred tools happen to be loaded.
+	for (const tool of body.tools ?? []) if (tool.type === undefined || tool.type === "custom") fit(tool.name);
+	const found = scan(body.messages, new Set((body.tools ?? []).map((tool) => tool.name)));
+	const offered = plan(body.tools ?? [], found, s, body.tool_choice);
+	state.toolSearch = { mode: s.toolSearch, loaded: offered.loaded, hidden: offered.hidden, stubbed: offered.stubbed, capped: found.capped };
 
 	for (const key of Object.keys(body)) {
 		if (HANDLED.has(key) || SILENT.has(key)) continue;
@@ -81,7 +92,15 @@ export async function request(body, settings) {
 
 	const out = { model: body.model };
 	const system = textOf(body.system, s);
-	const conversation = await convertMessages(body.messages, s, state, fit, system, thinkingTurnsToKeep(body.context_management, state));
+	const conversation = await convertMessages(
+		body.messages,
+		s,
+		state,
+		fit,
+		system,
+		thinkingTurnsToKeep(body.context_management, state),
+		context?.budget ?? createBudget()
+	);
 	out.messages = conversation.messages;
 	if (conversation.prefill) {
 		out.continue_final_message = true;
@@ -104,7 +123,7 @@ export async function request(body, settings) {
 		}
 	}
 
-	const tools = convertTools(body.tools ?? [], s, state, fit);
+	const tools = convertTools(offered.offer, s, state, fit);
 	if (tools.length > 0) {
 		out.tools = tools;
 		const choice = convertToolChoice(body.tool_choice, s, state, fit);
@@ -175,11 +194,23 @@ function asBlocks(content) {
  * @param {number} keepThinking - Reasoning-bearing assistant turns to keep.
  * @returns {Promise<{ messages: any[], prefill: boolean }>} OpenAI messages and whether the last message is a prefill.
  */
-async function convertMessages(messages, s, state, fit, system, keepThinking) {
+async function convertMessages(messages, s, state, fit, system, keepThinking, budget) {
 	const out = [];
 	const hoisted = [];
 	const toolInputs = new Map();
 	const mode = s.inlineSystem === "auto" ? "user" : s.inlineSystem;
+
+	// Signatures that carry provider reasoning are decoded newest turn first, so the per-request budget goes to the turns a server checks (the
+	// latest ones) and a flood of old or forged signatures cannot starve them.
+	const decoded = new Map();
+	if (s.reasoningRoundTrip) {
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].role !== "assistant") continue;
+			for (const block of [...asBlocks(messages[i].content)].reverse()) {
+				if (block.type === "thinking") decoded.set(block, await unsign(block.signature, { producer: state.producer, budget }));
+			}
+		}
+	}
 
 	const pushUser = (parts) => {
 		const last = out.at(-1);
@@ -209,7 +240,17 @@ async function convertMessages(messages, s, state, fit, system, keepThinking) {
 				return [{ type: "text", text: `[Search result: ${block.title ?? ""} (${block.source ?? ""})]\n${body}` }];
 			}
 			case "tool_reference":
-				return [{ type: "text", text: `[Tool reference: ${block.tool_name}]` }];
+				// `native`: the server understands the part. Otherwise the model is told in words; a tool that was expanded into the tools list
+				// is "loaded", anything else could not be and stays a plain reference.
+				if (s.toolSearch === "native" && s.deferredTools !== "drop") return [{ type: "tool_reference", tool_name: block.tool_name }];
+				return [
+					{
+						type: "text",
+						text: state.toolSearch.loaded.includes(block.tool_name)
+							? `[Tool loaded: ${block.tool_name}]`
+							: `[Tool reference: ${block.tool_name}]`
+					}
+				];
 			default:
 				unsupported(state, s, `block:${block.type}`);
 				return [];
@@ -238,23 +279,28 @@ async function convertMessages(messages, s, state, fit, system, keepThinking) {
 				for (const c of asBlocks(block.content)) inner.push(...(await toParts(c, block.tool_use_id)));
 				const texts = inner.filter((p) => p.type === "text").map((p) => p.text);
 				const images = inner.filter((p) => p.type === "image_url");
-				let content = texts.join("\n");
+				let content = inner.some((p) => p.type === "tool_reference") ? inner.filter((p) => p.type !== "image_url") : texts.join("\n");
 				if (images.length > 0) {
 					toolParts.push({ type: "text", text: `Image output of tool call ${block.tool_use_id}:` }, ...images);
 					if (content === "") content = "(image output attached in the next message)";
 				}
-				if (block.is_error === true && s.toolErrors) content = `[error] ${content}`;
+				if (block.is_error === true && s.toolErrors)
+					content = typeof content === "string" ? `[error] ${content}` : [{ type: "text", text: "[error]" }, ...content];
 				out.push({ role: "tool", tool_call_id: block.tool_use_id, content });
 			}
 			const all = [...toolParts, ...parts];
 			if (all.length > 0) pushUser(all);
 		} else if (message.role === "assistant") {
-			const turn = { role: "assistant", texts: [], reasoning: [], tool_calls: [] };
+			const turn = { role: "assistant", texts: [], parts: [], tool_calls: [] };
 			for (const block of asBlocks(message.content)) {
 				if (block.type === "text") {
 					if (block.text !== "") turn.texts.push(block.text);
 				} else if (block.type === "thinking") {
-					if (block.thinking) turn.reasoning.push(block.thinking);
+					// A translator signature that carries the provider's own reasoning fields restores them exactly, whatever the client did to
+					// the thinking text; anything else (a real Anthropic signature, a forged or garbled mark) falls back to the text.
+					const restored = decoded.get(block) ?? null;
+					if (restored) turn.parts.push({ restored });
+					else if (block.thinking) turn.parts.push({ text: block.thinking });
 				} else if (block.type === "redacted_thinking") {
 					drop(state, "redacted_thinking");
 				} else if (block.type === "tool_use") {
@@ -268,10 +314,11 @@ async function convertMessages(messages, s, state, fit, system, keepThinking) {
 					unsupported(state, s, `block:${block.type}`);
 				}
 			}
-			const last = out.at(-1);
+			// Only an assistant turn built above carries texts, parts and tool_calls.
+			const last = /** @type {any} */ (out.at(-1));
 			if (last?.role === "assistant") {
 				last.texts.push(...turn.texts);
-				last.reasoning.push(...turn.reasoning);
+				last.parts.push(...turn.parts);
 				last.tool_calls.push(...turn.tool_calls);
 			} else out.push(turn);
 		} else {
@@ -279,7 +326,7 @@ async function convertMessages(messages, s, state, fit, system, keepThinking) {
 		}
 	}
 
-	return finalize(out, s, system, hoisted, keepThinking);
+	return finalize(out, s, system, hoisted, keepThinking, state);
 }
 
 /**
@@ -300,6 +347,45 @@ function thinkingTurnsToKeep(contextManagement, state) {
 }
 
 /**
+ * The reasoning fields of one assistant turn, from its thinking blocks in order. A block whose signature restored provider data contributes
+ * that data's text; any other block contributes its thinking text. There is one text field: the one the first restored block used
+ * (`reasoning_content` or `reasoning`), else `reasoningField`. Restored pieces that follow one another are joined directly (they are consecutive
+ * parts of one string), everything else with a blank line. `reasoning_details` lists are concatenated.
+ * @param {{ restored?: { reasoning_content?: string, reasoning?: string, reasoning_details?: object[] }, text?: string }[]} parts - Thinking blocks of the turn: restored data, or plain text.
+ * @param {string} fallbackField - Field for the text when no restored block names one.
+ * @returns {Record<string, any>} Fields to set on the assistant message.
+ */
+function reasoningFields(parts, fallbackField) {
+	const named = parts.find(
+		(part) => part.restored && (part.restored.reasoning_content !== undefined || part.restored.reasoning !== undefined)
+	);
+	const field = named ? (named.restored.reasoning_content !== undefined ? "reasoning_content" : "reasoning") : fallbackField;
+	let text = "";
+	let details;
+	let previous = null;
+	for (const part of parts) {
+		const piece = part.restored ? (part.restored.reasoning_content ?? part.restored.reasoning) : part.text;
+		if (part.restored?.reasoning_details) details = [...(details ?? []), ...part.restored.reasoning_details];
+		if (piece === undefined) continue;
+		text += (previous !== null && !(previous.restored && part.restored) ? "\n\n" : "") + piece;
+		previous = part;
+	}
+	const out = {};
+	if (text !== "") out[field] = text;
+	if (details) out.reasoning_details = details;
+	return out;
+}
+
+/**
+ * Does an assistant message carry any reasoning field?
+ * @param {any} message - OpenAI assistant message.
+ * @returns {boolean} True when it has reasoning text or details.
+ */
+function reasoningSent(message) {
+	return Boolean(message.reasoning_content || message.reasoning || message.reasoning_details);
+}
+
+/**
  * Turn the internal message list into OpenAI messages: join text, place reasoning, apply the thinking-turn limit
  * and detect a trailing prefill.
  * @param {any[]} out - Internal messages.
@@ -307,14 +393,15 @@ function thinkingTurnsToKeep(contextManagement, state) {
  * @param {string} system - Leading system text.
  * @param {string[]} hoisted - Inline system texts to append to the leading system message.
  * @param {number} keepThinking - Number of reasoning-bearing assistant turns to keep.
+ * @param {any} state - Conversion state (`reasoningMissing` counts assistant tool turns left without reasoning).
  * @returns {{ messages: any[], prefill: boolean }} Final messages.
  */
-function finalize(out, s, system, hoisted, keepThinking) {
+function finalize(out, s, system, hoisted, keepThinking, state) {
 	let remaining = keepThinking;
 	for (let i = out.length - 1; i >= 0; i--) {
-		if (out[i].role !== "assistant" || out[i].reasoning.length === 0) continue;
+		if (out[i].role !== "assistant" || out[i].parts.length === 0) continue;
 		if (remaining > 0) remaining--;
-		else out[i].reasoning = [];
+		else out[i].parts = [];
 	}
 	const messages = [];
 	const lead = [system, ...hoisted].filter((t) => t !== "").join("\n\n");
@@ -325,7 +412,11 @@ function finalize(out, s, system, hoisted, keepThinking) {
 			messages.push({ role: "user", content: plain ? m.parts.map((p) => p.text).join("\n\n") : m.parts });
 		} else if (m.role === "assistant") {
 			const message = { role: "assistant", content: m.texts.join("\n\n") };
-			if (m.reasoning.length > 0) message[s.reasoningField] = m.reasoning.join("\n\n");
+			if (m.parts.length > 0) Object.assign(message, reasoningFields(m.parts, s.reasoningField));
+			// A turn that made tool calls and has no reasoning to send back (the client dropped its thinking blocks or their signatures)
+			// is counted, so the caller can warn: servers that require reasoning with tools will refuse the request.
+			if (s.reasoningRoundTrip && m.tool_calls.length > 0 && !reasoningSent(message))
+				state.reasoningMissing = (state.reasoningMissing ?? 0) + 1;
 			if (m.tool_calls.length > 0) message.tool_calls = m.tool_calls;
 			messages.push(message);
 		} else messages.push(m);
@@ -377,7 +468,12 @@ function convertTools(tools, s, state, fit) {
 		const fn = { name: fit(tool.name), parameters: s.toolSchema === "sanitize" ? sanitize(schema) : schema };
 		if (tool.description !== undefined) fn.description = tool.description;
 		if (tool.strict !== undefined) fn.strict = tool.strict;
-		out.push({ type: "function", function: fn });
+		// `native` keeps the flag for a server that understands it.
+		out.push(
+			tool.defer_loading === true && s.toolSearch === "native"
+				? { type: "function", function: fn, defer_loading: true }
+				: { type: "function", function: fn }
+		);
 	}
 	return out;
 }

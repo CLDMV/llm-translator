@@ -17,14 +17,15 @@
  * @fileoverview Generic OpenAI-compatible driver: always matches, records whether the server answered `/v1/models`.
  * @module @cldmv/llm-translator/driver/compatible
  */
-import { fetchModels } from "../../../lib/models.mjs";
+import * as http from "../../../lib/http.mjs";
+import { modelsOf } from "../../../lib/models.mjs";
 
 /**
  * Probe `/v1/models` for reachability and the served model ids. Never returns null: this driver is the fallback.
- * @param {any} context - `{ endpoint, transport, signal, timeout }`.
+ * @param {any} context - `{ endpoint, transport, signal, timeout, probes }`.
  * @returns {Promise<{reachable: boolean, models: string[]}>} Facts.
  */
 export async function detect(context) {
-	const models = await fetchModels({ ...context, auth: "bearer" });
+	const models = modelsOf(await http.probe(context, "/v1/models"));
 	return { reachable: models !== null, models: (models ?? []).map((entry) => entry.id) };
 }

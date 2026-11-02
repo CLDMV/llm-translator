@@ -22,6 +22,7 @@ import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { anthropicToolId, createNameFitter } from "../../../../../../../lib/ids.mjs";
 import { parseArguments } from "../../../../../../../lib/arguments.mjs";
 import { sanitize } from "../../../../../../../lib/schema.mjs";
+import { blocksOf } from "../../../../../../../lib/thinking.mjs";
 
 const HANDLED = new Set([
 	"model",
@@ -103,11 +104,14 @@ export async function request(chatBody, settings) {
 				push("user", userBlocks(message.content, state));
 				break;
 			case "assistant": {
+				// Thinking blocks come first, as Anthropic requires. They exist only when the client replayed `reasoning_details`
+				// items this translator made (`reasoningRoundTrip`); plain reasoning text has no signature and is still dropped.
+				const thinking = s.reasoningRoundTrip ? blocksOf(message.reasoning_details) : [];
 				const blocks = [];
 				const text = plainText(message.content);
 				if (text !== "") blocks.push({ type: "text", text });
 				else if (typeof message.refusal === "string" && message.refusal !== "") blocks.push({ type: "text", text: message.refusal });
-				if (reasoningPresent(message)) drop(state, "reasoning");
+				if (reasoningPresent(message) && !thinking.some((entry) => entry.block.type === "thinking")) drop(state, "reasoning");
 				for (const call of message.tool_calls ?? []) {
 					blocks.push({
 						type: "tool_use",
@@ -116,7 +120,8 @@ export async function request(chatBody, settings) {
 						input: parseArguments(call.function.arguments)
 					});
 				}
-				if (blocks.length > 0) push("assistant", blocks);
+				const ordered = interleave(thinking, blocks);
+				if (ordered.length > 0) push("assistant", ordered);
 				break;
 			}
 			case "tool": {
@@ -183,6 +188,28 @@ export async function request(chatBody, settings) {
  */
 function drop(state, name) {
 	if (!state.dropped.includes(name)) state.dropped.push(name);
+}
+
+/**
+ * Put replayed thinking blocks back where they were. A block's `at` is its position among what the OpenAI message showed: 0 is before the text,
+ * 1 after the text and before the first tool call (or before the first tool call when there is no text), and so on. The message's text and tool
+ * calls keep their order; a block never moves past a part it preceded, and positions beyond the end go last.
+ * @param {{ at: number, block: any }[]} thinking - Thinking blocks with their original positions.
+ * @param {any[]} rest - The assistant message's text and tool_use blocks.
+ * @returns {any[]} Content blocks in order.
+ */
+function interleave(thinking, rest) {
+	const ordered = [...thinking].sort((left, right) => left.at - right.at);
+	const out = [];
+	let next = 0;
+	// Positions 0 and 1 are before the text and before the first tool call; neither may land after a tool call, whatever the message now contains.
+	const firstTool = rest.findIndex((block) => block.type === "tool_use");
+	for (const entry of ordered) {
+		const at = entry.at <= 1 && firstTool !== -1 ? Math.min(entry.at, firstTool) : entry.at;
+		while (next < Math.min(at, rest.length)) out.push(rest[next++]);
+		out.push(entry.block);
+	}
+	return [...out, ...rest.slice(next)];
 }
 
 /**

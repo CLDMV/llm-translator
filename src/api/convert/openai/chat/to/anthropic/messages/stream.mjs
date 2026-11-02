@@ -21,7 +21,7 @@ import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError, openaiToAnthropicType, rewriteContextOverflow } from "../../../../../../../lib/errors.mjs";
 import { isComplete } from "../../../../../../../lib/arguments.mjs";
 import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
-import { sign, reasoningOf, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
+import { sign, reasoningOf, reasoningKey, detailsText, mergeDetail, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
 import { toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
 
@@ -48,7 +48,7 @@ import { messages } from "../../../../../../../lib/sse.mjs";
 export async function* stream(source, state, settings) {
 	const s = resolve(settings);
 	const toolNames = state?.toolNames ?? {};
-	const splitter = s.thinkTags ? createThinkSplitter() : null;
+	const splitter = s.thinkTags ? createThinkSplitter(s.thinkOpen) : null;
 	const tools = new Map();
 	let started = false;
 	let nextIndex = 0;
@@ -58,6 +58,10 @@ export async function* stream(source, state, settings) {
 	let matchedStop = null;
 	let done = false;
 	let lastTool = 0;
+	// The server sends reasoning in its own field, so content is never split (as in the non-streaming conversion).
+	let ownReasoning = false;
+	// Set once a tool call had to wait for the think splitter to decide; later calls then wait too, so tool blocks keep their order.
+	let waitForSplit = false;
 	// True after reasoning and until the answer has its first visible character: leading whitespace is dropped.
 	let trimNext = false;
 	// Text and reasoning that arrives while a tool block is open waits until the tool blocks are done, because blocks stream one at a time.
@@ -66,10 +70,23 @@ export async function* stream(source, state, settings) {
 	const event = (type, fields) => ({ event: type, data: { type, ...fields } });
 	const fail = (type, message) => event("error", { error: { type, message } });
 
+	// The provider reasoning fields of the thinking block being written, carried in its signature when `reasoningRoundTrip` is on.
+	const carried = (carry) => {
+		const data = {};
+		if (s.reasoningRoundTrip) {
+			if (carry.key !== null) data[carry.key] = carry.text;
+			if (carry.details.length > 0) data.reasoning_details = carry.details;
+		}
+		return Object.keys(data).length > 0 ? data : undefined;
+	};
+
 	function* close() {
 		if (open === null) return;
 		if (open.kind === "thinking") {
-			yield event("content_block_delta", { index: open.index, delta: { type: "signature_delta", signature: sign() } });
+			yield event("content_block_delta", {
+				index: open.index,
+				delta: { type: "signature_delta", signature: sign(carried(open.carry), state?.producer) }
+			});
 		} else if (open.kind === "tool") {
 			open.entry.state = "closed";
 			if (!open.entry.sent)
@@ -109,24 +126,41 @@ export async function* stream(source, state, settings) {
 
 	function* begin(kind, block, entry) {
 		yield* close();
-		open = { kind, index: nextIndex++, entry };
+		open = { kind, index: nextIndex++, entry, carry: { key: null, text: "", details: [] } };
 		yield event("content_block_start", { index: open.index, content_block: block });
 	}
 
-	function* piece(kind, text) {
+	function* piece(kind, text, key = null) {
 		// Models put blank lines between their reasoning and the answer; Anthropic's answers do not start with them.
 		if (kind === "text" && trimNext) text = text.trimStart();
 		if (text === "") return;
 		trimNext = kind === "thinking";
 		if (open?.kind === "tool") {
-			held.push({ kind, text });
+			held.push({ kind, text, key });
 			return;
 		}
 		if (open?.kind !== kind) {
 			yield* begin(kind, kind === "text" ? { type: "text", text: "" } : { type: "thinking", thinking: "", signature: "" });
 		}
+		if (key !== null) {
+			open.carry.key ??= key;
+			open.carry.text += text;
+		}
 		const delta = kind === "text" ? { type: "text_delta", text } : { type: "thinking_delta", thinking: text };
 		yield event("content_block_delta", { index: open.index, delta });
+	}
+
+	// Structured reasoning (`reasoning_details`) belongs to the open thinking block, which it opens when nothing else has. Fragments of one item
+	// (same index and type) are merged, so the signature carries the same items a JSON reply would.
+	function* details(items) {
+		if (open?.kind === "tool") {
+			held.push({ kind: "details", items });
+			return;
+		}
+		if (open?.kind !== "thinking") yield* begin("thinking", { type: "thinking", thinking: "", signature: "" });
+		for (const fragment of items) mergeDetail(open.carry.details, fragment);
+		// A thought that arrives only as structured details still needs readable text, as in the JSON conversion.
+		if (open.carry.key === null) yield* piece("thinking", detailsText(items));
 	}
 
 	function* pieces(split) {
@@ -142,11 +176,13 @@ export async function* stream(source, state, settings) {
 		if (entry === undefined) {
 			const name = call.function?.name ?? "";
 			const block = { type: "tool_use", id: anthropicToolId(call.id), name: restoreName(toolNames, name), input: {} };
-			entry = { state: s.toolStreaming === "buffer" ? "buffered" : "pending", sent: false, args: [], block };
+			if (splitter?.pending()) waitForSplit = true;
+			const buffer = s.toolStreaming === "buffer" || waitForSplit;
+			entry = { state: buffer ? "buffered" : "pending", sent: false, args: [], block };
 			tools.set(key, entry);
 			// Buffered calls wait for the end of the stream. Otherwise only one block can stream at a time: a call that starts
 			// while a tool block is open waits until it closes.
-			if (s.toolStreaming !== "buffer" && open?.kind !== "tool") {
+			if (!buffer && open?.kind !== "tool") {
 				entry.state = "open";
 				yield* begin("tool", block, entry);
 			}
@@ -188,13 +224,28 @@ export async function* stream(source, state, settings) {
 					}
 				});
 			}
-			if (chunk.usage) usage = chunk.usage;
+			if (chunk.usage) {
+				usage = chunk.usage;
+				// Kept for `send`, whose usage report wants the upstream's own counts rather than the numbers written for the client.
+				if (state) state.upstreamUsage = chunk.usage;
+			}
 			const choice = chunk.choices?.[0];
 			if (!choice) continue;
 			const delta = choice.delta ?? {};
-			yield* piece("thinking", reasoningOf(delta));
+			const reasoning = reasoningOf(delta);
+			// Content the splitter was still holding is answer text, but the thinking block comes first (as in the non-streaming conversion).
+			let released = "";
+			if (reasoning !== "" && !ownReasoning) {
+				ownReasoning = true;
+				if (splitter) released = splitter.release().text;
+			}
+			yield* piece("thinking", reasoning, reasoningKey(delta));
+			yield* piece("text", released);
+			if (s.reasoningRoundTrip && Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0) {
+				yield* details(delta.reasoning_details);
+			}
 			if (typeof delta.content === "string" && delta.content !== "") {
-				if (splitter) yield* pieces(splitter.push(delta.content));
+				if (splitter && !ownReasoning) yield* pieces(splitter.push(delta.content));
 				else yield* piece("text", delta.content);
 			}
 			for (const call of delta.tool_calls ?? []) yield* toolCall(call);
@@ -216,7 +267,7 @@ export async function* stream(source, state, settings) {
 	const last = ordered().at(-1);
 	const argumentsComplete = last === undefined || isComplete(last.args.join(""));
 	yield* close();
-	for (const item of held) yield* piece(item.kind, item.text);
+	for (const item of held) yield* item.kind === "details" ? details(item.items) : piece(item.kind, item.text, item.key);
 	yield* close();
 	if (nextIndex === 0) {
 		yield* begin("text", { type: "text", text: "" });

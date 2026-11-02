@@ -81,6 +81,19 @@ describe("openai chat completion to anthropic message", () => {
 		expect(field.content[1].text).toBe("<think>kept</think>");
 	});
 
+	test("thinkOpen: a bare </think> closes reasoning that started in the prompt", () => {
+		const out = response(completion({ content: "plan it</think>\n\nThe answer" }), undefined, { thinkOpen: true });
+		expect(out.content.map((b) => b.type)).toEqual(["thinking", "text"]);
+		expect(out.content[0].thinking).toBe("plan it");
+		expect(out.content[1].text).toBe("The answer");
+		const off = response(completion({ content: "plan it</think>\n\nThe answer" }));
+		expect(off.content).toEqual([{ type: "text", text: "plan it</think>\n\nThe answer" }]);
+		const none = response(completion({ content: "no tag" }), undefined, { thinkOpen: true });
+		expect(none.content).toEqual([{ type: "text", text: "no tag" }]);
+		const tagsOff = response(completion({ content: "a</think>b" }), undefined, { thinkOpen: true, thinkTags: false });
+		expect(tagsOff.content).toEqual([{ type: "text", text: "a</think>b" }]);
+	});
+
 	test("tool calls: ids sanitized, names restored, arguments parsed", () => {
 		const out = response(
 			completion(

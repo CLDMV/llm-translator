@@ -14,7 +14,8 @@
  */
 
 import http from "node:http";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { EventEmitter } from "node:events";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { transport } from "../../src/lib/transport.mjs";
 
 let server;
@@ -150,6 +151,85 @@ describe("transport", () => {
 		};
 		const res = await transport("https://example.invalid/json", {}, { http, https: fakeHttps });
 		expect(calls).toEqual(["https:"]);
+		expect(res.status).toBe(200);
+	});
+});
+
+describe("transport connect timeout", () => {
+	afterEach(() => vi.useRealTimers());
+
+	/** Fake protocol modules whose request emits `socket` with the given socket and records its destruction. */
+	const fake = (socket) => {
+		const request = Object.assign(new EventEmitter(), {
+			end: () => request.emit("socket", socket),
+			destroy: (error) => {
+				request.emit("error", error);
+				request.emit("close");
+			}
+		});
+		return { http: { request: () => request }, https: { request: () => request } };
+	};
+
+	test("rejects when the connection is not made in time", async () => {
+		vi.useFakeTimers();
+		const socket = Object.assign(new EventEmitter(), { connecting: true });
+		const pending = transport("http://host.test/", { connectTimeout: 500 }, fake(socket));
+		const rejected = expect(pending).rejects.toThrow("connect timeout after 500 ms");
+		await vi.advanceTimersByTimeAsync(500);
+		await rejected;
+	});
+
+	test("stops the timer once connected", async () => {
+		vi.useFakeTimers();
+		const socket = Object.assign(new EventEmitter(), { connecting: true });
+		const modules = fake(socket);
+		const pending = transport("http://host.test/", { connectTimeout: 500 }, modules);
+		socket.emit("connect");
+		await vi.advanceTimersByTimeAsync(1000);
+		let settled = false;
+		pending.then(
+			() => (settled = true),
+			() => (settled = true)
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(settled).toBe(false);
+	});
+
+	test("ignores a socket that is already connected", async () => {
+		vi.useFakeTimers();
+		const socket = Object.assign(new EventEmitter(), { connecting: false });
+		let settled = false;
+		transport("http://host.test/", { connectTimeout: 500 }, fake(socket)).then(
+			() => (settled = true),
+			() => (settled = true)
+		);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(settled).toBe(false);
+	});
+
+	test("for https the timer also covers the TLS handshake", async () => {
+		vi.useFakeTimers();
+		// TCP is connected (connecting is false) but the handshake has not finished.
+		const stalled = Object.assign(new EventEmitter(), { connecting: false });
+		const failing = transport("https://host.test/", { connectTimeout: 500 }, fake(stalled));
+		const rejected = expect(failing).rejects.toThrow("connect timeout after 500 ms");
+		stalled.emit("connect");
+		await vi.advanceTimersByTimeAsync(500);
+		await rejected;
+		const secure = Object.assign(new EventEmitter(), { connecting: true });
+		let settled = false;
+		transport("https://host.test/", { connectTimeout: 500 }, fake(secure)).then(
+			() => (settled = true),
+			() => (settled = true)
+		);
+		secure.emit("connect");
+		secure.emit("secureConnect");
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(settled).toBe(false);
+	});
+
+	test("a real server that answers is not affected", async () => {
+		const res = await transport(`${base}/json`, { connectTimeout: 5000 });
 		expect(res.status).toBe(200);
 	});
 });

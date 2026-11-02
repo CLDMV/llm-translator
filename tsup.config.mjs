@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:05-07:00 (1792958345)
+ *	@Last modified time: 2026-11-01T16:24:50-08:00 (1793579090)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -32,7 +32,7 @@ export default defineConfig({
 	entry: ["src/**/*.mjs"],
 	format: ["esm"],
 	outDir: "dist",
-	target: "node22",
+	target: "node24",
 	platform: "node",
 	bundle: false,
 	splitting: false,

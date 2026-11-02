@@ -54,11 +54,27 @@ export function headers(endpoint, auth = "bearer", extra) {
 }
 
 /**
+ * GET a path of the endpoint for detection. Within one detection pass (`context.probes` is a shared `Map`) each path is requested
+ * once and every driver that asks for it gets the same result, so a path fetched for one backend (for example `/v1/models`) is
+ * not fetched again for the next. Never rejects; treat the result as read-only.
+ * @param {any} context - `{ endpoint, transport, signal, timeout, probes? }`.
+ * @param {string} path - Path starting with `/`.
+ * @returns {Promise<{ok: boolean, status: number, body: any, error?: Error}>} Outcome (see `json`).
+ */
+export function probe({ endpoint, transport, signal, timeout, probes }, path) {
+	const run = () => json(transport, join(endpoint.url, path), { method: "GET", headers: headers(endpoint), signal, timeout });
+	if (!probes) return run();
+	if (!probes.has(path)) probes.set(path, run());
+	return probes.get(path);
+}
+
+/**
  * Convert a fetch `Headers` object (or plain object) to a lowercase plain object.
  * @param {Headers | Record<string,string> | undefined} source - Header source.
  * @returns {Record<string,string>} Plain header map.
  */
 export function plain(source) {
+	/** @type {Record<string,string>} */
 	const out = {};
 	if (!source) return out;
 	if (typeof source.forEach === "function") {

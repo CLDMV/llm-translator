@@ -22,11 +22,11 @@
  * @param {ReadableStream|AsyncIterable<unknown>|Iterable<unknown>|string|Uint8Array|any} source - Input source.
  * @returns {AsyncGenerator<any, void, undefined>} Raw items in order.
  */
-export declare function items(source: ReadableStream | AsyncIterable<unknown> | Iterable<unknown> | string | Uint8Array | any): AsyncGenerator<any, void, undefined>;
+export function items(source: ReadableStream | AsyncIterable<unknown> | Iterable<unknown> | string | Uint8Array | any): AsyncGenerator<any, void, undefined>;
 /**
  * Iterate a source as decoded text. Strings pass through, `Uint8Array` chunks are decoded as streaming UTF-8
  * (multi-byte characters may span chunks).
  * @param {ReadableStream|AsyncIterable<string|Uint8Array>|Iterable<string|Uint8Array>|string|Uint8Array} source - Input source.
  * @returns {AsyncGenerator<string, void, undefined>} Text chunks.
  */
-export declare function text(source: ReadableStream | AsyncIterable<string | Uint8Array> | Iterable<string | Uint8Array> | string | Uint8Array): AsyncGenerator<string, void, undefined>;
+export function text(source: ReadableStream | AsyncIterable<string | Uint8Array> | Iterable<string | Uint8Array> | string | Uint8Array): AsyncGenerator<string, void, undefined>;

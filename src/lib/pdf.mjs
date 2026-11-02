@@ -138,6 +138,7 @@ export async function render(bytes, pageNumbers, options) {
 				status: 501
 			});
 		}
+		/** @type {{ media_type: "image/png", data: string }[]} */
 		const images = [];
 		for (const page of pageNumbers) {
 			const png = await unpdf.renderPageAsImage(proxy, page, { canvasImport: async () => canvas, scale: options.scale });

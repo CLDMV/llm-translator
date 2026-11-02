@@ -18,10 +18,11 @@
  * @module @cldmv/llm-translator/status
  */
 import { context } from "../lib/runtime.mjs";
+import { describe } from "../lib/pool.mjs";
 
 /**
  * Describe the translator's upstreams. Secrets (API keys, headers) are never included.
- * @returns {{front: string, upstreams: any[]}} Front protocol and per-upstream detection results.
+ * @returns {{front: string, upstreams: any[]}} Front protocol and per-upstream detection results and health (see `endpoint.status`).
  */
 export function status() {
 	const { config, state } = context;
@@ -37,7 +38,8 @@ export function status() {
 			models: endpoint.models ?? endpoint.facts?.models ?? [],
 			default: endpoint.default,
 			facts: endpoint.facts,
-			probed: endpoint.probed
+			probed: endpoint.probed,
+			health: describe(endpoint)
 		}))
 	};
 }

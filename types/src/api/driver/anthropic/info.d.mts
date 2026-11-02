@@ -20,7 +20,7 @@
  * Describe the Anthropic driver (native Messages API upstream).
  * @returns {{name: string, protocol: string, order: number, auth: string, headers: Record<string,string>, paths: Record<string,string>}} Driver facts.
  */
-export declare function info(): {
+export function info(): {
     name: string;
     protocol: string;
     order: number;

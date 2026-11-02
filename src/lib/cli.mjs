@@ -28,7 +28,7 @@ Options:
   --front <anthropic|openai>   Client protocol to serve (default anthropic)
   --upstream <url>             Upstream server base URL (repeatable)
   --upstream-key <key>         API key sent to the upstream
-  --backend <name>             Driver for the upstream (default auto-detect: vllm, compatible, openai, anthropic)
+  --backend <name>             Driver for the upstream (default auto-detect: vllm, llamacpp, compatible, openai, anthropic)
   --model <alias=target>       Model alias (repeatable)
   --host <host>                Listen address (default 127.0.0.1)
   --port <port>                Listen port (default 8787)

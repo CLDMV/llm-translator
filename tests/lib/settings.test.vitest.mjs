@@ -71,6 +71,25 @@ describe("settings", () => {
 		}
 	});
 
+	test("reasoningRoundTrip defaults to off and must be a boolean", () => {
+		expect(resolve().reasoningRoundTrip).toBe(false);
+		expect(resolve({ reasoningRoundTrip: true }).reasoningRoundTrip).toBe(true);
+		expect(() => resolve({ reasoningRoundTrip: "yes" })).toThrow(/Invalid setting reasoningRoundTrip/);
+	});
+
+	test("thinkOpen defaults to off and must be a boolean", () => {
+		expect(resolve().thinkOpen).toBe(false);
+		expect(resolve({ thinkOpen: true }).thinkOpen).toBe(true);
+		expect(() => resolve({ thinkOpen: "yes" })).toThrow(/Invalid setting thinkOpen/);
+	});
+
+	test("pdf.scale must be a positive number", () => {
+		expect(resolve({ pdf: { scale: 2 } }).pdf.scale).toBe(2);
+		for (const scale of [0, -1, Infinity, NaN, "2"]) {
+			expect(() => resolve({ pdf: { scale } })).toThrow(/Invalid setting pdf\.scale/);
+		}
+	});
+
 	test("rejects invalid enumerated values", () => {
 		expect(() => resolve({ inlineSystem: "sideways" })).toThrow(/Invalid setting inlineSystem/);
 		try {

@@ -23,4 +23,4 @@
  * @param {string} message - Warning text.
  * @returns {boolean} True when the warning was printed.
  */
-export declare function warn(config: any, state: any, message: string): boolean;
+export function warn(config: any, state: any, message: string): boolean;

@@ -18,6 +18,7 @@
  * @module @cldmv/llm-translator/lib/config
  */
 import { TranslatorError } from "./errors.mjs";
+import * as pool from "./pool.mjs";
 
 /**
  * @typedef {object} UpstreamConfig
@@ -69,7 +70,8 @@ export function endpoint(entry, index) {
 		driver: null,
 		facts: null,
 		driverSettings: {},
-		probed: {}
+		probed: {},
+		health: pool.health()
 	};
 }
 
@@ -95,6 +97,7 @@ export function normalize(config = {}) {
 		front,
 		endpoints: list.map(endpoint),
 		aliases: { ...config.aliases },
+		pool: pool.normalize(config.pool),
 		settings: { ...config.settings },
 		detect: config.detect !== false,
 		detectTimeout: config.detectTimeout ?? 5000,

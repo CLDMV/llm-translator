@@ -22,6 +22,7 @@ import { anthropicToOpenAIType, anthropicTypeToStatus } from "../../../../../../
 import { completionId, restoreName } from "../../../../../../../lib/ids.mjs";
 import { toOpenAIFinish, toOpenAIUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
+import { detailOf } from "../../../../../../../lib/thinking.mjs";
 
 /**
  * Convert an Anthropic Messages event stream into OpenAI `chat.completion.chunk` messages followed by `[DONE]`.
@@ -45,6 +46,11 @@ export async function* stream(source, state, settings) {
 	let model = state?.model;
 	let usage = {};
 	let finished = false;
+	// The thinking or redacted thinking block being read, replayed as one `reasoning_details` item when it stops (`reasoningRoundTrip`).
+	let reasoningBlock = null;
+	// Position of a reasoning item among what the OpenAI message shows: the text (one part) and then each tool call.
+	let textBlock = false;
+	let toolBlocks = 0;
 
 	const chunk = (delta, finishReason = null, extra = {}) => ({
 		data: {
@@ -65,9 +71,15 @@ export async function* stream(source, state, settings) {
 				id = `chatcmpl-${String(data.message.id).replace(/^msg_/, "")}`;
 				model = state?.model ?? data.message.model;
 				usage = { ...data.message.usage };
+				// Kept on the state while the stream runs, so a report for a stream that fails partway still has the counts seen so far.
+				if (state) state.upstreamUsage = usage;
 				yield chunk({ role: "assistant", content: "" });
 			} else if (data.type === "content_block_start") {
 				const block = data.content_block;
+				if (block.type === "thinking" || block.type === "redacted_thinking") {
+					reasoningBlock = { type: block.type, data: block.data, thinking: "", signature: "", slot: toolBlocks + (textBlock ? 1 : 0) };
+				}
+				if (block.type === "tool_use") toolBlocks++;
 				if (block.type === "tool_use") {
 					tools.set(data.index, tools.size);
 					const name = restoreName(toolNames, block.name);
@@ -77,13 +89,25 @@ export async function* stream(source, state, settings) {
 				}
 			} else if (data.type === "content_block_delta") {
 				const delta = data.delta;
-				if (delta.type === "text_delta") yield chunk({ content: delta.text });
-				else if (delta.type === "thinking_delta") yield chunk({ [s.reasoningField]: delta.thinking });
-				else if (delta.type === "input_json_delta" && tools.has(data.index)) {
+				if (delta.type === "text_delta") {
+					// Only text that reaches the client counts as text for the position of reasoning items.
+					if (delta.text !== "") textBlock = true;
+					yield chunk({ content: delta.text });
+				} else if (delta.type === "thinking_delta") {
+					if (reasoningBlock) reasoningBlock.thinking += delta.thinking;
+					yield chunk({ [s.reasoningField]: delta.thinking });
+				} else if (delta.type === "signature_delta") {
+					if (reasoningBlock) reasoningBlock.signature += delta.signature;
+				} else if (delta.type === "input_json_delta" && tools.has(data.index)) {
 					yield chunk({ tool_calls: [{ index: tools.get(data.index), function: { arguments: delta.partial_json } }] });
 				}
+			} else if (data.type === "content_block_stop") {
+				const detail = s.reasoningRoundTrip && reasoningBlock ? detailOf(reasoningBlock, reasoningBlock.slot) : null;
+				if (detail) yield chunk({ reasoning_details: [detail] });
+				reasoningBlock = null;
 			} else if (data.type === "message_delta") {
 				for (const [key, value] of Object.entries(data.usage ?? {})) if (value !== null && value !== undefined) usage[key] = value;
+				if (state) state.upstreamUsage = usage;
 				const extra = typeof data.delta?.stop_sequence === "string" ? { stop_reason: data.delta.stop_sequence } : {};
 				yield chunk({}, toOpenAIFinish(data.delta?.stop_reason), extra);
 			} else if (data.type === "message_stop") {

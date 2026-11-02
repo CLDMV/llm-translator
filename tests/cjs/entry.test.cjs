@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:03-07:00 (1792958343)
+ *	@Last modified time: 2026-11-01T09:42:33-08:00 (1793554953)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -68,12 +68,6 @@ test("CJS shim re-exports the ESM entry", async () => {
 	assert.equal(cjs.createTranslator, esm.createTranslator);
 });
 
-test("dist/index.mjs imports the root devcheck.mjs instead of bundling it", () => {
-	const bundle = fs.readFileSync(path.join(dist, "index.mjs"), "utf8");
-	assert.match(bundle, /import\(\s*["']\.\.\/devcheck\.mjs["']\s*\)/);
-	assert.doesNotMatch(bundle, /Development environment not properly configured/);
-});
-
 test("dist mirrors the api folder slothlet scans", () => {
 	for (const file of [
 		"api/request.mjs",
@@ -91,7 +85,16 @@ test("a translator composed from dist/api converts, streams and serves", async (
 	const { createTranslator } = require(path.join(dist, "index.cjs"));
 	const api = await createTranslator({ upstreams: [{ url: "http://vllm.test", backend: "vllm" }], detect: false, silent: true, transport });
 	try {
-		assert.deepEqual(Object.keys(api.driver).sort(), ["anthropic", "compatible", "openai", "vllm"]);
+		assert.deepEqual(Object.keys(api.driver).sort(), [
+			"anthropic",
+			"compatible",
+			"deepseek",
+			"llamacpp",
+			"ollama",
+			"openai",
+			"sglang",
+			"vllm"
+		]);
 		assert.equal(api.status().upstreams[0].driver, "vllm");
 
 		const body = { model: "m", max_tokens: 16, messages: [{ role: "user", content: "hi" }] };

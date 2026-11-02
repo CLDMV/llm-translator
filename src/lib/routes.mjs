@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:02-07:00 (1792958342)
+ *	@Last modified time: 2026-10-31T14:45:55-07:00 (1793483155)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -55,70 +55,83 @@ async function settle(promise, interval) {
  * @param {string} [model] - Model the client asked for (used in the early `message_start`).
  * @returns {AsyncGenerator<any>} Client events.
  */
-async function* late(sending, api, model) {
-	const anthropic = api.front === "anthropic";
-	if (anthropic) {
-		// Anthropic's API opens every stream with `message_start` before any token exists, and clients (Claude Code) treat
-		// the first real event as the sign that the request was accepted. Send it now, with the model the client asked
-		// for, together with an empty thinking block that the keep-alives (see `sse.ping`) can ride on while the upstream
-		// is still working. When the upstream answers, a first thinking block of its own takes over the early one; otherwise the early block is closed
-		// and the upstream's blocks are shifted by one index.
-		yield {
-			event: "message_start",
-			data: {
-				type: "message_start",
-				message: {
-					id: messageId(),
-					type: "message",
-					role: "assistant",
-					model,
-					content: [],
-					stop_reason: null,
-					stop_sequence: null,
-					usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+export async function* late(sending, api, model) {
+	// True once the upstream's stream is being read (the loop below then closes it).
+	let adopted = false;
+	try {
+		const anthropic = api.front === "anthropic";
+		if (anthropic) {
+			// Anthropic's API opens every stream with `message_start` before any token exists, and clients (Claude Code) treat
+			// the first real event as the sign that the request was accepted. Send it now, with the model the client asked
+			// for, together with an empty thinking block that the keep-alives (see `sse.ping`) can ride on while the upstream
+			// is still working. When the upstream answers, a first thinking block of its own takes over the early one; otherwise the early block is closed
+			// and the upstream's blocks are shifted by one index.
+			yield {
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: {
+						id: messageId(),
+						type: "message",
+						role: "assistant",
+						model,
+						content: [],
+						stop_reason: null,
+						stop_sequence: null,
+						usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+					}
 				}
-			}
-		};
-		yield {
-			event: "content_block_start",
-			data: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }
-		};
-	}
-	const result = await sending;
-	// Closes the early thinking block (its signature is ours, like the converter's).
-	const closeEarly = function* () {
-		yield {
-			event: "content_block_delta",
-			data: { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: sign() } }
-		};
-		yield { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } };
-	};
-	if (result.stream) {
-		// `offset` stays null until the first real block decides it: a thinking block takes over the early one (offset 0),
-		// anything else closes it and is shifted by one index.
-		let offset = null;
-		for await (const event of result.stream) {
-			if (!anthropic) {
-				yield event;
-				continue;
-			}
-			if (event.event === "message_start") continue;
-			if (offset === null && event.event === "content_block_start" && event.data.content_block.type === "thinking") {
-				offset = 0;
-				continue;
-			}
-			if (offset === null) {
-				yield* closeEarly();
-				offset = 1;
-			}
-			yield offset > 0 && typeof event.data?.index === "number"
-				? { ...event, data: { ...event.data, index: event.data.index + offset } }
-				: event;
+			};
+			yield {
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }
+			};
 		}
-		return;
+		const result = await sending;
+		// Closes the early thinking block (its signature is ours, like the converter's).
+		const closeEarly = function* () {
+			yield {
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: sign() } }
+			};
+			yield { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } };
+		};
+		if (result.stream) {
+			adopted = true;
+			// `offset` stays null until the first real block decides it: a thinking block takes over the early one (offset 0),
+			// anything else closes it and is shifted by one index.
+			let offset = null;
+			for await (const event of result.stream) {
+				if (!anthropic) {
+					yield event;
+					continue;
+				}
+				if (event.event === "message_start") continue;
+				if (offset === null && event.event === "content_block_start" && event.data.content_block.type === "thinking") {
+					offset = 0;
+					continue;
+				}
+				if (offset === null) {
+					yield* closeEarly();
+					offset = 1;
+				}
+				yield offset > 0 && typeof event.data?.index === "number"
+					? { ...event, data: { ...event.data, index: event.data.index + offset } }
+					: event;
+			}
+			return;
+		}
+		if (anthropic) yield* closeEarly();
+		yield* failure(api, result.body);
+	} finally {
+		// Closed before the upstream answered (the client left while the early events were being written): a stream that arrives
+		// later is never read, so close it for its usage report to be delivered.
+		if (!adopted)
+			sending.then(
+				(result) => result.stream?.return?.(),
+				() => {}
+			);
 	}
-	if (anthropic) yield* closeEarly();
-	yield* failure(api, result.body);
 }
 
 /**
@@ -198,6 +211,7 @@ function keyOf(headers) {
  * @returns {Record<string, string>} Allow-listed headers.
  */
 function forwardable(headers) {
+	/** @type {Record<string, string>} */
 	const out = {};
 	for (const [name, value] of Object.entries(headers)) {
 		if (name === "anthropic-beta" || name === "anthropic-version" || name.startsWith("x-claude-code-")) {
@@ -208,10 +222,26 @@ function forwardable(headers) {
 }
 
 /**
+ * Normalize what an `authorize` hook returned.
+ * @param {any} value - Hook result: `true`, `{ ok: true, context? }`, `false`, `{ ok: false, status?, message? }`.
+ * @returns {{ok: true, context: any} | {ok: false, status: number, message: string}} Verdict; anything unrecognised is a refusal.
+ */
+function verdictOf(value) {
+	if (value === true) return { ok: true, context: undefined };
+	if (value && typeof value === "object" && value.ok === true) return { ok: true, context: value.context };
+	const refusal = value && typeof value === "object" && value.ok === false ? value : {};
+	return {
+		ok: false,
+		status: Number.isInteger(refusal.status) && refusal.status >= 400 && refusal.status <= 599 ? refusal.status : 401,
+		message: typeof refusal.message === "string" && refusal.message !== "" ? refusal.message : "unauthorized"
+	};
+}
+
+/**
  * Register the routes for one front on a Fastify instance.
  * @param {any} fastify - Fastify instance (usually an encapsulated plugin scope).
- * @param {any} options - `{ apiKey, bodyLimit }`.
- * @param {any} captured - Captured translator parts `{ front, interval, filter, send, count, list, build, encode, write }`; `front` applies to this instance only.
+ * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage }`.
+ * @param {any} captured - Captured translator parts `{ front, interval, filter, send, route, count, list, get, build, encode, write }`; `front` applies to this instance only.
  * @returns {void}
  */
 export function register(fastify, options, captured) {
@@ -221,11 +251,16 @@ export function register(fastify, options, captured) {
 		...captured,
 		build: (status, message, extra = {}) => captured.build(status, message, { ...extra, front }),
 		send: (body, extra) => captured.send(body, { ...extra, front, filter }),
+		route: (body) => captured.route(body, { front }),
 		count: (body, extra) => captured.count(body, { ...extra, front }),
-		list: (extra) => captured.list({ ...extra, front })
+		list: (extra) => captured.list({ ...extra, front }),
+		get: (id, extra) => captured.get(id, { ...extra, front })
 	};
 	const keys = [options.apiKey ?? []].flat().filter(Boolean);
 	const bodyLimit = options.bodyLimit ?? BODY_LIMIT;
+
+	// What an allowing `authorize` hook returned as `context`, per request.
+	const contexts = new WeakMap();
 
 	const reject = (reply, reply_) => reply.code(reply_.status).headers(reply_.headers).send(reply_.body);
 
@@ -246,6 +281,40 @@ export function register(fastify, options, captured) {
 		return reject(reply, api.build(401, "invalid x-api-key"));
 	});
 
+	if (typeof options.authorize === "function") {
+		// Runs after body parsing so the hook can see the requested model.
+		fastify.addHook("preHandler", async (request, reply) => {
+			if (request.routeOptions.config?.public) return;
+			let route = null;
+			if (request.body && typeof request.body === "object" && !Array.isArray(request.body)) {
+				try {
+					route = api.route(request.body);
+				} catch {
+					// An invalid body is refused by the normal handler with its own 400.
+				}
+			}
+			/** @type {{ ok: boolean, status?: number, message?: string, context?: any }} */
+			let verdict;
+			try {
+				verdict = verdictOf(
+					await options.authorize({
+						method: request.method,
+						url: request.url,
+						headers: request.headers,
+						body: request.body,
+						front: api.front,
+						route
+					})
+				);
+			} catch (error) {
+				request.log.error(error);
+				verdict = { ok: false, status: 401, message: "unauthorized" };
+			}
+			if (!verdict.ok) return reject(reply, api.build(verdict.status, verdict.message));
+			contexts.set(request, verdict.context);
+		});
+	}
+
 	fastify.route({
 		method: ["GET", "HEAD"],
 		url: "/",
@@ -263,6 +332,12 @@ export function register(fastify, options, captured) {
 		reply.raw.on("close", () => controller.abort());
 		return api.list({ signal: controller.signal });
 	});
+	// A wildcard, because model ids can contain slashes (`org/model`); the router has already decoded it.
+	fastify.get("/v1/models/*", async (request, reply) => {
+		const controller = new AbortController();
+		reply.raw.on("close", () => controller.abort());
+		return api.get(request.params["*"], { signal: controller.signal });
+	});
 
 	const url = api.front === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
 	fastify.post(url, { bodyLimit }, async (request, reply) => {
@@ -272,11 +347,19 @@ export function register(fastify, options, captured) {
 		reply.raw.on("close", () => {
 			if (!reply.raw.writableFinished) controller.abort();
 		});
-		const sending = api.send(request.body, { signal: controller.signal, clientHeaders: forwardable(request.headers) });
+		const onUsage = typeof options.onUsage === "function" ? (report) => options.onUsage(report, contexts.get(request)) : undefined;
+		const sending = api.send(request.body, { signal: controller.signal, clientHeaders: forwardable(request.headers), onUsage });
 		sending.catch(() => {});
 		const gone = new Promise((resolve) => controller.signal.addEventListener("abort", () => resolve(GONE), { once: true }));
 		const result = await settle(Promise.race([sending, gone]), request.body?.stream === true ? api.interval : 0);
-		if (result === GONE) return reply;
+		if (result === GONE) {
+			// A stream that arrives after the client left is never read; return it so its usage report is delivered.
+			sending.then(
+				(late) => late.stream?.return?.(),
+				() => {}
+			);
+			return reply;
+		}
 		if (result === STALLED) return stream(reply, api, controller, late(sending, api, request.body?.model));
 		if (!result.stream) return reject(reply, result);
 		return stream(reply, api, controller, result.stream, result.status, result.headers);

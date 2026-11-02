@@ -1,32 +1,23 @@
 /**
- *
- *	@Project: @cldmv/llm-translator
- *	@Filename: /src/lib/ids.mjs
- *	@Date: 2026-10-25T12:28:19-07:00 (1792956499)
- *	@Author: Nate Corcoran <CLDMV>
- *	@Email: <Shinrai@users.noreply.github.com>
- *	-----
- *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:02-07:00 (1792958342)
- *	-----
- *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
- *
- */
-/**
  * Anthropic style message id.
  * @returns {string} `msg_...` id.
  */
-export declare function messageId(): string;
+export function messageId(): string;
 /**
  * Anthropic style tool-use id.
  * @returns {string} `toolu_...` id.
  */
-export declare function toolUseId(): string;
+export function toolUseId(): string;
 /**
  * OpenAI style completion id.
  * @returns {string} `chatcmpl-...` id.
  */
-export declare function completionId(): string;
+export function completionId(): string;
+/**
+ * OpenAI style tool-call id, for upstream tool calls that carry none.
+ * @returns {string} `call_...` id.
+ */
+export function callId(): string;
 /**
  * Make a tool-call id valid for Anthropic (`[a-zA-Z0-9_-]+`). Valid ids pass through unchanged, invalid characters
  * (for example kimi's `functions.name:0`) become `_`, and a missing or empty id is replaced by a fresh one. The
@@ -34,7 +25,7 @@ export declare function completionId(): string;
  * @param {unknown} id - Upstream id.
  * @returns {string} Anthropic-valid id.
  */
-export declare function anthropicToolId(id: unknown): string;
+export function anthropicToolId(id: unknown): string;
 /**
  * Create a tool-name fitter. Names that already satisfy `pattern` and `max` pass through; others are sanitized and,
  * when too long, shortened with a hash suffix. Every changed name is recorded in `map` (`fitted -> original`) so the
@@ -42,7 +33,7 @@ export declare function anthropicToolId(id: unknown): string;
  * @param {{ max: number, map?: Record<string, string> }} options - Maximum length and the (JSON-serializable) map to record into.
  * @returns {(name: string) => string} Fitter function.
  */
-export declare function createNameFitter({ max, map }: {
+export function createNameFitter({ max, map }: {
     max: number;
     map?: Record<string, string>;
 }): (name: string) => string;
@@ -52,4 +43,4 @@ export declare function createNameFitter({ max, map }: {
  * @param {string} name - Name seen on the wire.
  * @returns {string} Original name.
  */
-export declare function restoreName(map: Record<string, string>, name: string): string;
+export function restoreName(map: Record<string, string>, name: string): string;
