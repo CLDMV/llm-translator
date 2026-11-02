@@ -314,7 +314,8 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 					unsupported(state, s, `block:${block.type}`);
 				}
 			}
-			const last = out.at(-1);
+			// Only an assistant turn built above carries texts, parts and tool_calls.
+			const last = /** @type {any} */ (out.at(-1));
 			if (last?.role === "assistant") {
 				last.texts.push(...turn.texts);
 				last.parts.push(...turn.parts);

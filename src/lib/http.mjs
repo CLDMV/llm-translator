@@ -74,6 +74,7 @@ export function probe({ endpoint, transport, signal, timeout, probes }, path) {
  * @returns {Record<string,string>} Plain header map.
  */
 export function plain(source) {
+	/** @type {Record<string,string>} */
 	const out = {};
 	if (!source) return out;
 	if (typeof source.forEach === "function") {

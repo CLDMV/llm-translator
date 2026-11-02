@@ -67,7 +67,7 @@ export async function start(options = {}) {
 		onUsage: options.onUsage
 	});
 	await app.listen({ host, port: options.port ?? 8787 });
-	const port = app.server.address().port;
+	const port = /** @type {import("node:net").AddressInfo} */ (app.server.address()).port;
 	const handle = {
 		url: `http://${host.includes(":") ? `[${host}]` : host}:${port}`,
 		host,
