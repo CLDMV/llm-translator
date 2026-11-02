@@ -20,4 +20,4 @@
  * The Messages API needs no special settings; the converters use the library defaults.
  * @returns {any} Partial settings (empty).
  */
-export declare function settings(): any;
+export function settings(): any;

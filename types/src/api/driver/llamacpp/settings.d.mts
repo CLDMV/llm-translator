@@ -22,6 +22,6 @@
  * @param {{vision?: boolean}} [facts] - Detection facts.
  * @returns {any} Partial settings.
  */
-export declare function settings(facts?: {
+export function settings(facts?: {
     vision?: boolean;
 }): any;

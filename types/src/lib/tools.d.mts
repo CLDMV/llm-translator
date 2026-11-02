@@ -1,42 +1,28 @@
 /**
- *
- *	@Project: @cldmv/llm-translator
- *	@Filename: /src/lib/tools.mjs
- *	@Date: 2026-10-26T06:00:20-07:00 (1793019620)
- *	@Author: Nate Corcoran <CLDMV>
- *	@Email: <Shinrai@users.noreply.github.com>
- *	-----
- *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-26T15:38:55-07:00 (1793054335)
- *	-----
- *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
- *
- */
-/** Added to the error message the client receives when the upstream refuses tools for want of a tool parser. */
-export declare const HINT = "The vLLM server was started without tool-call parsing. Restart it with --enable-auto-tool-choice and --tool-call-parser <parser> (the parser depends on the model family), or set the translator setting toolFallback to retry without tools.";
-/**
  * The hint for a refusal. When `toolFallback` is already on, suggesting it would be wrong (the retry has been spent), so only the restart advice remains.
  * A refusal that names `--jinja` is llama.cpp's and gets its own advice.
  * @param {boolean} toolFallback - Whether the `toolFallback` setting is on for the endpoint.
  * @param {string} [message] - The upstream error message being hinted.
  * @returns {string} Hint text.
  */
-export declare function hint(toolFallback: boolean, message?: string): string;
+export function hint(toolFallback: boolean, message?: string): string;
 /**
  * Does an upstream error message say the server has no tool parser configured?
  * @param {string} message - Upstream error message.
  * @returns {boolean} True for a known "tool parsing not enabled" wording.
  */
-export declare function refused(message: string): boolean;
+export function refused(message: string): boolean;
 /**
  * Does a Chat Completions body carry tools?
  * @param {any} body - Upstream request body.
  * @returns {boolean} True when `tools` is a non-empty array.
  */
-export declare function carries(body: any): boolean;
+export function carries(body: any): boolean;
 /**
  * Copy a Chat Completions body without `tools`, `tool_choice` and `parallel_tool_calls`.
  * @param {any} body - Upstream request body.
  * @returns {any} New body.
  */
-export declare function strip(body: any): any;
+export function strip(body: any): any;
+/** Added to the error message the client receives when the upstream refuses tools for want of a tool parser. */
+export const HINT: "The vLLM server was started without tool-call parsing. Restart it with --enable-auto-tool-choice and --tool-call-parser <parser> (the parser depends on the model family), or set the translator setting toolFallback to retry without tools.";

@@ -81,7 +81,7 @@
 		"test:watch": "vitest --config .configs/vitest.config.mjs",
 		"coverage": "node tests/run-vitest.mjs --coverage-quiet",
 		"ci:coverage": "npm run coverage && npm run test:dist",
-		"types:build": "tsc -p .configs/tsconfig.json",
+		"types:build": "tsc -p .configs/tsconfig.json --noCheck",
 		"types:check": "tsc -p .configs/tsconfig.json --noEmit",
 		"lint": "eslint --config .configs/eslint.config.mjs .",
 		"lint:fix": "eslint --config .configs/eslint.config.mjs . --fix",
@@ -121,7 +121,7 @@
 		"globals": "^17.13.0",
 		"prettier": "^3.9.10",
 		"tsup": "^9.0.0",
-		"typescript": "^7.0.2",
+		"typescript": "^6.0.3",
 		"vitest": "^5.0.5"
 	}
 }

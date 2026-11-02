@@ -211,6 +211,7 @@ function keyOf(headers) {
  * @returns {Record<string, string>} Allow-listed headers.
  */
 function forwardable(headers) {
+	/** @type {Record<string, string>} */
 	const out = {};
 	for (const [name, value] of Object.entries(headers)) {
 		if (name === "anthropic-beta" || name === "anthropic-version" || name.startsWith("x-claude-code-")) {
@@ -292,6 +293,7 @@ export function register(fastify, options, captured) {
 					// An invalid body is refused by the normal handler with its own 400.
 				}
 			}
+			/** @type {{ ok: boolean, status?: number, message?: string, context?: any }} */
 			let verdict;
 			try {
 				verdict = verdictOf(

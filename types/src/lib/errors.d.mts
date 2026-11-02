@@ -1,4 +1,81 @@
 /**
+ * Anthropic error type for an HTTP status.
+ * @param {number} status - HTTP status code.
+ * @returns {string} Anthropic error type.
+ */
+export function statusToAnthropicType(status: number): string;
+/**
+ * HTTP status for an Anthropic error type.
+ * @param {string} type - Anthropic error type.
+ * @returns {number} HTTP status code.
+ */
+export function anthropicTypeToStatus(type: string): number;
+/**
+ * OpenAI style error type for an Anthropic error type.
+ * @param {string} type - Anthropic error type.
+ * @returns {string} OpenAI error type.
+ */
+export function anthropicToOpenAIType(type: string): string;
+/**
+ * Anthropic error type for an OpenAI style error object (type and/or numeric code and/or HTTP status).
+ * @param {{ type?: string|null, code?: string|number|null }} error - OpenAI error object.
+ * @param {number} [status] - HTTP status of the reply, when known.
+ * @returns {string} Anthropic error type.
+ */
+export function openaiToAnthropicType(error: {
+    type?: string | null;
+    code?: string | number | null;
+}, status?: number): string;
+/**
+ * Build an Anthropic error body.
+ * @param {string} type - Anthropic error type.
+ * @param {string} message - Error message.
+ * @returns {{ type: "error", error: { type: string, message: string } }} Anthropic error body.
+ */
+export function anthropicError(type: string, message: string): {
+    type: "error";
+    error: {
+        type: string;
+        message: string;
+    };
+};
+/**
+ * Build an OpenAI error body.
+ * @param {string} message - Error message.
+ * @param {{ type?: string, param?: string|null, code?: string|number|null }} [fields] - Optional fields.
+ * @returns {{ error: { message: string, type: string, param: string|null, code: string|number|null } }} OpenAI error body.
+ */
+export function openaiError(message: string, { type, param, code }?: {
+    type?: string;
+    param?: string | null;
+    code?: string | number | null;
+}): {
+    error: {
+        message: string;
+        type: string;
+        param: string | null;
+        code: string | number | null;
+    };
+};
+/**
+ * Detect an OpenAI/vLLM "context length exceeded" message and rewrite it in Anthropic's wording
+ * (`prompt is too long: <n> tokens > <max> maximum`), which Claude Code recognises and answers with
+ * auto-compaction. `n` is the total the request asked for (prompt plus requested completion) when the message
+ * reports it, otherwise the prompt size, and `max + 1` when the message gives no size, so `n` always exceeds the maximum.
+ * @param {string} message - Upstream error message.
+ * @returns {string|null} Rewritten message, or null when the message is not a context overflow.
+ */
+export function rewriteContextOverflow(message: string): string | null;
+/**
+ * Token counts from a context-overflow message.
+ * @param {string} message - Upstream error message.
+ * @returns {{ prompt: number, max: number }|null} Counts (`prompt` is the requested total, or the prompt size, or `max + 1`), or null when not an overflow.
+ */
+export function contextOverflow(message: string): {
+    prompt: number;
+    max: number;
+} | null;
+/**
  *
  *	@Project: @cldmv/llm-translator
  *	@Filename: /src/lib/errors.mjs
@@ -19,12 +96,7 @@
  * Error raised for requests or upstream replies the translator cannot (or will not) convert. Carries enough
  * information to be rendered as an Anthropic or an OpenAI error body.
  */
-export declare class TranslatorError extends Error {
-    code: string;
-    status: number;
-    type: string;
-    param: string;
-    details: unknown;
+export class TranslatorError extends Error {
     /**
      * @param {string} message - Human readable message (sent to the client).
      * @param {object} [options] - Error metadata.
@@ -41,6 +113,11 @@ export declare class TranslatorError extends Error {
         param?: string | null;
         details?: unknown;
     });
+    code: string;
+    status: number;
+    type: string;
+    param: string;
+    details: unknown;
     /**
      * Render as an Anthropic error body.
      * @returns {{ type: "error", error: { type: string, message: string } }} Anthropic error body.
@@ -65,80 +142,3 @@ export declare class TranslatorError extends Error {
         };
     };
 }
-/**
- * Anthropic error type for an HTTP status.
- * @param {number} status - HTTP status code.
- * @returns {string} Anthropic error type.
- */
-export declare function statusToAnthropicType(status: number): string;
-/**
- * HTTP status for an Anthropic error type.
- * @param {string} type - Anthropic error type.
- * @returns {number} HTTP status code.
- */
-export declare function anthropicTypeToStatus(type: string): number;
-/**
- * OpenAI style error type for an Anthropic error type.
- * @param {string} type - Anthropic error type.
- * @returns {string} OpenAI error type.
- */
-export declare function anthropicToOpenAIType(type: string): string;
-/**
- * Anthropic error type for an OpenAI style error object (type and/or numeric code and/or HTTP status).
- * @param {{ type?: string|null, code?: string|number|null }} error - OpenAI error object.
- * @param {number} [status] - HTTP status of the reply, when known.
- * @returns {string} Anthropic error type.
- */
-export declare function openaiToAnthropicType(error: {
-    type?: string | null;
-    code?: string | number | null;
-}, status?: number): string;
-/**
- * Build an Anthropic error body.
- * @param {string} type - Anthropic error type.
- * @param {string} message - Error message.
- * @returns {{ type: "error", error: { type: string, message: string } }} Anthropic error body.
- */
-export declare function anthropicError(type: string, message: string): {
-    type: "error";
-    error: {
-        type: string;
-        message: string;
-    };
-};
-/**
- * Build an OpenAI error body.
- * @param {string} message - Error message.
- * @param {{ type?: string, param?: string|null, code?: string|number|null }} [fields] - Optional fields.
- * @returns {{ error: { message: string, type: string, param: string|null, code: string|number|null } }} OpenAI error body.
- */
-export declare function openaiError(message: string, { type, param, code }?: {
-    type?: string;
-    param?: string | null;
-    code?: string | number | null;
-}): {
-    error: {
-        message: string;
-        type: string;
-        param: string | null;
-        code: string | number | null;
-    };
-};
-/**
- * Detect an OpenAI/vLLM "context length exceeded" message and rewrite it in Anthropic's wording
- * (`prompt is too long: <n> tokens > <max> maximum`), which Claude Code recognises and answers with
- * auto-compaction. `n` is the total the request asked for (prompt plus requested completion) when the message
- * reports it, otherwise the prompt size, and `max + 1` when the message gives no size, so `n` always exceeds the maximum.
- * @param {string} message - Upstream error message.
- * @returns {string|null} Rewritten message, or null when the message is not a context overflow.
- */
-export declare function rewriteContextOverflow(message: string): string | null;
-/**
- * Token counts from a context-overflow message.
- * @param {string} message - Upstream error message.
- * @returns {{ prompt: number, max: number }|null} Counts (`prompt` is the requested total, or the prompt size, or `max + 1`), or null when not an overflow.
- */
-export declare function contextOverflow(message: string): {
-    prompt: number;
-    max: number;
-} | null;

@@ -23,4 +23,4 @@
  * @param {any} ctx - `{ state }`.
  * @returns {any[]} Chunks to emit (empty when nothing is held).
  */
-export declare function flush(ctx: any): any[];
+export function flush(ctx: any): any[];

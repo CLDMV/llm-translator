@@ -1,17 +1,37 @@
 /**
- *
- *	@Project: @cldmv/llm-translator
- *	@Filename: /src/lib/usage.mjs
- *	@Date: 2026-10-31T14:00:00-07:00 (1793480400)
- *	@Author: Nate Corcoran <CLDMV>
- *	@Email: <Shinrai@users.noreply.github.com>
- *	-----
- *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T14:00:00-07:00 (1793480400)
- *	-----
- *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
- *
+ * Normalize a usage object. Fields the source did not carry stay null: unknown is never reported as 0.
+ * @param {"anthropic" | "openai" | "folded"} protocol - Shape of `usage`: Anthropic (`input_tokens`, ...), OpenAI (`prompt_tokens`, ...) or `folded` (Anthropic, reported the way the OpenAI front does).
+ * @param {any} usage - A `usage` object.
+ * @returns {Record<string, number | null> | null} Normalized counts, or null when there is no usage (an absent object, or all zeros, which a
+ * converter writes when the upstream reported nothing and no real reply has).
  */
+export function normalize(protocol: "anthropic" | "openai" | "folded", usage: any): Record<string, number | null> | null;
+/**
+ * Create the meter for one request.
+ * @param {{front: "anthropic" | "openai", requested: string | null, model: string | null, upstream: string | null, stream: boolean}} meta - Request facts; `model` and `upstream` may be filled in later.
+ * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
+ * @param {(message: string) => void} warn - Receives a message when `onUsage` throws or rejects.
+ * @returns {{meta: any, usage: Promise<UsageReport>, json: (body: any) => void, event: (data: any) => void, finish: (reason: UsageReport["reason"]) => void, estimate: (counts: {input_tokens: number | null, output_tokens: number | null}) => void, source: (read: (() => any) | null, protocol?: "openai" | "folded") => void, track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any}} Meter.
+ */
+export function meter(meta: {
+    front: "anthropic" | "openai";
+    requested: string | null;
+    model: string | null;
+    upstream: string | null;
+    stream: boolean;
+}, onUsage: ((report: UsageReport) => any) | undefined, warn: (message: string) => void): {
+    meta: any;
+    usage: Promise<UsageReport>;
+    json: (body: any) => void;
+    event: (data: any) => void;
+    finish: (reason: UsageReport["reason"]) => void;
+    estimate: (counts: {
+        input_tokens: number | null;
+        output_tokens: number | null;
+    }) => void;
+    source: (read: (() => any) | null, protocol?: "openai" | "folded") => void;
+    track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any;
+};
 export type UsageReport = {
     /**
      * - Prompt tokens that were not served from cache, or null when unknown.
@@ -68,38 +88,4 @@ export type UsageReport = {
      * - Whether the client asked for a stream.
      */
     stream: boolean;
-};
-/**
- * Normalize a usage object. Fields the source did not carry stay null: unknown is never reported as 0.
- * @param {"anthropic" | "openai" | "folded"} protocol - Shape of `usage`: Anthropic (`input_tokens`, ...), OpenAI (`prompt_tokens`, ...) or `folded` (Anthropic, reported the way the OpenAI front does).
- * @param {any} usage - A `usage` object.
- * @returns {Record<string, number | null> | null} Normalized counts, or null when there is no usage (an absent object, or all zeros, which a
- * converter writes when the upstream reported nothing and no real reply has).
- */
-export declare function normalize(protocol: "anthropic" | "openai" | "folded", usage: any): Record<string, number | null> | null;
-/**
- * Create the meter for one request.
- * @param {{front: "anthropic" | "openai", requested: string | null, model: string | null, upstream: string | null, stream: boolean}} meta - Request facts; `model` and `upstream` may be filled in later.
- * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
- * @param {(message: string) => void} warn - Receives a message when `onUsage` throws or rejects.
- * @returns {{meta: any, usage: Promise<UsageReport>, json: (body: any) => void, event: (data: any) => void, finish: (reason: UsageReport["reason"]) => void, estimate: (counts: {input_tokens: number | null, output_tokens: number | null}) => void, source: (read: (() => any) | null, protocol?: "openai" | "folded") => void, track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any}} Meter.
- */
-export declare function meter(meta: {
-    front: "anthropic" | "openai";
-    requested: string | null;
-    model: string | null;
-    upstream: string | null;
-    stream: boolean;
-}, onUsage: ((report: UsageReport) => any) | undefined, warn: (message: string) => void): {
-    meta: any;
-    usage: Promise<UsageReport>;
-    json: (body: any) => void;
-    event: (data: any) => void;
-    finish: (reason: UsageReport["reason"]) => void;
-    estimate: (counts: {
-        input_tokens: number | null;
-        output_tokens: number | null;
-    }) => void;
-    source: (read: (() => any) | null, protocol?: "openai" | "folded") => void;
-    track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any;
 };

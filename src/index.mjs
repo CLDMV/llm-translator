@@ -25,7 +25,6 @@
 import { fileURLToPath } from "node:url";
 import slothlet from "@cldmv/slothlet";
 import { normalize } from "./lib/config.mjs";
-import { TranslatorError } from "./lib/errors.mjs";
 import { load } from "./lib/pdf.mjs";
 import { transport } from "./lib/transport.mjs";
 import { warn } from "./lib/warn.mjs";
@@ -84,5 +83,5 @@ export async function createTranslator(config) {
 	return api;
 }
 
-export { TranslatorError };
+export { TranslatorError } from "./lib/errors.mjs";
 export default createTranslator;
