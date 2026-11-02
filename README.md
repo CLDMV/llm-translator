@@ -20,7 +20,7 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 ### Latest: v0.3.0 (November 2026)
 
 - **Usage reporting, `route()` and the server `authorize` hook** — every `send()` reply has a `usage` promise (and an `onUsage` callback) with the final token counts; `api.route(body)` says which upstream and model a request would use; `server.start` and `server.plugin` take `authorize(request)` and `onUsage(report, context)` so an app with its own key system can gate and meter requests.
-- **More servers and endpoint pools** — drivers for llama.cpp, Ollama, SGLang and the DeepSeek API, failover and load balancing between upstreams that serve the same model, the `reasoningRoundTrip` and `toolSearch` settings, estimated usage when an upstream sends none, and `GET /v1/models/{id}`. Requires Node.js 22.22.0 or newer.
+- **More servers and endpoint pools** — drivers for llama.cpp, Ollama, SGLang and the DeepSeek API, failover and load balancing between upstreams that serve the same model, the `reasoningRoundTrip` and `toolSearch` settings, estimated usage when an upstream sends none, and `GET /v1/models/{id}`. Requires Node.js 24 or newer.
 - [View full v0.3.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.0.md)
 
 ### Recent Releases
@@ -64,7 +64,8 @@ Lines, statements, functions and branches are all at 100% and enforced on every 
 
 ### Requirements
 
-- Node.js 22.22 or newer
+- Node.js 24 or newer
+- Developing the package also needs Node.js 24 or newer (`devEngines` enforces it on install and `npm run`)
 - Fastify 5, only for the server and the Fastify plugin (an optional peer dependency)
 
 ### Install

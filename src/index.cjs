@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T13:20:03-08:00 (1793568003)
+ *	@Last modified time: 2026-11-01T16:24:44-08:00 (1793579084)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -21,7 +21,7 @@
  * so this shim re-exports dist/index.mjs instead of tsup bundling a second,
  * independent copy of the library for the CJS format.
  *
- * Node.js versions without require(esm) (before 22.22) would fail with
+ * Node.js versions without require(esm) (before 24) would fail with
  * a bare ERR_REQUIRE_ESM, so the check below fails early with a message that
  * says what to do instead.
  *
@@ -35,7 +35,7 @@
 
 if (!process.features?.require_module) {
 	const error = new Error(
-		`@cldmv/llm-translator: require() needs Node.js >=22.22.0 (this is ${process.version}). On older Node.js, load the package with import() instead.`
+		`@cldmv/llm-translator: require() needs Node.js >=24.0.0 (this is ${process.version}). On older Node.js, load the package with import() instead.`
 	);
 	error.code = "ERR_REQUIRE_ESM";
 	throw error;
