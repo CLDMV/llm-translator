@@ -1,18 +1,4 @@
 /**
- *
- *	@Project: @cldmv/llm-translator
- *	@Filename: /src/api/convert/openai/chat/to/anthropic/messages/stream.mjs
- *	@Date: 2026-10-25T12:28:19-07:00 (1792956499)
- *	@Author: Nate Corcoran <CLDMV>
- *	@Email: <Shinrai@users.noreply.github.com>
- *	-----
- *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T13:31:27-07:00 (1792960287)
- *	-----
- *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
- *
- */
-/**
  * Convert an OpenAI chat-completion stream into Anthropic Messages stream events.
  *
  * `source` is SSE text/bytes (string, `Uint8Array`, `ReadableStream`, async or sync iterable of either) or an
@@ -32,7 +18,7 @@
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {AsyncGenerator<{ event: string, data: any }, void, undefined>} Anthropic events.
  */
-export declare function stream(source: ReadableStream | AsyncIterable<unknown> | Iterable<unknown> | string | Uint8Array, state?: any, settings?: Partial<import("../../../../../../../lib/settings.mjs").Settings>): AsyncGenerator<{
+export function stream(source: ReadableStream | AsyncIterable<unknown> | Iterable<unknown> | string | Uint8Array, state?: any, settings?: Partial<import("../../../../../../../lib/settings.mjs").Settings>): AsyncGenerator<{
     event: string;
     data: any;
 }, void, undefined>;

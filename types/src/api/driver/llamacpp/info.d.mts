@@ -20,7 +20,7 @@
  * Describe the llama.cpp driver.
  * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
-export declare function info(): {
+export function info(): {
     name: string;
     protocol: string;
     order: number;

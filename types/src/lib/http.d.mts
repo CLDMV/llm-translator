@@ -22,13 +22,13 @@
  * @param {string} path - Path starting with `/`.
  * @returns {string} Absolute URL.
  */
-export declare function join(base: string, path: string): string;
+export function join(base: string, path: string): string;
 /**
  * Whether a listen address only accepts connections from this machine.
  * @param {string} host - Host or address.
  * @returns {boolean} True for `localhost`, `127.x.x.x` and `::1`.
  */
-export declare function isLoopback(host: string): boolean;
+export function isLoopback(host: string): boolean;
 /**
  * Build the request headers for an upstream call.
  * @param {any} endpoint - Runtime endpoint.
@@ -36,7 +36,7 @@ export declare function isLoopback(host: string): boolean;
  * @param {Record<string,string>} [extra] - Extra headers applied last.
  * @returns {Record<string,string>} Header map.
  */
-export declare function headers(endpoint: any, auth?: string, extra?: Record<string, string>): Record<string, string>;
+export function headers(endpoint: any, auth?: string, extra?: Record<string, string>): Record<string, string>;
 /**
  * GET a path of the endpoint for detection. Within one detection pass (`context.probes` is a shared `Map`) each path is requested
  * once and every driver that asks for it gets the same result, so a path fetched for one backend (for example `/v1/models`) is
@@ -45,7 +45,7 @@ export declare function headers(endpoint: any, auth?: string, extra?: Record<str
  * @param {string} path - Path starting with `/`.
  * @returns {Promise<{ok: boolean, status: number, body: any, error?: Error}>} Outcome (see `json`).
  */
-export declare function probe({ endpoint, transport, signal, timeout, probes }: any, path: string): Promise<{
+export function probe({ endpoint, transport, signal, timeout, probes }: any, path: string): Promise<{
     ok: boolean;
     status: number;
     body: any;
@@ -56,7 +56,7 @@ export declare function probe({ endpoint, transport, signal, timeout, probes }: 
  * @param {Headers | Record<string,string> | undefined} source - Header source.
  * @returns {Record<string,string>} Plain header map.
  */
-export declare function plain(source: Headers | Record<string, string> | undefined): Record<string, string>;
+export function plain(source: Headers | Record<string, string> | undefined): Record<string, string>;
 /**
  * Perform a request and parse the JSON body. Never throws: network failures and non-JSON bodies are reported in the result.
  * @param {Function} transport - fetch-compatible function.
@@ -64,7 +64,7 @@ export declare function plain(source: Headers | Record<string, string> | undefin
  * @param {any} [options] - `{ method, headers, body, signal, timeout }`.
  * @returns {Promise<{ok: boolean, status: number, body: any, error?: Error}>} Outcome.
  */
-export declare function json(transport: Function, url: string, options?: any): Promise<{
+export function json(transport: Function, url: string, options?: any): Promise<{
     ok: boolean;
     status: number;
     body: any;

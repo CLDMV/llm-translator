@@ -21,7 +21,7 @@
  * @param {{ hasToolCalls: boolean, matchedStop?: unknown, argumentsComplete?: boolean }} info - Whether tool calls were produced, vLLM's `stop_reason` (a string for a matched stop string), and whether the last tool call's arguments are complete. A `length` stop with incomplete arguments is `max_tokens`, not `tool_use`.
  * @returns {{ stop_reason: string, stop_sequence: string|null }} Anthropic stop fields.
  */
-export declare function toAnthropicStop(finishReason: string | null | undefined, { hasToolCalls, matchedStop, argumentsComplete }: {
+export function toAnthropicStop(finishReason: string | null | undefined, { hasToolCalls, matchedStop, argumentsComplete }: {
     hasToolCalls: boolean;
     matchedStop?: unknown;
     argumentsComplete?: boolean;
@@ -34,14 +34,14 @@ export declare function toAnthropicStop(finishReason: string | null | undefined,
  * @param {string|null|undefined} stopReason - Anthropic `stop_reason`.
  * @returns {string} OpenAI finish reason.
  */
-export declare function toOpenAIFinish(stopReason: string | null | undefined): string;
+export function toOpenAIFinish(stopReason: string | null | undefined): string;
 /**
  * Anthropic usage from an OpenAI usage object. Cached prompt tokens (reported by vLLM only with prompt-token
  * details enabled) are reported as `cache_read_input_tokens` and subtracted from `input_tokens`.
  * @param {{ prompt_tokens?: number, completion_tokens?: number, prompt_tokens_details?: { cached_tokens?: number }|null }|null|undefined} usage - OpenAI usage.
  * @returns {{ input_tokens: number, output_tokens: number, cache_creation_input_tokens: number, cache_read_input_tokens: number }} Anthropic usage.
  */
-export declare function toAnthropicUsage(usage: {
+export function toAnthropicUsage(usage: {
     prompt_tokens?: number;
     completion_tokens?: number;
     prompt_tokens_details?: {
@@ -58,7 +58,7 @@ export declare function toAnthropicUsage(usage: {
  * @param {{ input_tokens?: number, output_tokens?: number, cache_creation_input_tokens?: number|null, cache_read_input_tokens?: number|null }|null|undefined} usage - Anthropic usage.
  * @returns {{ prompt_tokens: number, completion_tokens: number, total_tokens: number, prompt_tokens_details?: { cached_tokens: number } }} OpenAI usage.
  */
-export declare function toOpenAIUsage(usage: {
+export function toOpenAIUsage(usage: {
     input_tokens?: number;
     output_tokens?: number;
     cache_creation_input_tokens?: number | null;

@@ -21,6 +21,6 @@
  * @param {any} context - `{ endpoint }`.
  * @returns {{host: string} | null} Facts, or null when the endpoint is not api.deepseek.com.
  */
-export declare function detect({ endpoint }: any): {
+export function detect({ endpoint }: any): {
     host: string;
 } | null;

@@ -1,24 +1,10 @@
 /**
- *
- *	@Project: @cldmv/llm-translator
- *	@Filename: /src/lib/route.mjs
- *	@Date: 2026-10-25T12:29:36-07:00 (1792956576)
- *	@Author: Nate Corcoran <CLDMV>
- *	@Email: <Shinrai@users.noreply.github.com>
- *	-----
- *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T14:45:55-07:00 (1793483155)
- *	-----
- *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
- *
- */
-/**
  * Does the endpoint serve the model?
  * @param {any} endpoint - Runtime endpoint.
  * @param {string} model - Upstream model name.
  * @returns {boolean} True when the endpoint lists the model, or is an Anthropic upstream and the model is a `claude-*` id.
  */
-export declare function serves(endpoint: any, model: string): boolean;
+export function serves(endpoint: any, model: string): boolean;
 /**
  * Pick the endpoint for a model: alias map, then the endpoints serving the model (a pool, ordered by the model's strategy and health;
  * the first is chosen), then the default endpoint, then the first.
@@ -31,7 +17,7 @@ export declare function serves(endpoint: any, model: string): boolean;
  * no endpoint serves the model and the endpoints to try in order (the chosen one first). When nothing serves it and the fallback endpoint knows
  * exactly one model, that model is sent instead.
  */
-export declare function pick(config: any, endpoints: any[], model: string | undefined, state: any, advance?: boolean): {
+export function pick(config: any, endpoints: any[], model: string | undefined, state: any, advance?: boolean): {
     endpoint: any;
     model: string | undefined;
     unserved: boolean;
@@ -46,7 +32,7 @@ export declare function pick(config: any, endpoints: any[], model: string | unde
  * upstream, the model the client asked for, whether no endpoint serves it, the converters (null for a native pass-through) and the pool in try order.
  * @throws {TranslatorError} `invalid_body` when the body is not a JSON object, `endpoint_not_in_pool` when a forced endpoint no longer serves the model.
  */
-export declare function resolve(c: any, body: any, options?: {
+export function resolve(c: any, body: any, options?: {
     endpoint?: string;
     advance?: boolean;
 }): {

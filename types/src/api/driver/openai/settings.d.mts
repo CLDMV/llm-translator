@@ -20,4 +20,4 @@
  * Settings for api.openai.com: no `top_k`, `reasoning_effort` for thinking, no prefill continuation.
  * @returns {any} Partial settings.
  */
-export declare function settings(): any;
+export function settings(): any;

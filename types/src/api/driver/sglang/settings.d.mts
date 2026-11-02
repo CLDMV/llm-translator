@@ -21,4 +21,4 @@
  * toggled through `chat_template_kwargs`, and the usual OpenAI output cap and usage options apply.
  * @returns {any} Partial settings.
  */
-export declare function settings(): any;
+export function settings(): any;

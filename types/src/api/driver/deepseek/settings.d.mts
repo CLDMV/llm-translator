@@ -22,4 +22,4 @@
  * thinking switch is sent.
  * @returns {any} Partial settings.
  */
-export declare function settings(): any;
+export function settings(): any;

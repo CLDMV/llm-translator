@@ -1,18 +1,4 @@
 /**
- *
- *	@Project: @cldmv/llm-translator
- *	@Filename: /src/api/model/get.mjs
- *	@Date: 2026-10-26T06:00:20-07:00 (1793019620)
- *	@Author: Nate Corcoran <CLDMV>
- *	@Email: <Shinrai@users.noreply.github.com>
- *	-----
- *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-26T15:38:55-07:00 (1793054335)
- *	-----
- *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
- *
- */
-/**
  * Retrieve one entry of the model list (`model.list`) by id, in the client protocol's model shape (Anthropic `{type:"model",...}` or
  * OpenAI `{object:"model",...}`). Aliases are found like served models.
  * @param {string} id - Model id as the client sends it.
@@ -20,4 +6,4 @@
  * @returns {Promise<any>} Model object.
  * @throws {TranslatorError} `model_not_found` (HTTP 404) when no upstream serves the id and it is not an alias.
  */
-export declare function get(id: string, options?: any): Promise<any>;
+export function get(id: string, options?: any): Promise<any>;

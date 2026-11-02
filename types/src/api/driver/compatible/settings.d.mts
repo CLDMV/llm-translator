@@ -20,4 +20,4 @@
  * Settings that avoid fields unknown servers may reject. Override per upstream with `settings`.
  * @returns {any} Partial settings.
  */
-export declare function settings(): any;
+export function settings(): any;
