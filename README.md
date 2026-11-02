@@ -17,14 +17,14 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.3.0 (November 2026)
+### Latest: v0.3.1 (November 2026)
 
-- **Usage reporting, `route()` and the server `authorize` hook** — every `send()` reply has a `usage` promise (and an `onUsage` callback) with the final token counts; `api.route(body)` says which upstream and model a request would use; `server.start` and `server.plugin` take `authorize(request)` and `onUsage(report, context)` so an app with its own key system can gate and meter requests.
-- **More servers and endpoint pools** — drivers for llama.cpp, Ollama, SGLang and the DeepSeek API, failover and load balancing between upstreams that serve the same model, the `reasoningRoundTrip` and `toolSearch` settings, estimated usage when an upstream sends none, and `GET /v1/models/{id}`. Requires Node.js 24 or newer.
-- [View full v0.3.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.0.md)
+- **Patched lint toolchain** — overrides move the dev-only `minimatch` and `katex` (pulled in by ESLint) to versions that fix two advisories with no in-range update, and the v0.3.0 notes now link the right issues. No runtime changes; a drop-in for v0.3.0.
+- [View full v0.3.1 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.1.md)
 
 ### Recent Releases
 
+- **v0.3.0** (November 2026) — usage reporting from `send()`, the `route()` leaf and the server `authorize` hook; drivers for llama.cpp, Ollama, SGLang and the DeepSeek API, endpoint pools, `reasoningRoundTrip` and `toolSearch`; requires Node.js 24 ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.0.md))
 - **v0.2.0** (October 2026) — the first working translator: six Anthropic Messages and OpenAI Chat Completions converters, backend detection (vLLM, OpenAI, Anthropic, generic), model aliases, the optional Fastify server and the `llm-translator` CLI for Claude Code ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.2.0.md))
 - **v0.1.0** (October 2026) — package scaffold: ESM and CommonJS entry points, tsup build, the `llm-translator-dev` condition with devcheck, tests on `@cldmv/vitest-runner` and the CLDMV v4 CI/release pipeline; the only export was a placeholder ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.1.0.md))
 
