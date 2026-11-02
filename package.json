@@ -25,7 +25,14 @@
 	},
 	"sideEffects": false,
 	"engines": {
-		"node": ">=22.22.0"
+		"node": ">=24.0.0"
+	},
+	"devEngines": {
+		"runtime": {
+			"name": "node",
+			"version": ">=24.0.0",
+			"onFail": "error"
+		}
 	},
 	"main": "./dist/index.cjs",
 	"module": "./dist/index.mjs",
