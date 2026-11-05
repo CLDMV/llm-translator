@@ -238,6 +238,72 @@ describe("server (anthropic front)", () => {
 		}
 	});
 
+	it("an upstream's pingInterval overrides the global one, for the early commit as well", async () => {
+		const upstream = await fakeVllm({ chat: (_req, _body, res) => sse(res, textChunks(["Hi"]), { stallFirst: 250 }) });
+		try {
+			const api = await make({ upstreams: [{ url: upstream.url, settings: { pingInterval: 30 } }], settings: { pingInterval: 60000 } });
+			const server = await api.server.start({ port: 0 });
+			const out = frames(await (await post(`${server.url}/v1/messages`, { ...hello, stream: true })).text());
+			expect(out[0].event).toBe("message_start");
+			expect(out.some((frame) => frame.data?.delta?.thinking === "")).toBe(true);
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("an upstream's pingInterval of 0 turns the early commit off although the global one is short", async () => {
+		const upstream = await fakeVllm({ chat: (_req, _body, res) => sse(res, textChunks(["Hi"]), { stallFirst: 250 }) });
+		try {
+			const api = await make({ upstreams: [{ url: upstream.url, settings: { pingInterval: 0 } }], settings: { pingInterval: 30 } });
+			const server = await api.server.start({ port: 0 });
+			const started = Date.now();
+			const reply = await post(`${server.url}/v1/messages`, { ...hello, stream: true });
+			// The status line only arrives with the upstream's first byte, because nothing committed the reply early.
+			expect(Date.now() - started).toBeGreaterThanOrEqual(200);
+			expect(reply.status).toBe(200);
+			await reply.text();
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("takes the pingInterval of the round robin member the request goes to", async () => {
+		const slow = { chat: (_req, _body, res) => sse(res, textChunks(["Hi"]), { stallFirst: 250 }) };
+		const a = await fakeVllm(slow);
+		const b = await fakeVllm(slow);
+		try {
+			const api = await make({
+				upstreams: [
+					{ name: "a", url: a.url, models: ["qwen3-coder"], settings: { pingInterval: 30 } },
+					{ name: "b", url: b.url, models: ["qwen3-coder"], settings: { pingInterval: 0 } }
+				],
+				pool: { strategy: "round_robin" },
+				settings: { pingInterval: 60000 }
+			});
+			const server = await api.server.start({ port: 0 });
+			const pinged = async () =>
+				frames(await (await post(`${server.url}/v1/messages`, { ...hello, stream: true })).text()).some(
+					(frame) => frame.data?.delta?.thinking === ""
+				);
+			// a commits early and pings; b (interval 0) waits for the first byte. Reading the interval after send would swap them.
+			expect([await pinged(), await pinged(), await pinged()]).toEqual([true, false, true]);
+		} finally {
+			await a.close();
+			await b.close();
+		}
+	});
+
+	it("falls back to the global pingInterval for a body that cannot be routed", async () => {
+		const upstream = await fakeVllm();
+		try {
+			const api = await make({ upstreams: [upstream.url], settings: { pingInterval: 30 } });
+			const server = await api.server.start({ port: 0 });
+			expect((await post(`${server.url}/v1/messages`, [])).status).toBe(400);
+		} finally {
+			await upstream.close();
+		}
+	});
+
 	it("drops a streaming request quietly when the client leaves before the ping interval", async () => {
 		let upstreamClosed;
 		const closed = new Promise((resolve) => (upstreamClosed = resolve));

@@ -20,6 +20,8 @@
 import { context, self } from "../../lib/runtime.mjs";
 import { TranslatorError } from "../../lib/errors.mjs";
 import { register } from "../../lib/routes.mjs";
+import { capture } from "../../lib/capture.mjs";
+import { resolve as routeTo } from "../../lib/route.mjs";
 import { resolve } from "../../lib/settings.mjs";
 
 /**
@@ -48,10 +50,20 @@ export async function plugin(fastify, options = {}) {
 		}
 	}
 	const { send, route, token, model, error, sse } = self;
+	const front = options.front ?? config.front;
+	const captured = capture(self, context, front);
 	register(fastify, options, {
-		front: options.front ?? config.front,
+		front,
 		filter: config.settings.passthroughFilter !== false,
-		interval: resolve(config.settings).pingInterval,
+		// The ping interval of the upstream a request is routed to, with the precedence every setting has (upstream over global); the global
+		// value when the body cannot be routed (the request then fails on its own).
+		interval: (body) => {
+			try {
+				return captured.settings(routeTo(captured, body).endpoint).pingInterval;
+			} catch {
+				return resolve(config.settings).pingInterval;
+			}
+		},
 		send,
 		route,
 		count: token.count,
