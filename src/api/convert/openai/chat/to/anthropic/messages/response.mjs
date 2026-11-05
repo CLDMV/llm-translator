@@ -86,6 +86,7 @@ export function response(completion, state, settings) {
 	const stop = toAnthropicStop(choice.finish_reason, {
 		hasToolCalls: calls.length > 0,
 		matchedStop: choice.stop_reason,
+		refusal: message.refusal,
 		argumentsComplete: calls.length === 0 || isComplete(calls.at(-1).function.arguments)
 	});
 	if (state && completion.usage) state.upstreamUsage = completion.usage;

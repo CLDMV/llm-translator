@@ -116,6 +116,20 @@ describe("text streaming", () => {
 		expect((await run([chunk({ content: "x" }, { stop_reason: 151645 }, "stop")])).at(-2).data.delta.stop_reason).toBe("end_turn");
 	});
 
+	test("content_filter puts stop_details on message_delta, other stops have none", async () => {
+		const refused = await run([chunk({ refusal: "I can't " }), chunk({ refusal: "help." }), chunk({}, {}, "content_filter")]);
+		expect(refused.at(-2).data.delta).toEqual({
+			stop_reason: "refusal",
+			stop_sequence: null,
+			stop_details: { type: "refusal", category: null, explanation: "I can't help." }
+		});
+		expect(deltas(refused)).toEqual([{ type: "text_delta", text: "I can't help." }]);
+		const bare = await run([chunk({ content: "x" }, {}, "content_filter")]);
+		expect(deltas(bare)).toEqual([{ type: "text_delta", text: "x" }]);
+		expect(bare.at(-2).data.delta.stop_details).toEqual({ type: "refusal", category: null, explanation: null });
+		expect((await run([chunk({ content: "x" }, {}, "stop")])).at(-2).data.delta).not.toHaveProperty("stop_details");
+	});
+
 	test.each([
 		["model_length", "max_tokens"],
 		["eos", "end_turn"],
