@@ -32,7 +32,7 @@ export default defineConfig({
 	entry: ["src/**/*.mjs"],
 	format: ["esm"],
 	outDir: "dist",
-	target: "node24",
+	target: "node22",
 	platform: "node",
 	bundle: false,
 	splitting: false,

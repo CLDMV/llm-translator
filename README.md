@@ -64,8 +64,8 @@ Lines, statements, functions and branches are all at 100% and enforced on every 
 
 ### Requirements
 
-- Node.js 24 or newer
-- Developing the package also needs Node.js 24 or newer (`devEngines` enforces it on install and `npm run`)
+- Node.js 22.15 or newer. Node.js 26 is fastest: PDF.js (through `unpdf`) uses newer built-ins such as `Promise.try`, `Float16Array` and `Map.prototype.getOrInsert`, which Node.js 22 and 24 run through PDF.js' own polyfills. npm warns on Node.js 22 because `unpdf` 2 declares Node.js 24; text extraction and page rendering work on 22.15.
+- Developing the package needs Node.js 22.22 or newer (`devEngines` enforces it on install and `npm run`)
 - Fastify 5, only for the server and the Fastify plugin (an optional peer dependency)
 
 ### Install

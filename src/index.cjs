@@ -35,7 +35,7 @@
 
 if (!process.features?.require_module) {
 	const error = new Error(
-		`@cldmv/llm-translator: require() needs Node.js >=24.0.0 (this is ${process.version}). On older Node.js, load the package with import() instead.`
+		`@cldmv/llm-translator: require() needs Node.js >=22.15.0 (this is ${process.version}). On older Node.js, load the package with import() instead.`
 	);
 	error.code = "ERR_REQUIRE_ESM";
 	throw error;
