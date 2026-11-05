@@ -324,9 +324,59 @@ describe("tools, thinking and formats", () => {
 			base({ reasoning_effort: "low", response_format: { type: "json_schema", json_schema: { name: "x", schema } } })
 		);
 		expect(both.output_config).toEqual({ effort: "low", format: { type: "json_schema", schema } });
-		const loose = await request(base({ response_format: { type: "json_object" } }));
-		expect(loose.state.dropped).toEqual(["response_format"]);
 		expect(await convert(base({ response_format: { type: "text" } }))).not.toHaveProperty("output_config");
+	});
+
+	describe("response_format json_object follows jsonObject", () => {
+		const json = { response_format: { type: "json_object" } };
+		const instruction = "Respond with a single valid JSON object and nothing else.";
+		const objectSchema = { type: "json_schema", schema: { type: "object" } };
+
+		test.each([
+			["non-streaming", {}],
+			["streaming", { stream: true }]
+		])("schema (the default), %s", async (_mode, extra) => {
+			const out = await convert(base({ ...json, ...extra }));
+			expect(out.output_config).toEqual({ format: objectSchema });
+			expect(out).not.toHaveProperty("system");
+			expect(out.stream).toBe(extra.stream);
+			const both = await convert(base({ ...json, ...extra, reasoning_effort: "low" }), { jsonObject: "schema" });
+			expect(both.output_config).toEqual({ effort: "low", format: objectSchema });
+			expect((await request(base({ ...json, ...extra }))).state.dropped).toEqual([]);
+		});
+
+		test.each([
+			["non-streaming", {}],
+			["streaming", { stream: true }]
+		])("instruction, %s", async (_mode, extra) => {
+			const settings = { jsonObject: "instruction" };
+			const alone = await convert(base({ ...json, ...extra }), settings);
+			expect(alone.system).toBe(instruction);
+			expect(alone).not.toHaveProperty("output_config");
+			expect(alone.stream).toBe(extra.stream);
+			const withSystem = await convert(
+				base({
+					...json,
+					...extra,
+					messages: [
+						{ role: "system", content: "Be brief." },
+						{ role: "user", content: "hi" }
+					]
+				}),
+				settings
+			);
+			expect(withSystem.system).toBe(`Be brief.\n\n${instruction}`);
+		});
+
+		test.each([
+			["non-streaming", {}],
+			["streaming", { stream: true }]
+		])("drop, %s", async (_mode, extra) => {
+			const out = await request(base({ ...json, ...extra }), { jsonObject: "drop" });
+			expect(out.state.dropped).toEqual(["response_format"]);
+			expect(out.body).not.toHaveProperty("output_config");
+			expect(out.body).not.toHaveProperty("system");
+		});
 	});
 
 	test("through slothlet", async () => {

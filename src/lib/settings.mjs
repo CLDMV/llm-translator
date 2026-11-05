@@ -40,6 +40,8 @@ import { TranslatorError } from "./errors.mjs";
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
  * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
+ * @property {"schema"|"instruction"|"drop"} jsonObject - OpenAI to Anthropic: how `response_format: json_object` is sent. `schema` sends `output_config.format` with the permissive schema `{ "type": "object" }`, `instruction` appends a short system instruction asking for one JSON object, `drop` omits it and records the drop.
+ * @property {boolean} jsonObjectFallback - Retry a request once with `jsonObject: "instruction"` when an Anthropic-protocol upstream answers 400 or 422 to the schema `jsonObject: "schema"` sent. The endpoint and model are remembered until the process ends only when the retry succeeds.
  * @property {boolean} toolErrors - Prefix `is_error` tool results with `toolErrorMarker`. Off by default for every driver.
  * @property {string} toolErrorMarker - Text that marks a failed tool result when `toolErrors` is on, and the text `toolErrorInference` looks for. Must contain a non-whitespace character.
  * @property {boolean} toolErrorInference - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text.
@@ -79,6 +81,8 @@ export const DEFAULTS = Object.freeze({
 	toolSchema: "pass",
 	deferredTools: "forward",
 	toolSearch: "expand",
+	jsonObject: "schema",
+	jsonObjectFallback: true,
 	toolErrors: false,
 	toolErrorMarker: "[error] ",
 	toolErrorInference: false,
@@ -106,6 +110,7 @@ const ENUMS = {
 	toolSchema: ["pass", "sanitize"],
 	deferredTools: ["forward", "drop"],
 	toolSearch: ["expand", "inline", "native"],
+	jsonObject: ["schema", "instruction", "drop"],
 	maxTokensField: ["max_completion_tokens", "max_tokens"],
 	prefill: ["continue_final_message", "none"],
 	unknownFields: ["drop", "error"],
@@ -117,6 +122,7 @@ const BOOLEANS = [
 	"passthroughFilter",
 	"imageFallback",
 	"toolFallback",
+	"jsonObjectFallback",
 	"thinkOpen",
 	"reasoningRoundTrip",
 	"toolErrorInference"

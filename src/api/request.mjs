@@ -41,8 +41,8 @@ function producerOf(endpoint) {
  * Route a client request body (in the configured `front` protocol) to an upstream and convert it to that upstream's
  * protocol. Does no I/O.
  * @param {any} body - Client request body (Anthropic Messages or OpenAI Chat Completions, per `front`).
- * @param {any} [options] - `{ front, headers, clientHeaders, filter, images, usage }`. `front` overrides the configured front for this call, `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback), `endpoint` sends to that member of the model's pool (used for failover; default: the first in the pool's order), `hold: true` (used by `send`) advances a round robin and takes the chosen endpoint's in-flight slot, which the caller then releases, `tools: false` sends the request without tools (used by the tool fallback), `usage: true` (used by `send`) makes a streaming OpenAI-front request always ask the upstream for its final usage chunk, `budget` (from `createBudget`, one per `send` for all its attempts) limits the cost of decoding reasoning signatures.
- * @returns {Promise<{upstream: string, method: string, url: string, path: string, headers: Record<string,string>, body: any, state: any, pool: string[], images: {sent: boolean, retry: boolean, key: string}, tools: {sent: boolean, retry: boolean}}>} The upstream request and the state `response`/`stream`/`error` need. `pool` lists the names of the endpoints serving the model in the order they are tried (`upstream` is the first); `images` tells `send` whether the body carries images, whether a refusal may be retried without them and the key under which a refusal is remembered; `tools` tells it whether the body carries tools and whether a tool-parser refusal may be retried without them.
+ * @param {any} [options] - `{ front, headers, clientHeaders, filter, images, usage }`. `front` overrides the configured front for this call, `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback), `endpoint` sends to that member of the model's pool (used for failover; default: the first in the pool's order), `hold: true` (used by `send`) advances a round robin and takes the chosen endpoint's in-flight slot, which the caller then releases, `jsonObject: "instruction"` sends a `json_object` response format as a system instruction (used by the JSON fallback, and applied by itself once a refusal is remembered for the endpoint and model), `tools: false` sends the request without tools (used by the tool fallback), `usage: true` (used by `send`) makes a streaming OpenAI-front request always ask the upstream for its final usage chunk, `budget` (from `createBudget`, one per `send` for all its attempts) limits the cost of decoding reasoning signatures.
+ * @returns {Promise<{upstream: string, method: string, url: string, path: string, headers: Record<string,string>, body: any, state: any, pool: string[], images: {sent: boolean, retry: boolean, key: string}, tools: {sent: boolean, retry: boolean}, json: {sent: boolean, retry: boolean, key: string}}>} The upstream request and the state `response`/`stream`/`error` need. `pool` lists the names of the endpoints serving the model in the order they are tried (`upstream` is the first); `images` tells `send` whether the body carries images, whether a refusal may be retried without them and the key under which a refusal is remembered; `tools` tells it whether the body carries tools and whether a tool-parser refusal may be retried without them; `json` tells it whether the body carries the schema emulation of `json_object`, whether a refusal may be retried with the instruction and the key under which a refusal is remembered.
  */
 export async function request(body, options = {}) {
 	const c = capture(self, context, options.front);
@@ -75,8 +75,12 @@ async function prepare(c, body, options, picked) {
 	const key = `${endpoint.name}\n${model}`;
 	// A refusal remembered earlier in this process, or an explicit `images: false`, sends the request without images.
 	const text = options.images === false || (c.state.textOnly.has(key) && c.settings(endpoint).imageFallback);
+	const base = c.settings(endpoint);
+	// Likewise a remembered refusal of the JSON schema, or an explicit `jsonObject: "instruction"`, sends `json_object` as an instruction.
+	const instruction = options.jsonObject === "instruction" || (c.state.jsonInstruction.has(key) && base.jsonObjectFallback);
 	const settings = {
-		...(text ? { ...c.settings(endpoint), images: false } : c.settings(endpoint)),
+		...(text ? { ...base, images: false } : base),
+		...(instruction ? { jsonObject: "instruction" } : {}),
 		...(pin?.effort === undefined ? {} : { effort: true })
 	};
 	const stream = body.stream === true;
@@ -156,6 +160,12 @@ async function prepare(c, body, options, picked) {
 			convert: converted
 		},
 		images: { sent: images.carries(upstream), retry: settings.imageFallback && endpoint.protocol === "openai.chat", key },
-		tools: { sent: tools.carries(upstream), retry: settings.toolFallback && endpoint.protocol === "openai.chat" }
+		tools: { sent: tools.carries(upstream), retry: settings.toolFallback && endpoint.protocol === "openai.chat" },
+		// Only an Anthropic-protocol upstream gets the emulated schema, so this never overlaps with the image and tool retries above.
+		json: {
+			sent: converted?.jsonSchemaEmulated === true,
+			retry: settings.jsonObjectFallback && endpoint.protocol === "anthropic.messages",
+			key
+		}
 	};
 }
