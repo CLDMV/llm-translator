@@ -109,7 +109,7 @@ The vLLM driver turns the detected version into settings. An unknown or missing 
 | `effort`         | `true`                                                                                                                                                 | 0.22.0 and later (`reasoning_effort` also toggles thinking) |
 | always           | `maxTokensField: "max_completion_tokens"`, `streamUsage`, `continuousUsage` (vLLM only), `prefill: "continue_final_message"`, `topK`, `responseFormat` | all versions                                                |
 
-`reasoning_effort` is clamped to `low`, `medium` or `high` (`xhigh` and `max` become `high`) because vLLM rejects other values; set `effortPassthrough: true` in the upstream's settings to send the client's value unchanged.
+`reasoning_effort` is clamped to `low`, `medium` or `high` (`xhigh` and `max` become `high`) because vLLM rejects other values; set `effortPassthrough: true` in the upstream's settings to send the client's value unchanged. A model with a configured `efforts` list is not clamped: its list decides (see [settings.md](settings.md#effort-levels-and-pinned-aliases-not-converter-settings)).
 
 Reading is never version dependent: the converters accept `reasoning`, `reasoning_content` and `<think>` tags in content.
 
@@ -121,7 +121,7 @@ For every setting the winner is, from highest to lowest: the upstream's own `set
 
 `request(body)` picks the upstream for `body.model`:
 
-1. The alias map (`aliases: { "claude-haiku-5-5": "qwen3-coder" }`) rewrites the model name sent upstream. The client still sees the name it asked for in responses.
+1. The alias map (`aliases: { "claude-haiku-5-5": "qwen3-coder" }`) rewrites the model name sent upstream. The client still sees the name it asked for in responses. An alias written as `{ "model": "qwen3-coder", "effort": "high" }` also pins settings (see [settings.md](settings.md#effort-levels-and-pinned-aliases-not-converter-settings)).
 2. The first upstream that serves the (rewritten) model. Served models come from the upstream's `models` list or from detection (`/v1/models`). An Anthropic-protocol upstream without a `models` list serves every `claude-*` id.
 3. The upstream marked `default: true`, otherwise the first one. When nothing serves the requested model and that fallback upstream knows exactly one model, that model is sent instead (the client still sees the name it asked for). With several or no known models the name is sent unchanged, and a `404` from the upstream is extended with a hint naming the model and pointing at `aliases`.
 

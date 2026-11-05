@@ -33,7 +33,8 @@ import { warn } from "./lib/warn.mjs";
  * @typedef {object} TranslatorConfig
  * @property {"anthropic" | "openai"} [front] Client protocol the translator speaks (default `"anthropic"`).
  * @property {Array<string | import("./lib/config.mjs").UpstreamConfig>} upstreams Upstream servers: `{ name, url, apiKey, headers, backend, models, default, settings, version }` (or a bare URL).
- * @property {Record<string, string>} [aliases] Client model name to upstream model name.
+ * @property {Record<string, string | {model: string, effort?: "minimal"|"low"|"medium"|"high"|"xhigh"|"max", thinking?: boolean}>} [aliases] Client model name to upstream model name, or to `{ model, effort, thinking }` to pin those settings over the request's.
+ * @property {Record<string, string[] | {levels: string[], default?: string | null}>} [efforts] Reasoning effort levels each model supports, keyed by model name after aliases (see docs/settings.md).
  * @property {import("./lib/pool.mjs").PoolConfig} [pool] Endpoint pools: `{ strategy, backoff: { base, max }, models }` (see docs/settings.md).
  * @property {Record<string, any>} [settings] Global converter settings (see `lib/settings.mjs`).
  * @property {boolean} [detect] Probe `auto` upstreams at startup (default true).

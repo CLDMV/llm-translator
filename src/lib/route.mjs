@@ -40,21 +40,23 @@ export function serves(endpoint, model) {
  * @param {string | undefined} model - Model named by the client.
  * @param {any} state - Translator state (`cursors`).
  * @param {boolean} [advance] - Move the round robin cursor (false to only look).
- * @returns {{endpoint: any, model: string | undefined, unserved: boolean, pool: any[]}} Chosen endpoint, the model name to send upstream, whether
+ * @returns {{endpoint: any, model: string | undefined, unserved: boolean, pool: any[], pin: {effort?: string, thinking?: boolean} | undefined}} Chosen endpoint, the model name to send upstream, whether
  * no endpoint serves the model and the endpoints to try in order (the chosen one first). When nothing serves it and the fallback endpoint knows
  * exactly one model, that model is sent instead.
  */
 export function pick(config, endpoints, model, state, advance = false) {
-	const target = Object.hasOwn(config.aliases, model) ? config.aliases[model] : model;
+	const aliased = Object.hasOwn(config.aliases, model);
+	const target = aliased ? config.aliases[model] : model;
+	const pin = aliased && Object.hasOwn(config.pins, model) ? config.pins[model] : undefined;
 	const matches = endpoints.filter((entry) => serves(entry, target));
 	const fallback = endpoints.find((entry) => entry.default) ?? endpoints[0];
 	if (matches.length > 0) {
 		const pool = order(config, state, matches, target, advance);
-		return { endpoint: pool[0], model: target, unserved: false, pool };
+		return { endpoint: pool[0], model: target, unserved: false, pool, pin };
 	}
 	const known = fallback.models ?? fallback.facts?.models ?? [];
-	if (known.length === 1) return { endpoint: fallback, model: known[0], unserved: false, pool: [fallback] };
-	return { endpoint: fallback, model: target, unserved: true, pool: [fallback] };
+	if (known.length === 1) return { endpoint: fallback, model: known[0], unserved: false, pool: [fallback], pin };
+	return { endpoint: fallback, model: target, unserved: true, pool: [fallback], pin };
 }
 
 /**
@@ -62,8 +64,8 @@ export function pick(config, endpoints, model, state, advance = false) {
  * @param {any} c - Captured translator parts (`capture`).
  * @param {any} body - Client request body.
  * @param {{endpoint?: string, advance?: boolean}} [options] - `endpoint` forces one pool member by name (used for failover; it must still serve the model, else `endpoint_not_in_pool`); `advance` moves the round robin cursor (`request` does, `route` does not).
- * @returns {{endpoint: any, model: string, requested: string | undefined, unserved: boolean, convert: any, pool: any[]}} The chosen endpoint, the model name sent
- * upstream, the model the client asked for, whether no endpoint serves it, the converters (null for a native pass-through) and the pool in try order.
+ * @returns {{endpoint: any, model: string, requested: string | undefined, unserved: boolean, pin: {effort?: string, thinking?: boolean} | undefined, convert: any, pool: any[]}} The chosen endpoint, the model name sent
+ * upstream, the model the client asked for, whether no endpoint serves it, the settings its alias pins, the converters (null for a native pass-through) and the pool in try order.
  * @throws {TranslatorError} `invalid_body` when the body is not a JSON object, `endpoint_not_in_pool` when a forced endpoint no longer serves the model.
  */
 export function resolve(c, body, options = {}) {
@@ -84,10 +86,19 @@ export function resolve(c, body, options = {}) {
 			model: picked.model,
 			requested: body.model,
 			unserved: picked.unserved,
+			pin: picked.pin,
 			convert: c.converters(forced),
 			pool: [forced]
 		};
 	}
 	const { endpoint, pool } = picked;
-	return { endpoint, model: picked.model, requested: body.model, unserved: picked.unserved, convert: c.converters(endpoint), pool };
+	return {
+		endpoint,
+		model: picked.model,
+		requested: body.model,
+		unserved: picked.unserved,
+		pin: picked.pin,
+		convert: c.converters(endpoint),
+		pool
+	};
 }
