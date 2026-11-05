@@ -274,7 +274,7 @@ describe("deepseek reasoning round trip through the signature (#45)", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			const transport = conversation();
-			const api = await make({ upstreams: [url], transport, silent: false });
+			const api = await make({ upstreams: [url], transport, logs: true });
 			const first = await api.send({
 				model: "deepseek-reasoner",
 				max_tokens: 64,

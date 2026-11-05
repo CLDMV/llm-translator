@@ -56,6 +56,9 @@ describe("parse / merge", () => {
 			"no-detect": true,
 			port: "9"
 		});
+		expect(parse(["--logs", "out/run.log"]).logs).toBe("out/run.log");
+		expect(parse(["--logs"]).logs).toBe("");
+		expect(parse(["--logs", "--no-detect"])).toMatchObject({ logs: "", "no-detect": true });
 		expect(() => parse(["--nope"])).toThrow();
 		expect(() => parse(["positional"])).toThrow();
 	});
@@ -106,16 +109,28 @@ describe("parse / merge", () => {
 			front: "anthropic",
 			upstreams: [{ url: "http://flag", apiKey: "flag-up", backend: "compatible" }],
 			aliases: { a: "b", x: "y", c: "d=e" },
-			silent: true,
+			logs: false,
 			detect: false
 		});
 		expect(fromFlags.server).toEqual({ host: "flag-host", port: 3, apiKey: "flag-key" });
 	});
 
+	it("logs to the console by default and maps --logs, --silent and the file's logs or silent", () => {
+		expect(merge({}, {}, {}).translator.logs).toBe(true);
+		expect(merge({ logs: "" }, {}, {}).translator.logs).toBe(true);
+		expect(merge({ logs: "run.log" }, {}, {}).translator.logs).toBe("run.log");
+		expect(merge({ silent: true }, {}, {}).translator.logs).toBe(false);
+		// logs wins over silent, as in the library.
+		expect(merge({ silent: true, logs: "run.log" }, {}, {}).translator.logs).toBe("run.log");
+		expect(merge({}, {}, { silent: true }).translator).toEqual({ logs: false });
+		expect(merge({}, {}, { logs: "file.log" }).translator.logs).toBe("file.log");
+		expect(merge({ logs: "flag.log" }, {}, { logs: false }).translator.logs).toBe("flag.log");
+	});
+
 	it("keeps the file's settings when nothing overrides them", () => {
 		const file = { upstreams: [{ url: "http://file" }], server: { port: 5 } };
 		const merged = merge({}, {}, file);
-		expect(merged.translator).toEqual({ upstreams: [{ url: "http://file" }] });
+		expect(merged.translator).toEqual({ logs: true, upstreams: [{ url: "http://file" }] });
 		expect(merged.server).toEqual({ port: 5 });
 		expect(merge({ upstream: ["http://u"] }, {}, {}).translator.upstreams).toEqual([{ url: "http://u", apiKey: undefined }]);
 		expect(merge({ model: ["a=b"] }, {}, {}).translator.aliases).toEqual({ a: "b" });
@@ -190,7 +205,7 @@ describe("main", () => {
 	it("runs a real translator and server against a fake vLLM, reading the config file named by the environment", async () => {
 		const upstream = await fakeVllm();
 		const file = path.join(scratch, "config.json");
-		writeFileSync(file, JSON.stringify({ upstreams: [{ url: upstream.url }], silent: true, server: { port: 0 } }));
+		writeFileSync(file, JSON.stringify({ upstreams: [{ url: upstream.url }], logs: false, server: { port: 0 } }));
 		try {
 			const io = fakeIo();
 			const running = main([], { LLM_TRANSLATOR_CONFIG: file }, io);
@@ -213,7 +228,7 @@ describe("main", () => {
 		const file = path.join(scratch, "flag.json");
 		writeFileSync(
 			file,
-			JSON.stringify({ upstreams: [{ url: "http://a.test", backend: "vllm" }], detect: false, silent: true, server: { port: 0 } })
+			JSON.stringify({ upstreams: [{ url: "http://a.test", backend: "vllm" }], detect: false, logs: false, server: { port: 0 } })
 		);
 		const io = fakeIo();
 		const running = main(["--config", file], {}, io);

@@ -212,7 +212,7 @@ describe("authorize (anthropic front)", () => {
 					throw new Error("meter down");
 				}
 			},
-			{ silent: true }
+			{ logs: false }
 		);
 		try {
 			const reply = await post(`${server.url}/v1/messages`, hello);

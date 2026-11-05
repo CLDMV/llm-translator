@@ -21,6 +21,7 @@ import { context, self } from "../lib/runtime.mjs";
 import { capture } from "../lib/capture.mjs";
 import { TranslatorError } from "../lib/errors.mjs";
 import { warn } from "../lib/warn.mjs";
+import { emit } from "../lib/events.mjs";
 import * as http from "../lib/http.mjs";
 
 /**
@@ -104,7 +105,21 @@ async function bind(c, endpoint, network, probe) {
 		warn(
 			c.config,
 			c.state,
-			`Upstream ${endpoint.name} (${endpoint.url}) did not answer detection; using the generic OpenAI-compatible driver`
+			`Upstream ${endpoint.name} (${endpoint.url}) did not answer detection; using the generic OpenAI-compatible driver`,
+			{ type: "detect", kind: "unreachable", endpoint: endpoint.name, url: endpoint.url, driver: driver.name }
+		);
+	} else {
+		emit(
+			{ config: c.config, state: c.state },
+			{
+				type: "detect",
+				kind: "driver",
+				level: "info",
+				message: `Upstream ${endpoint.name} (${endpoint.url}): driver ${driver.name}`,
+				endpoint: endpoint.name,
+				url: endpoint.url,
+				driver: driver.name
+			}
 		);
 	}
 }

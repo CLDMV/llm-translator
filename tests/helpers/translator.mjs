@@ -21,12 +21,12 @@ import { createTranslator } from "../../src/index.mjs";
 const open = [];
 
 /**
- * Create a translator for a test. `slothlet.import` routes leaf loads through vitest; `silent` unless overridden.
+ * Create a translator for a test. `slothlet.import` routes leaf loads through vitest; `logs: false` unless overridden.
  * @param {object} config - Translator config.
  * @returns {Promise<object>} Translator api (shut down by `closeAll`).
  */
 export async function make(config) {
-	const api = await createTranslator({ silent: true, ...config, slothlet: { import: (url) => import(url), ...config.slothlet } });
+	const api = await createTranslator({ logs: false, ...config, slothlet: { import: (url) => import(url), ...config.slothlet } });
 	open.push(api);
 	return api;
 }

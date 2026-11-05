@@ -49,7 +49,7 @@ describe("package surface", () => {
 		const api = await entry.createTranslator({
 			upstreams: ["http://a.test"],
 			detect: false,
-			silent: true,
+			logs: false,
 			slothlet: { import: (url) => import(url) }
 		});
 		try {
@@ -64,6 +64,7 @@ describe("package surface", () => {
 					"driver",
 					"endpoint",
 					"error",
+					"events",
 					"model",
 					"request",
 					"route",
@@ -77,6 +78,7 @@ describe("package surface", () => {
 				].sort()
 			);
 			expect(typeof api.error).toBe("function");
+			expect(Object.keys(api.events).sort()).toEqual(["off", "on"]);
 			expect(typeof api.token.count).toBe("function");
 			expect(typeof api.model.list).toBe("function");
 			expect(Object.keys(api.server).sort()).toEqual(["plugin", "start", "stop"]);
