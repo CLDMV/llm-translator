@@ -126,6 +126,14 @@ export async function request(chatBody, settings) {
 			}
 			case "tool": {
 				const result = { type: "tool_result", tool_use_id: anthropicToolId(message.tool_call_id), content: plainText(message.content) };
+				if (s.toolErrorInference) {
+					// The marker is only a convention (see `toolErrors` on the other direction), so it is looked for only when asked.
+					const marker = s.toolErrorMarker.trimEnd();
+					if (result.content.startsWith(marker)) {
+						result.is_error = true;
+						result.content = result.content.slice(marker.length).replace(/^\s/, "");
+					}
+				}
 				const last = turns.at(-1);
 				if (last?.role === "user") {
 					const firstOther = last.blocks.findIndex((b) => b.type !== "tool_result");

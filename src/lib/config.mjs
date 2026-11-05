@@ -19,6 +19,7 @@
  */
 import { TranslatorError } from "./errors.mjs";
 import * as pool from "./pool.mjs";
+import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
 
 /**
  * @typedef {object} UpstreamConfig
@@ -96,7 +97,8 @@ export function normalize(config = {}) {
 	return {
 		front,
 		endpoints: list.map(endpoint),
-		aliases: { ...config.aliases },
+		...normalizeAliases(config.aliases),
+		efforts: normalizeEfforts(config.efforts),
 		pool: pool.normalize(config.pool),
 		settings: { ...config.settings },
 		detect: config.detect !== false,

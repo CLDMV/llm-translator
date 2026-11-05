@@ -54,7 +54,7 @@ const BILLING = "x-anthropic-billing-header:";
  * tool-name map, thinking mode, fields that were dropped).
  * @param {any} body - Anthropic `POST /v1/messages` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
- * @param {{ producer?: string, budget?: ReturnType<typeof createBudget> }} [context] - `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts).
+ * @param {{ producer?: string, budget?: ReturnType<typeof createBudget>, listed?: boolean }} [context] - `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts). `listed` says the model has a configured effort list, so the default `medium` effort is left to it.
  * @returns {Promise<{ body: any, state: any }>} OpenAI request body and conversion state.
  * @throws {TranslatorError} For malformed requests, unsupported content when configured to error, or PDF limit violations.
  */
@@ -131,7 +131,7 @@ export async function request(body, settings, context) {
 		if (body.tool_choice?.disable_parallel_tool_use === true && s.parallelToolCalls) out.parallel_tool_calls = false;
 	}
 
-	applyThinking(body, s, out);
+	applyThinking(body, s, out, context?.listed === true);
 	applyOutputConfig(body, s, state, out);
 	return { body: out, state };
 }
@@ -285,7 +285,10 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 					if (content === "") content = "(image output attached in the next message)";
 				}
 				if (block.is_error === true && s.toolErrors)
-					content = typeof content === "string" ? `[error] ${content}` : [{ type: "text", text: "[error]" }, ...content];
+					content =
+						typeof content === "string"
+							? `${s.toolErrorMarker}${content}`
+							: [{ type: "text", text: s.toolErrorMarker.trimEnd() }, ...content];
 				out.push({ role: "tool", tool_call_id: block.tool_use_id, content });
 			}
 			const all = [...toolParts, ...parts];
@@ -509,8 +512,9 @@ function convertToolChoice(choice, s, state, fit) {
  * @param {any} body - Anthropic body.
  * @param {import("../../../../../../../lib/settings.mjs").Settings} s - Settings.
  * @param {any} out - OpenAI body under construction.
+ * @param {boolean} listed - The model has a configured effort list, which supplies the default effort instead of `medium`.
  */
-function applyThinking(body, s, out) {
+function applyThinking(body, s, out, listed) {
 	const thinking = body.thinking;
 	const type = thinking?.type;
 	let effort;
@@ -526,7 +530,7 @@ function applyThinking(body, s, out) {
 					out.thinking_token_budget = Math.max(0, Math.min(thinking.budget_tokens, body.max_tokens - 1));
 				}
 			}
-			if (s.thinking === "reasoning_effort" && effort === undefined) effort = "medium";
+			if (s.thinking === "reasoning_effort" && effort === undefined && !listed) effort = "medium";
 		}
 	}
 	if (effort !== undefined) out.reasoning_effort = effort;

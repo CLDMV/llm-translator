@@ -9,6 +9,6 @@
  * @param {any} [state] - State from the request converter (original model, tool-name map).
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {any} Anthropic message.
- * @throws {TranslatorError} When the completion has no choices.
+ * @throws {TranslatorError} When the completion has no choices, or its `finish_reason` is a fatal one (`abort`, `aborted`, `error`, `insufficient_system_resource`).
  */
 export function response(completion: any, state?: any, settings?: Partial<import("../../../../../../../lib/settings.mjs").Settings>): any;

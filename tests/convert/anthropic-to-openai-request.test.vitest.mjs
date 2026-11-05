@@ -382,6 +382,16 @@ describe("tool results", () => {
 		expect(quiet.messages[2].content).toBe("boom");
 	});
 
+	test("toolErrorMarker changes the text that marks a failed tool result", async () => {
+		const messages = turn([
+			{ type: "tool_result", tool_use_id: "t1", content: "boom", is_error: true },
+			{ type: "tool_result", tool_use_id: "t2", content: [{ type: "tool_reference", tool_name: "WebSearch" }], is_error: true }
+		]);
+		const out = await convert(base({ messages }), { toolErrors: true, toolErrorMarker: "ERROR: ", toolSearch: "native" });
+		expect(out.messages[2].content).toBe("ERROR: boom");
+		expect(out.messages[3].content[0]).toEqual({ type: "text", text: "ERROR:" });
+	});
+
 	test("tool_result with text and an image keeps the text on the tool message", async () => {
 		const out = await convert(
 			base({

@@ -46,6 +46,8 @@ describe("settings", () => {
 			toolSchema: "pass",
 			deferredTools: "forward",
 			toolErrors: false,
+			toolErrorMarker: "[error] ",
+			toolErrorInference: false,
 			maxTokensField: "max_completion_tokens",
 			streamUsage: true,
 			continuousUsage: false,
@@ -81,6 +83,12 @@ describe("settings", () => {
 		expect(resolve().thinkOpen).toBe(false);
 		expect(resolve({ thinkOpen: true }).thinkOpen).toBe(true);
 		expect(() => resolve({ thinkOpen: "yes" })).toThrow(/Invalid setting thinkOpen/);
+	});
+
+	test("toolErrorMarker must be a non-blank string and toolErrorInference a boolean", () => {
+		expect(resolve({ toolErrorMarker: "ERR:" }).toolErrorMarker).toBe("ERR:");
+		for (const marker of ["", "  ", 5, null]) expect(() => resolve({ toolErrorMarker: marker })).toThrow(/Invalid setting toolErrorMarker/);
+		expect(() => resolve({ toolErrorInference: "yes" })).toThrow(/Invalid setting toolErrorInference/);
 	});
 
 	test("pdf.scale must be a positive number", () => {

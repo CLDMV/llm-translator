@@ -1,22 +1,18 @@
 /**
- *
- *	@Project: @cldmv/llm-translator
- *	@Filename: /src/lib/finish.mjs
- *	@Date: 2026-10-25T12:28:19-07:00 (1792956499)
- *	@Author: Nate Corcoran <CLDMV>
- *	@Email: <Shinrai@users.noreply.github.com>
- *	-----
- *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:59:01-07:00 (1792958341)
- *	-----
- *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
- *
+ * The error a fatal OpenAI `finish_reason` stands for. Servers use `abort`, `aborted` and `error` when generation was cut off and
+ * `insufficient_system_resource` when they ran out of resources mid-answer; none of them is a finished answer.
+ * @param {string|null|undefined} finishReason - OpenAI `finish_reason`.
+ * @returns {{ type: string, status: number, code: string, message: string }|null} Error details, or null when the reason is not fatal.
  */
-/**
- * @fileoverview Stop-reason and usage mapping between the two protocols.
- */
+export function finishError(finishReason: string | null | undefined): {
+    type: string;
+    status: number;
+    code: string;
+    message: string;
+} | null;
 /**
  * Anthropic stop reason (and stop sequence) for an OpenAI choice.
+ * `model_length` is `max_tokens`; `eos`, `eos_token` and any other unknown value are `end_turn`. Fatal values are handled by {@link finishError} before this.
  * @param {string|null|undefined} finishReason - OpenAI `finish_reason`.
  * @param {{ hasToolCalls: boolean, matchedStop?: unknown, argumentsComplete?: boolean }} info - Whether tool calls were produced, vLLM's `stop_reason` (a string for a matched stop string), and whether the last tool call's arguments are complete. A `length` stop with incomplete arguments is `max_tokens`, not `tool_use`.
  * @returns {{ stop_reason: string, stop_sequence: string|null }} Anthropic stop fields.

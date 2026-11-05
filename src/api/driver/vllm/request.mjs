@@ -23,13 +23,15 @@ const EFFORTS = new Set(["xhigh", "max"]);
 
 /**
  * Drop tool fields vLLM rejects when no tools are present, and clamp `reasoning_effort` to what vLLM accepts
- * (`xhigh` and `max` become `high`) unless the `effortPassthrough` setting is on.
+ * (`xhigh` and `max` become `high`) unless the `effortPassthrough` setting is on or the model has a configured level list (`ctx.levels`,
+ * which `request` has already fitted the effort to).
  * @param {any} body - Chat Completions request body.
- * @param {any} [ctx] - `{ settings }`.
+ * @param {any} [ctx] - `{ settings, levels }`.
  * @returns {any} Normalized body.
  */
 export function request(body, ctx) {
 	const out = noEmptyTools(body);
-	if (EFFORTS.has(out.reasoning_effort) && ctx?.settings?.effortPassthrough !== true) return { ...out, reasoning_effort: "high" };
+	if (EFFORTS.has(out.reasoning_effort) && ctx?.levels === undefined && ctx?.settings?.effortPassthrough !== true)
+		return { ...out, reasoning_effort: "high" };
 	return out;
 }

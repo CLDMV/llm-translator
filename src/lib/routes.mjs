@@ -155,16 +155,17 @@ function* failure(api, body) {
  * @param {any} api - Captured translator parts.
  * @param {AbortController} controller - Aborts the upstream request.
  * @param {AsyncIterable<any>} events - Client events.
+ * @param {number} interval - Ping interval in ms for the upstream this request goes to.
  * @param {number} [status] - HTTP status (default 200).
  * @param {Record<string,string>} [headers] - Response headers (default SSE headers).
  * @returns {Promise<any>} The reply.
  */
-async function stream(reply, api, controller, events, status = 200, headers = SSE_HEADERS) {
+async function stream(reply, api, controller, events, interval, status = 200, headers = SSE_HEADERS) {
 	reply.hijack();
 	const raw = reply.raw;
 	raw.writeHead(status, headers);
 	try {
-		await api.write(raw, events, { front: api.front, interval: api.interval });
+		await api.write(raw, events, { front: api.front, interval });
 	} catch (error) {
 		if (!controller.signal.aborted) {
 			const known = error instanceof TranslatorError;
@@ -241,7 +242,7 @@ function verdictOf(value) {
  * Register the routes for one front on a Fastify instance.
  * @param {any} fastify - Fastify instance (usually an encapsulated plugin scope).
  * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage }`.
- * @param {any} captured - Captured translator parts `{ front, interval, filter, send, route, count, list, get, build, encode, write }`; `front` applies to this instance only.
+ * @param {any} captured - Captured translator parts `{ front, interval(body), filter, send, route, count, list, get, build, encode, write }`; `front` applies to this instance only.
  * @returns {void}
  */
 export function register(fastify, options, captured) {
@@ -348,10 +349,13 @@ export function register(fastify, options, captured) {
 			if (!reply.raw.writableFinished) controller.abort();
 		});
 		const onUsage = typeof options.onUsage === "function" ? (report) => options.onUsage(report, contexts.get(request)) : undefined;
+		// The same interval times the early-commit wait and the keep-alives, and it comes from the upstream the request is routed to.
+		// Read it before sending: send advances a round robin, and reading after would see the next member.
+		const interval = api.interval(request.body);
 		const sending = api.send(request.body, { signal: controller.signal, clientHeaders: forwardable(request.headers), onUsage });
 		sending.catch(() => {});
 		const gone = new Promise((resolve) => controller.signal.addEventListener("abort", () => resolve(GONE), { once: true }));
-		const result = await settle(Promise.race([sending, gone]), request.body?.stream === true ? api.interval : 0);
+		const result = await settle(Promise.race([sending, gone]), request.body?.stream === true ? interval : 0);
 		if (result === GONE) {
 			// A stream that arrives after the client left is never read; return it so its usage report is delivered.
 			sending.then(
@@ -360,9 +364,9 @@ export function register(fastify, options, captured) {
 			);
 			return reply;
 		}
-		if (result === STALLED) return stream(reply, api, controller, late(sending, api, request.body?.model));
+		if (result === STALLED) return stream(reply, api, controller, late(sending, api, request.body?.model), interval);
 		if (!result.stream) return reject(reply, result);
-		return stream(reply, api, controller, result.stream, result.status, result.headers);
+		return stream(reply, api, controller, result.stream, interval, result.status, result.headers);
 	});
 
 	if (api.front === "anthropic") {

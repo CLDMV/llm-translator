@@ -22,7 +22,7 @@ import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
 import { sign, reasoningOf, reasoningKey, detailsText, splitThink } from "../../../../../../../lib/thinking.mjs";
 import { isComplete, parseArguments } from "../../../../../../../lib/arguments.mjs";
-import { toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
+import { finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 
 /**
  * Convert a (non-streaming) OpenAI chat completion into an Anthropic message.
@@ -35,7 +35,7 @@ import { toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/fini
  * @param {any} [state] - State from the request converter (original model, tool-name map).
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {any} Anthropic message.
- * @throws {TranslatorError} When the completion has no choices.
+ * @throws {TranslatorError} When the completion has no choices, or its `finish_reason` is a fatal one (`abort`, `aborted`, `error`, `insufficient_system_resource`).
  */
 export function response(completion, state, settings) {
 	const s = resolve(settings);
@@ -43,6 +43,8 @@ export function response(completion, state, settings) {
 	if (!choice) {
 		throw new TranslatorError("Upstream response contained no choices", { code: "invalid_upstream_response", status: 502 });
 	}
+	const fatal = finishError(choice.finish_reason);
+	if (fatal) throw new TranslatorError(fatal.message, { code: fatal.code, status: fatal.status, type: fatal.type });
 	const message = choice.message ?? {};
 	const content = [];
 

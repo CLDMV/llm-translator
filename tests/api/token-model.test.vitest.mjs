@@ -193,7 +193,7 @@ describe("model.list", () => {
 	it("falls back to an alias entry without an upstream when its target is unknown", async () => {
 		const transport = fakeTransport(() => ({ status: 500, body: {} }));
 		const api = await make({ front: "openai", upstreams: [{ url: "http://one.test" }], aliases: { a: "b" }, transport, detect: false });
-		expect((await api.model.list()).data).toEqual([{ id: "a", object: "model", created: 0, owned_by: "llm-translator" }]);
+		expect((await api.model.list()).data).toEqual([{ id: "a", object: "model", created: 0, owned_by: "llm-translator", alias_of: "b" }]);
 	});
 
 	it("lists through the generic, OpenAI and Anthropic drivers", async () => {

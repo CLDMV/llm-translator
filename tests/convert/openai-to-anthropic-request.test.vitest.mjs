@@ -231,6 +231,46 @@ describe("messages", () => {
 	});
 });
 
+describe("tool error inference", () => {
+	const tool = (content) =>
+		base({
+			messages: [
+				{ role: "user", content: "go" },
+				{ role: "tool", tool_call_id: "t", content }
+			]
+		});
+	const result = async (content, settings) => (await convert(tool(content), settings)).messages.at(-1).content[0];
+
+	test("off by default: a marked tool message stays plain", async () => {
+		expect(await result("[error] boom")).toMatchObject({ type: "tool_result", content: "[error] boom" });
+		expect((await result("[error] boom")).is_error).toBeUndefined();
+	});
+
+	test("on: a message starting with the marker becomes is_error and loses the marker", async () => {
+		expect(await result("[error] boom", { toolErrorInference: true })).toMatchObject({ is_error: true, content: "boom" });
+	});
+
+	test("on: the marker line of a multi-part message is removed too", async () => {
+		const parts = [
+			{ type: "text", text: "[error]" },
+			{ type: "text", text: "boom" }
+		];
+		expect((await result(parts, { toolErrorInference: true })).is_error).toBe(true);
+	});
+
+	test("on: an unmarked message is not an error", async () => {
+		const out = await result("fine [error] later", { toolErrorInference: true });
+		expect(out.is_error).toBeUndefined();
+		expect(out.content).toBe("fine [error] later");
+	});
+
+	test("the marker is configurable", async () => {
+		const settings = { toolErrorInference: true, toolErrorMarker: "ERROR:" };
+		expect(await result("ERROR: boom", settings)).toMatchObject({ is_error: true, content: "boom" });
+		expect((await result("[error] boom", settings)).is_error).toBeUndefined();
+	});
+});
+
 describe("tools, thinking and formats", () => {
 	test("tools, schema sanitizing and name fitting", async () => {
 		const schema = { $schema: "x", type: "object", properties: { n: { type: "integer", maximum: 9007199254740991 } } };

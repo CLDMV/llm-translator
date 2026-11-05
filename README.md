@@ -17,13 +17,15 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.3.1 (November 2026)
+### Latest: v0.4.0 (November 2026)
 
-- **Patched lint toolchain** — overrides move the dev-only `minimatch` and `katex` (pulled in by ESLint) to versions that fix two advisories with no in-range update, and the v0.3.0 notes now link the right issues. No runtime changes; a drop-in for v0.3.0.
-- [View full v0.3.1 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.1.md)
+- **Per-model effort levels and pinned aliases** — an `efforts` config lists the reasoning efforts each model honours, unsupported levels snap to the nearest listed one, and an alias can pin `effort` and `thinking`, so one local model can serve Claude Code's tiers at different depths. `/v1/models` lists the aliases and levels.
+- **Also:** non-standard finish reasons map to `max_tokens`, `end_turn` or an error; a configurable tool-error marker with opt-in `is_error` inference; `pingInterval` per upstream; and the Node.js floor drops to 22.15.
+- [View full v0.4.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.4.0.md)
 
 ### Recent Releases
 
+- **v0.3.1** (November 2026) — patched the dev-only `minimatch` and `katex` lint dependencies and corrected the v0.3.0 issue links; no runtime changes ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.1.md))
 - **v0.3.0** (November 2026) — usage reporting from `send()`, the `route()` leaf and the server `authorize` hook; drivers for llama.cpp, Ollama, SGLang and the DeepSeek API, endpoint pools, `reasoningRoundTrip` and `toolSearch`; requires Node.js 24 ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.0.md))
 - **v0.2.0** (October 2026) — the first working translator: six Anthropic Messages and OpenAI Chat Completions converters, backend detection (vLLM, OpenAI, Anthropic, generic), model aliases, the optional Fastify server and the `llm-translator` CLI for Claude Code ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.2.0.md))
 - **v0.1.0** (October 2026) — package scaffold: ESM and CommonJS entry points, tsup build, the `llm-translator-dev` condition with devcheck, tests on `@cldmv/vitest-runner` and the CLDMV v4 CI/release pipeline; the only export was a placeholder ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.1.0.md))
@@ -64,8 +66,8 @@ Lines, statements, functions and branches are all at 100% and enforced on every 
 
 ### Requirements
 
-- Node.js 24 or newer
-- Developing the package also needs Node.js 24 or newer (`devEngines` enforces it on install and `npm run`)
+- Node.js 22.15 or newer. Node.js 26 is fastest: PDF.js (through `unpdf`) uses newer built-ins such as `Promise.try`, `Float16Array` and `Map.prototype.getOrInsert`, which Node.js 22 and 24 run through PDF.js' own polyfills. npm warns on Node.js 22 because `unpdf` 2 declares Node.js 24; text extraction and page rendering work on 22.15.
+- Developing the package needs Node.js 22.22 or newer (`devEngines` enforces it on install and `npm run`)
 - Fastify 5, only for the server and the Fastify plugin (an optional peer dependency)
 
 ### Install
@@ -122,7 +124,7 @@ Then point Claude Code at it with `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`. Th
 
 ## 📚 Configuration
 
-`createTranslator(config)` takes `front`, `upstreams` (URLs or objects with `url`, `apiKey`, `backend`, `models`, `default` and `settings`), `aliases`, global `settings`, `pool` (failover and load balancing between upstreams that serve the same model, see [docs/server.md](https://github.com/CLDMV/llm-translator/blob/master/docs/server.md#endpoint-pools-failover-and-load-balancing)), `detect` and a custom `transport`. The CLI reads the same keys from flags, `LLM_TRANSLATOR_*` environment variables and a JSON file, in that order of precedence.
+`createTranslator(config)` takes `front`, `upstreams` (URLs or objects with `url`, `apiKey`, `backend`, `models`, `default` and `settings`), `aliases` (a model name, or `{ model, effort, thinking }` to pin settings), `efforts` (the reasoning levels each model supports, see [docs/settings.md](https://github.com/CLDMV/llm-translator/blob/master/docs/settings.md#effort-levels-and-pinned-aliases-not-converter-settings)), global `settings`, `pool` (failover and load balancing between upstreams that serve the same model, see [docs/server.md](https://github.com/CLDMV/llm-translator/blob/master/docs/server.md#endpoint-pools-failover-and-load-balancing)), `detect` and a custom `transport`. The CLI reads the same keys from flags, `LLM_TRANSLATOR_*` environment variables and a JSON file, in that order of precedence.
 
 Settings tune how the converters map one protocol onto the other (`inlineSystem`, `images`, `imageFallback`, `toolStreaming`, `pingInterval` and more); they are resolved per upstream from defaults, probed values, driver defaults and your overrides. The full table is in [docs/settings.md](https://github.com/CLDMV/llm-translator/blob/master/docs/settings.md).
 

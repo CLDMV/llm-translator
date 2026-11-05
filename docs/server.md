@@ -47,6 +47,32 @@ Flags win over environment variables, which win over the config file. The config
 
 The process runs until SIGINT or SIGTERM, then closes the server and the translator.
 
+### Aliases that pin settings
+
+Claude Code asks for tier names (`ANTHROPIC_DEFAULT_{FABLE,OPUS,SONNET,HAIKU}_MODEL`). With one local model the tiers can map to the same model at different efforts:
+
+```json
+{
+	"aliases": {
+		"glm-flash-max": { "model": "GLM-5.3-Flash", "effort": "max" },
+		"glm-flash-high": { "model": "GLM-5.3-Flash", "effort": "high" },
+		"glm-flash-low": { "model": "GLM-5.3-Flash", "effort": "low" },
+		"glm-flash-plain": "GLM-5.3-Flash"
+	},
+	"efforts": { "GLM-5.3-Flash": ["low", "high", "max"] }
+}
+```
+
+`GET /v1/models` and `GET /v1/models/{id}` list the alias names next to the real models. In both client shapes an entry adds these fields when they apply:
+
+| Field            | On                             | Meaning                                                                                                     |
+| ---------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `efforts`        | a model with an `efforts` list | The supported levels, lowest to highest. An alias that pins an effort lists just that one (after snapping). |
+| `default_effort` | the same entries               | The level sent when the request names none, or `null` when the model's own default applies.                 |
+| `alias_of`       | every alias                    | The model name the alias points at.                                                                         |
+| `effort`         | an alias that pins an effort   | The pinned level, after snapping to the model's list.                                                       |
+| `thinking`       | an alias that pins `thinking`  | `true` or `false`. An alias that turns thinking off has no `efforts`.                                       |
+
 ## Authentication
 
 Listening on anything other than a loopback address (`127.x`, `::1`, `localhost`) requires an `apiKey` or an `authorize` hook: the start-up is refused otherwise, because anyone who can reach the port could spend your GPU. Pass `--allow-unauthenticated` (`allowUnauthenticated: true`) to opt out, for example behind a trusted network or an authenticating reverse proxy.
@@ -136,8 +162,8 @@ Redirects from an upstream are never followed. Unexpected errors reach the clien
 
 Claude Code treats a silent stream as a dead connection, and a local model can stay silent for a long time while it processes a long prompt or thinks. vLLM only sends response headers together with the first token, so the translator handles the silence itself:
 
-- While a streaming reply is flowing, a keep-alive is written whenever the upstream has been quiet for `pingInterval` ms (setting, default 10000, `0` disables). On the OpenAI front it is an SSE comment frame `: ping`. On the Anthropic front it is an empty delta (`text_delta`, `thinking_delta` or `input_json_delta` with no content) on the content block that is currently open, because Claude Code's idle watchdog ignores `event: ping` and aborts a stream after 300 seconds without a real event; `event: ping` is only used when no block is open.
-- If the upstream has not answered the request at all after `pingInterval` ms, the server commits to HTTP 200 with an SSE body. On the Anthropic front it immediately sends `message_start` (with the model the client asked for) and an empty thinking block, so the client sees activity at once, and the keep-alives ride on that block. When the upstream answers, the block is closed and the upstream's own blocks follow, shifted by one index (the first content block therefore has index 1). A later upstream error, such as a context overflow, is delivered in-band as `event: error` (Anthropic) or an error chunk followed by `[DONE]` (OpenAI).
+- While a streaming reply is flowing, a keep-alive is written whenever the upstream has been quiet for `pingInterval` ms (setting, default 10000, `0` disables; read from the upstream the request is routed to, so an upstream's `settings.pingInterval` overrides the global one). On the OpenAI front it is an SSE comment frame `: ping`. On the Anthropic front it is an empty delta (`text_delta`, `thinking_delta` or `input_json_delta` with no content) on the content block that is currently open, because Claude Code's idle watchdog ignores `event: ping` and aborts a stream after 300 seconds without a real event; `event: ping` is only used when no block is open.
+- If the upstream has not answered the request at all after `pingInterval` ms (the same value as above, so it also comes from the routed upstream), the server commits to HTTP 200 with an SSE body. On the Anthropic front it immediately sends `message_start` (with the model the client asked for) and an empty thinking block, so the client sees activity at once, and the keep-alives ride on that block. When the upstream answers, the block is closed and the upstream's own blocks follow, shifted by one index (the first content block therefore has index 1). A later upstream error, such as a context overflow, is delivered in-band as `event: error` (Anthropic) or an error chunk followed by `[DONE]` (OpenAI).
 - If the upstream answers within the interval, its real HTTP status is used, so retry logic and prompt-too-long handling keep working.
 
 ## Upstream timeouts

@@ -41,8 +41,8 @@ describe("package surface", () => {
 	it("declares the bin, the optional fastify peer and the node floor", () => {
 		expect(pkg.bin["llm-translator"]).toBe("./dist/bin/llm-translator.mjs");
 		expect(pkg.peerDependenciesMeta.fastify.optional).toBe(true);
-		expect(pkg.engines.node).toBe(">=24.0.0");
-		expect(pkg.devEngines.runtime).toEqual({ name: "node", version: ">=24.0.0", onFail: "error" });
+		expect(pkg.engines.node).toBe(">=22.15.0");
+		expect(pkg.devEngines.runtime).toEqual({ name: "node", version: ">=22.22.0", onFail: "error" });
 	});
 
 	it("the composed api exposes the documented leaves", async () => {

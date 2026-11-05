@@ -1,6 +1,6 @@
 {
 	"name": "@cldmv/llm-translator",
-	"version": "0.3.1",
+	"version": "0.4.0",
 	"description": "Bidirectional Anthropic Messages ⇄ OpenAI Chat Completions translator with backend auto-detection (vLLM and other OpenAI-compatible servers), built on slothlet, with an optional standalone server for running Claude Code against local models.",
 	"type": "module",
 	"license": "Apache-2.0",
@@ -25,12 +25,12 @@
 	},
 	"sideEffects": false,
 	"engines": {
-		"node": ">=24.0.0"
+		"node": ">=22.15.0"
 	},
 	"devEngines": {
 		"runtime": {
 			"name": "node",
-			"version": ">=24.0.0",
+			"version": ">=22.22.0",
 			"onFail": "error"
 		}
 	},
@@ -110,7 +110,7 @@
 		"unpdf": "^2.1.0"
 	},
 	"devDependencies": {
-		"@cldmv/configs": "^1.3.0",
+		"@cldmv/configs": "^1.4.0",
 		"@cldmv/eslint-plugin-jsonv": "^1.0.17",
 		"@cldmv/fix-headers": "^2.2.2",
 		"@cldmv/jsonv": "^1.1.5",
