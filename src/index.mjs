@@ -58,6 +58,7 @@ export async function createTranslator(config) {
 		servers: new Set(),
 		warned: new Set(),
 		textOnly: new Set(),
+		jsonInstruction: new Set(),
 		cursors: new Map(),
 		front: undefined
 	};

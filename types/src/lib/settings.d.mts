@@ -27,6 +27,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
  * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
  * @property {"schema"|"instruction"|"drop"} jsonObject - OpenAI to Anthropic: how `response_format: json_object` is sent. `schema` sends `output_config.format` with the permissive schema `{ "type": "object" }`, `instruction` appends a short system instruction asking for one JSON object, `drop` omits it and records the drop.
+ * @property {boolean} jsonObjectFallback - Retry a request once with `jsonObject: "instruction"` when an Anthropic-protocol upstream answers 400 or 422 to the schema `jsonObject: "schema"` sent. The endpoint and model are remembered until the process ends only when the retry succeeds.
  * @property {boolean} toolErrors - Prefix `is_error` tool results with `toolErrorMarker`. Off by default for every driver.
  * @property {string} toolErrorMarker - Text that marks a failed tool result when `toolErrors` is on, and the text `toolErrorInference` looks for. Must contain a non-whitespace character.
  * @property {boolean} toolErrorInference - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text.
@@ -133,6 +134,10 @@ export type Settings = {
      * - OpenAI to Anthropic: how `response_format: json_object` is sent. `schema` sends `output_config.format` with the permissive schema `{ "type": "object" }`, `instruction` appends a short system instruction asking for one JSON object, `drop` omits it and records the drop.
      */
     jsonObject: "schema" | "instruction" | "drop";
+    /**
+     * - Retry a request once with `jsonObject: "instruction"` when an Anthropic-protocol upstream answers 400 or 422 to the schema `jsonObject: "schema"` sent. The endpoint and model are remembered until the process ends only when the retry succeeds.
+     */
+    jsonObjectFallback: boolean;
     /**
      * - Prefix `is_error` tool results with `toolErrorMarker`. Off by default for every driver.
      */

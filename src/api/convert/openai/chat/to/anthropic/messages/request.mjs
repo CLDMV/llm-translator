@@ -186,9 +186,11 @@ export async function request(chatBody, settings) {
 		out.output_config = { ...out.output_config, format: { type: "json_schema", schema: format.json_schema.schema } };
 	} else if (format?.type === "json_object") {
 		// Anthropic has no JSON mode: emulate it with a permissive schema, a system instruction, or drop it as `jsonObject` says.
-		if (s.jsonObject === "schema")
+		if (s.jsonObject === "schema") {
 			out.output_config = { ...out.output_config, format: { type: "json_schema", schema: { type: "object" } } };
-		else if (s.jsonObject === "instruction")
+			// Lets `send` tell this made-up format from a client's own `json_schema`, which it never retries.
+			state.jsonSchemaEmulated = true;
+		} else if (s.jsonObject === "instruction")
 			out.system = out.system === undefined ? JSON_INSTRUCTION : `${out.system}\n\n${JSON_INSTRUCTION}`;
 		else drop(state, "response_format");
 	}
