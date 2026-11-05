@@ -40,7 +40,9 @@ import { TranslatorError } from "./errors.mjs";
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
  * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
- * @property {boolean} toolErrors - Prefix `is_error` tool results with `[error] `.
+ * @property {boolean} toolErrors - Prefix `is_error` tool results with `toolErrorMarker`. Off by default for every driver.
+ * @property {string} toolErrorMarker - Text that marks a failed tool result when `toolErrors` is on, and the text `toolErrorInference` looks for. Must contain a non-whitespace character.
+ * @property {boolean} toolErrorInference - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text.
  * @property {"max_completion_tokens"|"max_tokens"} maxTokensField - Field used for the output cap.
  * @property {boolean} streamUsage - Request `stream_options.include_usage` on streamed requests.
  * @property {boolean} continuousUsage - Also request `stream_options.continuous_usage_stats` (vLLM extension; real OpenAI may reject it).
@@ -78,6 +80,8 @@ export const DEFAULTS = Object.freeze({
 	deferredTools: "forward",
 	toolSearch: "expand",
 	toolErrors: false,
+	toolErrorMarker: "[error] ",
+	toolErrorInference: false,
 	maxTokensField: "max_completion_tokens",
 	streamUsage: true,
 	continuousUsage: false,
@@ -108,7 +112,15 @@ const ENUMS = {
 	toolStreaming: ["buffer", "stream"]
 };
 
-const BOOLEANS = ["effortPassthrough", "passthroughFilter", "imageFallback", "toolFallback", "thinkOpen", "reasoningRoundTrip"];
+const BOOLEANS = [
+	"effortPassthrough",
+	"passthroughFilter",
+	"imageFallback",
+	"toolFallback",
+	"thinkOpen",
+	"reasoningRoundTrip",
+	"toolErrorInference"
+];
 
 /**
  * Merge settings layers (later layers win, `undefined` values are skipped, `pdf` merges key by key) and validate
@@ -143,6 +155,13 @@ export function resolve(...layers) {
 				details: { key }
 			});
 		}
+	}
+	if (typeof out.toolErrorMarker !== "string" || out.toolErrorMarker.trim() === "") {
+		throw new TranslatorError(`Invalid setting toolErrorMarker: ${JSON.stringify(out.toolErrorMarker)} (expected a non-empty string)`, {
+			code: "invalid_setting",
+			status: 500,
+			details: { key: "toolErrorMarker" }
+		});
 	}
 	// unpdf 2 throws on a render scale of 0, so catch a bad value here with the setting's name.
 	if (!(Number.isFinite(out.pdf.scale) && out.pdf.scale > 0)) {

@@ -285,7 +285,10 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 					if (content === "") content = "(image output attached in the next message)";
 				}
 				if (block.is_error === true && s.toolErrors)
-					content = typeof content === "string" ? `[error] ${content}` : [{ type: "text", text: "[error]" }, ...content];
+					content =
+						typeof content === "string"
+							? `${s.toolErrorMarker}${content}`
+							: [{ type: "text", text: s.toolErrorMarker.trimEnd() }, ...content];
 				out.push({ role: "tool", tool_call_id: block.tool_use_id, content });
 			}
 			const all = [...toolParts, ...parts];
