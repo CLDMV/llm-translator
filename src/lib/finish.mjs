@@ -17,15 +17,41 @@
  * @fileoverview Stop-reason and usage mapping between the two protocols.
  */
 
+const FATAL = {
+	abort: { type: "api_error", status: 502 },
+	aborted: { type: "api_error", status: 502 },
+	error: { type: "api_error", status: 502 },
+	insufficient_system_resource: { type: "overloaded_error", status: 503 }
+};
+
+/**
+ * The error a fatal OpenAI `finish_reason` stands for. Servers use `abort`, `aborted` and `error` when generation was cut off and
+ * `insufficient_system_resource` when they ran out of resources mid-answer; none of them is a finished answer.
+ * @param {string|null|undefined} finishReason - OpenAI `finish_reason`.
+ * @returns {{ type: string, status: number, code: string, message: string }|null} Error details, or null when the reason is not fatal.
+ */
+export function finishError(finishReason) {
+	if (typeof finishReason !== "string" || !Object.hasOwn(FATAL, finishReason)) return null;
+	const { type, status } = FATAL[finishReason];
+	return {
+		type,
+		status,
+		code: "upstream_finish_" + finishReason,
+		message: `Upstream ended the response with finish_reason "${finishReason}"`
+	};
+}
+
 /**
  * Anthropic stop reason (and stop sequence) for an OpenAI choice.
+ * `model_length` is `max_tokens`; `eos`, `eos_token` and any other unknown value are `end_turn`. Fatal values are handled by {@link finishError} before this.
  * @param {string|null|undefined} finishReason - OpenAI `finish_reason`.
  * @param {{ hasToolCalls: boolean, matchedStop?: unknown, argumentsComplete?: boolean }} info - Whether tool calls were produced, vLLM's `stop_reason` (a string for a matched stop string), and whether the last tool call's arguments are complete. A `length` stop with incomplete arguments is `max_tokens`, not `tool_use`.
  * @returns {{ stop_reason: string, stop_sequence: string|null }} Anthropic stop fields.
  */
 export function toAnthropicStop(finishReason, { hasToolCalls, matchedStop, argumentsComplete = true }) {
-	if (hasToolCalls && (finishReason !== "length" || argumentsComplete)) return { stop_reason: "tool_use", stop_sequence: null };
-	if (finishReason === "length") return { stop_reason: "max_tokens", stop_sequence: null };
+	if (hasToolCalls && ((finishReason !== "length" && finishReason !== "model_length") || argumentsComplete))
+		return { stop_reason: "tool_use", stop_sequence: null };
+	if (finishReason === "length" || finishReason === "model_length") return { stop_reason: "max_tokens", stop_sequence: null };
 	if (finishReason === "content_filter") return { stop_reason: "refusal", stop_sequence: null };
 	if (typeof matchedStop === "string" && matchedStop !== "") return { stop_reason: "stop_sequence", stop_sequence: matchedStop };
 	return { stop_reason: "end_turn", stop_sequence: null };

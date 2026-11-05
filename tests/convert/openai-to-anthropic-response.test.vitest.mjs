@@ -42,6 +42,30 @@ describe("openai chat completion to anthropic message", () => {
 		});
 	});
 
+	test.each([
+		["model_length", "max_tokens"],
+		["eos", "end_turn"],
+		["eos_token", "end_turn"]
+	])("finish_reason %s maps to %s", (reason, expected) => {
+		expect(response(completion({ content: "x" }, {}, { finish_reason: reason })).stop_reason).toBe(expected);
+	});
+
+	test("model_length with incomplete tool arguments is max_tokens", () => {
+		const call = { id: "c1", type: "function", function: { name: "f", arguments: '{"a":' } };
+		expect(response(completion({ content: "", tool_calls: [call] }, {}, { finish_reason: "model_length" })).stop_reason).toBe("max_tokens");
+	});
+
+	test.each([
+		["abort", "api_error", 502],
+		["aborted", "api_error", 502],
+		["error", "api_error", 502],
+		["insufficient_system_resource", "overloaded_error", 503]
+	])("fatal finish_reason %s throws a %s TranslatorError", (reason, type, status) => {
+		expect(() => response(completion({ content: "x" }, {}, { finish_reason: reason }))).toThrow(
+			expect.objectContaining({ name: "TranslatorError", type, status, code: `upstream_finish_${reason}` })
+		);
+	});
+
 	test("the client's model name is echoed when the state has it", () => {
 		expect(response(completion({ content: "x" }), { model: "claude-opus-5-5" }).model).toBe("claude-opus-5-5");
 	});
