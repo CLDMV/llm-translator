@@ -45,14 +45,19 @@ export function finishError(finishReason) {
  * Anthropic stop reason (and stop sequence) for an OpenAI choice.
  * `model_length` is `max_tokens`; `eos`, `eos_token` and any other unknown value are `end_turn`. Fatal values are handled by {@link finishError} before this.
  * @param {string|null|undefined} finishReason - OpenAI `finish_reason`.
- * @param {{ hasToolCalls: boolean, matchedStop?: unknown, argumentsComplete?: boolean }} info - Whether tool calls were produced, vLLM's `stop_reason` (a string for a matched stop string), and whether the last tool call's arguments are complete. A `length` stop with incomplete arguments is `max_tokens`, not `tool_use`.
- * @returns {{ stop_reason: string, stop_sequence: string|null }} Anthropic stop fields.
+ * A `content_filter` stop also carries `stop_details` (`{ type: "refusal", category: null, explanation }`), the explanation being the upstream's refusal text when it sent one. No other stop reason has the field.
+ * @param {{ hasToolCalls: boolean, matchedStop?: unknown, argumentsComplete?: boolean, refusal?: unknown }} info - Whether tool calls were produced, vLLM's `stop_reason` (a string for a matched stop string), whether the last tool call's arguments are complete, and the upstream's refusal text. A `length` stop with incomplete arguments is `max_tokens`, not `tool_use`.
+ * @returns {{ stop_reason: string, stop_sequence: string|null, stop_details?: { type: string, category: string|null, explanation: string|null } }} Anthropic stop fields.
  */
-export function toAnthropicStop(finishReason, { hasToolCalls, matchedStop, argumentsComplete = true }) {
+export function toAnthropicStop(finishReason, { hasToolCalls, matchedStop, argumentsComplete = true, refusal }) {
 	if (hasToolCalls && ((finishReason !== "length" && finishReason !== "model_length") || argumentsComplete))
 		return { stop_reason: "tool_use", stop_sequence: null };
 	if (finishReason === "length" || finishReason === "model_length") return { stop_reason: "max_tokens", stop_sequence: null };
-	if (finishReason === "content_filter") return { stop_reason: "refusal", stop_sequence: null };
+	if (finishReason === "content_filter") {
+		// The refusal text is the explanation; the upstream gives no category, so it stays null.
+		const explanation = typeof refusal === "string" && refusal !== "" ? refusal : null;
+		return { stop_reason: "refusal", stop_sequence: null, stop_details: { type: "refusal", category: null, explanation } };
+	}
 	if (typeof matchedStop === "string" && matchedStop !== "") return { stop_reason: "stop_sequence", stop_sequence: matchedStop };
 	return { stop_reason: "end_turn", stop_sequence: null };
 }

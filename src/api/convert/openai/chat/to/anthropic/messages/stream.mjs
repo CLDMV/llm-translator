@@ -56,6 +56,8 @@ export async function* stream(source, state, settings) {
 	let usage = null;
 	let finish = null;
 	let matchedStop = null;
+	let refusal = "";
+	let sawText = false;
 	let done = false;
 	let lastTool = 0;
 	// The server sends reasoning in its own field, so content is never split (as in the non-streaming conversion).
@@ -135,6 +137,7 @@ export async function* stream(source, state, settings) {
 		if (kind === "text" && trimNext) text = text.trimStart();
 		if (text === "") return;
 		trimNext = kind === "thinking";
+		if (kind === "text") sawText = true;
 		if (open?.kind === "tool") {
 			held.push({ kind, text, key });
 			return;
@@ -248,6 +251,7 @@ export async function* stream(source, state, settings) {
 				if (splitter && !ownReasoning) yield* pieces(splitter.push(delta.content));
 				else yield* piece("text", delta.content);
 			}
+			if (typeof delta.refusal === "string") refusal += delta.refusal;
 			for (const call of delta.tool_calls ?? []) yield* toolCall(call);
 			if (choice.finish_reason) finish = choice.finish_reason;
 			if (typeof choice.stop_reason === "string") matchedStop = choice.stop_reason;
@@ -273,12 +277,14 @@ export async function* stream(source, state, settings) {
 	const argumentsComplete = last === undefined || isComplete(last.args.join(""));
 	yield* close();
 	for (const item of held) yield* item.kind === "details" ? details(item.items) : piece(item.kind, item.text, item.key);
+	// A refusal with no answer text becomes the answer, as in the non-streaming conversion.
+	if (!sawText && refusal !== "") yield* piece("text", refusal);
 	yield* close();
 	if (nextIndex === 0) {
 		yield* begin("text", { type: "text", text: "" });
 		yield* close();
 	}
-	const stop = toAnthropicStop(finish, { hasToolCalls: tools.size > 0, matchedStop, argumentsComplete });
+	const stop = toAnthropicStop(finish, { hasToolCalls: tools.size > 0, matchedStop, argumentsComplete, refusal });
 	yield event("message_delta", { delta: stop, usage: toAnthropicUsage(usage) });
 	yield event("message_stop", {});
 }
