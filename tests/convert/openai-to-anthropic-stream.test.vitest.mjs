@@ -116,6 +116,31 @@ describe("text streaming", () => {
 		expect((await run([chunk({ content: "x" }, { stop_reason: 151645 }, "stop")])).at(-2).data.delta.stop_reason).toBe("end_turn");
 	});
 
+	test.each([
+		["model_length", "max_tokens"],
+		["eos", "end_turn"],
+		["eos_token", "end_turn"]
+	])("finish_reason %s ends the message with %s", async (reason, expected) => {
+		const events = await run([chunk({ content: "x" }, {}, reason)]);
+		expect(events.at(-2).data.delta.stop_reason).toBe(expected);
+		expect(events.at(-1).event).toBe("message_stop");
+	});
+
+	test.each([
+		["abort", "api_error"],
+		["aborted", "api_error"],
+		["error", "api_error"],
+		["insufficient_system_resource", "overloaded_error"]
+	])("fatal finish_reason %s becomes an error event", async (reason, type) => {
+		const events = await run([chunk({ content: "x" }, {}, reason)]);
+		expect(events.at(-1)).toEqual({
+			event: "error",
+			data: { type: "error", error: { type, message: `Upstream ended the response with finish_reason "${reason}"` } }
+		});
+		expect(types(events)).not.toContain("message_stop");
+		expect(types(events)).not.toContain("message_delta");
+	});
+
 	test("empty deltas, missing delta and choice-less chunks are skipped", async () => {
 		const events = await run([
 			chunk({ content: "" }),

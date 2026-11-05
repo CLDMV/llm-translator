@@ -22,7 +22,7 @@ import { TranslatorError, openaiToAnthropicType, rewriteContextOverflow } from "
 import { isComplete } from "../../../../../../../lib/arguments.mjs";
 import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
 import { sign, reasoningOf, reasoningKey, detailsText, mergeDetail, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
-import { toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
+import { finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
 
 /**
@@ -260,6 +260,11 @@ export async function* stream(source, state, settings) {
 	if (!started || (finish === null && !done)) {
 		const reason = started ? "Upstream stream ended before completion" : "Upstream stream ended without data";
 		yield fail("api_error", reason);
+		return;
+	}
+	const fatal = finishError(finish);
+	if (fatal) {
+		yield fail(fatal.type, fatal.message);
 		return;
 	}
 	if (splitter) yield* pieces(splitter.end());
