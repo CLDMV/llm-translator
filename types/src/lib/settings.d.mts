@@ -26,6 +26,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
  * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
+ * @property {"schema"|"instruction"|"drop"} jsonObject - OpenAI to Anthropic: how `response_format: json_object` is sent. `schema` sends `output_config.format` with the permissive schema `{ "type": "object" }`, `instruction` appends a short system instruction asking for one JSON object, `drop` omits it and records the drop.
  * @property {boolean} toolErrors - Prefix `is_error` tool results with `toolErrorMarker`. Off by default for every driver.
  * @property {string} toolErrorMarker - Text that marks a failed tool result when `toolErrors` is on, and the text `toolErrorInference` looks for. Must contain a non-whitespace character.
  * @property {boolean} toolErrorInference - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text.
@@ -128,6 +129,10 @@ export type Settings = {
      * - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
      */
     toolSearch: "expand" | "inline" | "native";
+    /**
+     * - OpenAI to Anthropic: how `response_format: json_object` is sent. `schema` sends `output_config.format` with the permissive schema `{ "type": "object" }`, `instruction` appends a short system instruction asking for one JSON object, `drop` omits it and records the drop.
+     */
+    jsonObject: "schema" | "instruction" | "drop";
     /**
      * - Prefix `is_error` tool results with `toolErrorMarker`. Off by default for every driver.
      */

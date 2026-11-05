@@ -184,10 +184,20 @@ export async function request(chatBody, settings) {
 	const format = chatBody.response_format;
 	if (format?.type === "json_schema") {
 		out.output_config = { ...out.output_config, format: { type: "json_schema", schema: format.json_schema.schema } };
-	} else if (format?.type === "json_object") drop(state, "response_format");
+	} else if (format?.type === "json_object") {
+		// Anthropic has no JSON mode: emulate it with a permissive schema, a system instruction, or drop it as `jsonObject` says.
+		if (s.jsonObject === "schema")
+			out.output_config = { ...out.output_config, format: { type: "json_schema", schema: { type: "object" } } };
+		else if (s.jsonObject === "instruction")
+			out.system = out.system === undefined ? JSON_INSTRUCTION : `${out.system}\n\n${JSON_INSTRUCTION}`;
+		else drop(state, "response_format");
+	}
 
 	return { body: out, state };
 }
+
+/** System instruction that stands in for `response_format: json_object` when `jsonObject` is `"instruction"`. */
+const JSON_INSTRUCTION = "Respond with a single valid JSON object and nothing else.";
 
 /**
  * Record a dropped field once.
