@@ -23,7 +23,18 @@ describe("finish mapping", () => {
 		expect(toAnthropicStop("tool_calls", { hasToolCalls: true })).toEqual({ stop_reason: "tool_use", stop_sequence: null });
 		expect(toAnthropicStop("tool_calls", { hasToolCalls: false })).toEqual({ stop_reason: "end_turn", stop_sequence: null });
 		expect(toAnthropicStop("length", { hasToolCalls: false })).toEqual({ stop_reason: "max_tokens", stop_sequence: null });
-		expect(toAnthropicStop("content_filter", { hasToolCalls: false })).toEqual({ stop_reason: "refusal", stop_sequence: null });
+		expect(toAnthropicStop("content_filter", { hasToolCalls: false })).toEqual({
+			stop_reason: "refusal",
+			stop_sequence: null,
+			stop_details: { type: "refusal", category: null, explanation: null }
+		});
+		expect(toAnthropicStop("content_filter", { hasToolCalls: false, refusal: "No." }).stop_details).toEqual({
+			type: "refusal",
+			category: null,
+			explanation: "No."
+		});
+		expect(toAnthropicStop("content_filter", { hasToolCalls: false, refusal: "" }).stop_details.explanation).toBeNull();
+		expect(toAnthropicStop("stop", { hasToolCalls: false, refusal: "No." })).not.toHaveProperty("stop_details");
 		expect(toAnthropicStop("stop", { hasToolCalls: false, matchedStop: "END" })).toEqual({
 			stop_reason: "stop_sequence",
 			stop_sequence: "END"

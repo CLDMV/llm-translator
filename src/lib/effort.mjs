@@ -151,7 +151,7 @@ export function pinBody(body, pin, front) {
  * @param {any} body - Upstream body (mutated).
  * @param {EffortConfig} entry - Model's effort config.
  * @param {string} model - Model name, for the message.
- * @param {(message: string) => void} warn - Warning sink.
+ * @param {(message: string, details: {requested: string, used: string, levels: string[]}) => void} warn - Receives the message and the snapped levels.
  */
 export function fit(body, entry, model, warn) {
 	if (body.reasoning_effort === "none" || body.chat_template_kwargs?.enable_thinking === false) return;
@@ -163,6 +163,10 @@ export function fit(body, entry, model, warn) {
 	}
 	if (entry.levels.includes(wanted) || !LEVELS.includes(wanted)) return;
 	const level = nearest(entry.levels, wanted);
-	warn(`Effort "${wanted}" is not supported by ${model} (${entry.levels.join(", ")}); using "${level}".`);
+	warn(`Effort "${wanted}" is not supported by ${model} (${entry.levels.join(", ")}); using "${level}".`, {
+		requested: wanted,
+		used: level,
+		levels: [...entry.levels]
+	});
 	body.reasoning_effort = level;
 }

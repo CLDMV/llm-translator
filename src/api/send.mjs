@@ -27,6 +27,7 @@ import { meter as createMeter, normalize } from "../lib/usage.mjs";
 import { capture } from "../lib/capture.mjs";
 import { estimate, bodyLength, output, patch, stream as estimating } from "../lib/estimate.mjs";
 import { warn } from "../lib/warn.mjs";
+import { emit } from "../lib/events.mjs";
 import * as pool from "../lib/pool.mjs";
 import { createBudget } from "../lib/thinking.mjs";
 
@@ -52,11 +53,11 @@ const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache
  * On the Anthropic front a stream carries them in the final `message_delta`, because `message_start` is sent before the output is known.
  * Replies passed through without conversion are never altered.
  * @param {any} body - Client request body (per `front`).
- * @param {any} [options] - `{ signal, front, headers, clientHeaders, filter, onUsage }`: abort signal for the upstream call, per-call front, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a warning and never breaks the reply).
+ * @param {any} [options] - `{ signal, front, headers, clientHeaders, filter, onUsage, log }`: abort signal for the upstream call, per-call front, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply) and the logger this request's events also go to (used by the server).
  * @returns {Promise<{status: number, headers: Record<string,string>, body: any, usage: Promise<any>} | {status: number, headers: Record<string,string>, stream: AsyncIterable<{event?: string, data: *}>, usage: Promise<any>}>} A JSON reply, or a stream reply when the client asked for streaming and the upstream accepted.
  */
 export async function send(body, options = {}) {
-	const { transport, textOnly } = context.state;
+	const { transport, textOnly, jsonInstruction } = context.state;
 	const { request, response, stream, error } = self;
 	const build = error.build;
 	const { config, state } = context;
@@ -69,12 +70,17 @@ export async function send(body, options = {}) {
 		front: options.front ?? config.front,
 		stream: object && body.stream === true
 	};
-	const meter = createMeter(meta, options.onUsage, (message) => warn(config, state, message));
+	const meter = createMeter(meta, options.onUsage, (message, details) =>
+		warn(config, state, message, { type: "usage", ...details, log: options.log })
+	);
 	const attach = (reply) => Object.defineProperty(reply, "usage", { value: meter.usage, enumerable: false, configurable: true });
 	try {
-		return attach(await round({ transport, textOnly, request, response, stream, error, captured }, body, options, meter));
+		return attach(await round({ transport, textOnly, jsonInstruction, request, response, stream, error, captured }, body, options, meter));
 	} catch (cause) {
 		if (!(cause instanceof TranslatorError)) {
+			if (!options.signal?.aborted) {
+				emit(captured, { type: "error", kind: "exception", level: "error", message: String(cause?.message ?? cause), log: options.log });
+			}
 			meter.finish(options.signal?.aborted ? "aborted" : "error");
 			throw cause;
 		}
@@ -85,20 +91,29 @@ export async function send(body, options = {}) {
 
 /**
  * The round trip itself; throws `TranslatorError` for conversion and connection failures.
- * @param {any} api - Captured `{ transport, textOnly, request, response, stream, error, captured }` (`captured` is the `lib/capture` result).
+ * @param {any} api - Captured `{ transport, textOnly, jsonInstruction, request, response, stream, error, captured }` (`captured` is the `lib/capture` result).
  * @param {any} body - Client request body.
  * @param {any} options - `{ signal, front, headers, clientHeaders, filter }`.
  * @param {any} meter - Usage meter (see `lib/usage`); settled here for every outcome except a live stream.
  * @returns {Promise<any>} Client-protocol reply.
  */
-async function round({ transport, textOnly, request, response, stream, error, captured }, body, options, meter) {
+async function round({ transport, textOnly, jsonInstruction, request, response, stream, error, captured }, body, options, meter) {
 	const ask = {
 		front: options.front,
 		headers: options.headers,
 		clientHeaders: options.clientHeaders,
 		filter: options.filter,
 		usage: true,
-		budget: createBudget()
+		budget: createBudget(),
+		log: options.log
+	};
+	/**
+	 * Emit an event of this request.
+	 * @param {any} spec - Event spec (see `lib/events`).
+	 * @returns {void}
+	 */
+	const announce = (spec) => {
+		emit(captured, { ...spec, log: options.log });
 	};
 	// An OpenAI-front client sees the final usage chunk only when it asked for one; the meter always gets it.
 	const hide = meter.meta.front === "openai" && body?.stream_options?.include_usage !== true;
@@ -179,27 +194,73 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 		return error(status, failure, headers, state);
 	};
 	/**
-	 * One endpoint's turn: the call, and the single retry without images or tools when that endpoint refuses them.
+	 * One endpoint's turn: the call, and the single retry without images or tools, or with the JSON instruction, when that endpoint refuses them.
 	 * @param {any} first - Result of `request` for the endpoint.
 	 * @returns {Promise<{upstream: any, result: Response, failure?: any}>} The last request sent, its response and, when the body was read, the parsed failure.
 	 */
 	const attempt = async (first) => {
 		let sent = first;
 		let result = await call(transport, sent, options.signal, limitsNow());
-		if (!result.ok && result.status === 400 && ((sent.images.sent && sent.images.retry) || (sent.tools.sent && sent.tools.retry))) {
+		const status = result.status;
+		const others = status === 400 && [sent.images, sent.tools].some((part) => part.sent && part.retry);
+		// The schema that stands in for `json_object` is retried on a 400 or 422 whatever the message says: servers word it differently.
+		const schema = (status === 400 || status === 422) && sent.json.sent && sent.json.retry;
+		if (!result.ok && (others || schema)) {
 			// A text-only model, or a vLLM server without tool parsing, behind an OpenAI-protocol upstream: ask once more without what it
 			// refused. A refused image is remembered for the model; a refused tool list is not (the server may be restarted with the flags).
 			const failure = await parse(result);
-			const message = parseError(failure, 400).message;
+			const message = parseError(failure, status).message;
 			const retry = {};
-			if (sent.images.sent && sent.images.retry && images.refused(message)) {
+			if (status === 400 && sent.images.sent && sent.images.retry && images.refused(message)) {
 				textOnly.add(sent.images.key);
 				retry.images = false;
-			} else if (sent.tools.sent && sent.tools.retry && tools.refused(message)) retry.tools = false;
-			if (!("images" in retry || "tools" in retry)) return { upstream: sent, result, failure };
-			sent = await request(body, { ...ask, ...retry, endpoint: sent.upstream });
+			} else if (status === 400 && sent.tools.sent && sent.tools.retry && tools.refused(message)) retry.tools = false;
+			else if (schema) retry.jsonObject = "instruction";
+			if (!("images" in retry || "tools" in retry || "jsonObject" in retry)) return { upstream: sent, result, failure };
+			const original = { upstream: sent, result, failure };
+			if ("images" in retry || "tools" in retry) {
+				// The image and tool retries are announced when they are made; the JSON one only once it is known to have worked (below).
+				const part = "images" in retry ? "images" : "tools";
+				announce({
+					type: "fallback",
+					kind: part,
+					level: "warn",
+					message: `Upstream ${sent.upstream}: ${sent.state.model} refused ${part === "images" ? "images" : "tools"} (${status}: "${String(message).trim().slice(0, 500)}"); sent the request again without them.`,
+					endpoint: sent.upstream,
+					model: sent.body.model,
+					status,
+					reason: String(message).trim().slice(0, 500),
+					action: part === "images" ? "text-only" : "without-tools"
+				});
+			}
+			sent = await request(body, { ...ask, ...retry, endpoint: sent.upstream, retry: true });
 			note(sent);
 			result = await call(transport, sent, options.signal, limitsNow());
+			if (schema && "jsonObject" in retry) {
+				if (!result.ok) {
+					// The instruction fared no better, so the schema was not the problem: the caller gets the original error and nothing is remembered.
+					try {
+						await result.body?.cancel?.();
+					} catch {
+						// A body that cannot be cancelled is dropped.
+					}
+					note(original.upstream);
+					return original;
+				}
+				// The retry worked, which is what shows the schema was refused: remember it, and log the upstream's own words.
+				jsonInstruction.add(original.upstream.json.key);
+				announce({
+					type: "fallback",
+					kind: "json_object",
+					level: "warn",
+					message: `Upstream ${original.upstream.upstream}: ${original.upstream.state.model} rejected the json_object schema emulation (${status}: "${String(message).trim().slice(0, 500)}"); sent it as a system instruction instead. Set jsonObject: "instruction" on this upstream to skip the first attempt.`,
+					endpoint: original.upstream.upstream,
+					model: original.upstream.body.model,
+					status,
+					reason: String(message).trim().slice(0, 500),
+					action: "instruction"
+				});
+			}
 		}
 		return { upstream: sent, result };
 	};
@@ -227,12 +288,31 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 			let reason = null;
 			try {
 				({ upstream, result, failure } = await attempt(upstream));
-				if (!result.ok && result.status >= 500) reason = `HTTP ${result.status}`;
+				if (!result.ok && result.status >= 500) {
+					reason = `HTTP ${result.status}`;
+					announce({
+						type: "error",
+						kind: "upstream",
+						level: "error",
+						message: `Upstream ${endpoint.name} answered HTTP ${result.status}`,
+						endpoint: endpoint.name,
+						model: upstream.body.model,
+						status: result.status
+					});
+				}
 			} catch (cause) {
 				if (!(cause instanceof TranslatorError) || cause.code !== "upstream_unreachable") throw cause;
 				reason = cause.message;
 				result = undefined;
 				failure = cause;
+				announce({
+					type: "error",
+					kind: "transport",
+					level: "error",
+					message: cause.message,
+					endpoint: endpoint.name,
+					model: upstream.body.model
+				});
 			}
 			if (reason === null) {
 				pool.succeeded(endpoint);
@@ -253,6 +333,15 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 				if (result === undefined) throw failure;
 				break;
 			}
+			announce({
+				type: "failover",
+				level: "warn",
+				message: `Upstream ${endpoint.name} failed (${reason}); trying ${next.upstream}`,
+				from: endpoint.name,
+				to: next.upstream,
+				model: next.body.model,
+				reason
+			});
 			try {
 				await result?.body?.cancel?.();
 			} catch {
@@ -285,6 +374,15 @@ async function round({ transport, textOnly, request, response, stream, error, ca
 	}
 	const parsed = await parse(result);
 	if (parsed === null || typeof parsed !== "object") {
+		announce({
+			type: "error",
+			kind: "upstream",
+			level: "error",
+			message: `Upstream ${upstream.upstream} returned a body that is not JSON`,
+			endpoint: upstream.upstream,
+			model: upstream.body.model,
+			status: 502
+		});
 		return fail(502, "The upstream returned a body that is not JSON", headers, upstream.state, "error");
 	}
 	const client = await response(parsed, upstream.state);

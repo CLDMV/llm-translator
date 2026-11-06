@@ -171,7 +171,7 @@ describe("detection", () => {
 			const transport = fakeTransport(() => {
 				throw new Error("connection refused");
 			});
-			const api = await make({ upstreams: ["http://down.test"], transport, silent: false });
+			const api = await make({ upstreams: ["http://down.test"], transport, logs: true });
 			expect(api.status().upstreams[0]).toMatchObject({ driver: "compatible", facts: { reachable: false } });
 			expect(warn).toHaveBeenCalledTimes(1);
 			expect(warn.mock.calls[0][0]).toMatch(/did not answer detection/);
@@ -182,7 +182,7 @@ describe("detection", () => {
 		}
 	});
 
-	it("stays quiet when silent", async () => {
+	it("stays quiet by default", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			await make({ upstreams: ["http://down.test"], transport: fakeTransport(() => ({ status: 500 })) });
@@ -262,7 +262,7 @@ describe("PDF library warnings", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			const { createTranslator: create } = await import("../../src/index.mjs");
-			const api = await create({ upstreams: ["http://a.test"], detect: false, slothlet: { import: (url) => import(url) } });
+			const api = await create({ upstreams: ["http://a.test"], detect: false, logs: true, slothlet: { import: (url) => import(url) } });
 			const messages = warn.mock.calls.map((call) => call[0]);
 			expect(messages.some((message) => /@napi-rs\/canvas could not be loaded \(no canvas\)/.test(message))).toBe(true);
 			expect(messages.some((message) => /unpdf could not be loaded \(no unpdf\)/.test(message))).toBe(true);

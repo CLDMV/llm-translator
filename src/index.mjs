@@ -27,6 +27,7 @@ import slothlet from "@cldmv/slothlet";
 import { normalize } from "./lib/config.mjs";
 import { load } from "./lib/pdf.mjs";
 import { transport } from "./lib/transport.mjs";
+import { create, open } from "./lib/events.mjs";
 import { warn } from "./lib/warn.mjs";
 
 /**
@@ -40,7 +41,10 @@ import { warn } from "./lib/warn.mjs";
  * @property {boolean} [detect] Probe `auto` upstreams at startup (default true).
  * @property {number} [detectTimeout] Probe timeout in ms (default 5000).
  * @property {(url: string, init?: any) => Promise<Response>} [transport] fetch-compatible function used for all upstream calls.
- * @property {boolean} [silent] Suppress warnings.
+ * @property {boolean | string} [logs] Logging (default `false`: no console output, no file). `true` prints warnings and errors on the console, once per message; a path appends every event as a JSON line to that file (relative paths resolve against `process.cwd()`, a missing directory is created, a file that cannot be opened is reported once on the console and logging stays off).
+ * @property {boolean} [events] Emit events (default `true`); `false` turns emitting off. Logging does not depend on it.
+ * @property {(event: import("./lib/events.mjs").TranslatorEvent) => any} [onEvent] Callback for every event, registered before startup so it also sees startup events (see docs/events.md).
+ * @property {boolean} [silent] Deprecated alias for `logs: false` (the default); `logs` wins when both are given.
  * @property {{import?: (url: string) => Promise<any>}} [slothlet] Options forwarded to slothlet (for example `import` for coverage).
  */
 
@@ -48,7 +52,7 @@ import { warn } from "./lib/warn.mjs";
  * Create a translator: a slothlet api instance (see the README for the leaves) bound to the given upstreams.
  * Endpoints with `backend: "auto"` are probed once before this resolves (set `detect: false` to skip all network access).
  * @param {TranslatorConfig} config - Translator config.
- * @returns {Promise<any>} The translator api (`request`, `response`, `stream`, `send`, `detect`, `status`, `token`, `model`, `error`, `sse`, `server`, `driver`, `convert`, `slothlet`).
+ * @returns {Promise<any>} The translator api (`request`, `response`, `stream`, `send`, `detect`, `status`, `token`, `model`, `error`, `events`, `sse`, `server`, `driver`, `convert`, `slothlet`).
  */
 export async function createTranslator(config) {
 	const normalized = normalize(config);
@@ -57,20 +61,28 @@ export async function createTranslator(config) {
 		transport: normalized.transport ?? transport,
 		servers: new Set(),
 		warned: new Set(),
+		events: create(normalized.onEvent),
 		textOnly: new Set(),
+		jsonInstruction: new Set(),
 		cursors: new Map(),
 		front: undefined
 	};
+	open(state.events, normalized.logs);
 	const pdf = await load();
 	if (pdf.errors.canvas) {
 		warn(
 			normalized,
 			state,
-			`@napi-rs/canvas could not be loaded (${pdf.errors.canvas}); PDFs will be read as text only, without page images`
+			`@napi-rs/canvas could not be loaded (${pdf.errors.canvas}); PDFs will be read as text only, without page images`,
+			{ type: "detect", kind: "canvas", reason: String(pdf.errors.canvas) }
 		);
 	}
 	if (pdf.errors.unpdf) {
-		warn(normalized, state, `unpdf could not be loaded (${pdf.errors.unpdf}); PDF documents cannot be read and fall back to a note`);
+		warn(normalized, state, `unpdf could not be loaded (${pdf.errors.unpdf}); PDF documents cannot be read and fall back to a note`, {
+			type: "detect",
+			kind: "unpdf",
+			reason: String(pdf.errors.unpdf)
+		});
 	}
 	/** @type {any} */
 	const api = await slothlet({

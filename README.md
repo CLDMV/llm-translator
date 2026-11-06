@@ -17,18 +17,18 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.4.0 (November 2026)
+### Latest: v0.5.0 (November 2026)
 
-- **Per-model effort levels and pinned aliases** — an `efforts` config lists the reasoning efforts each model honours, unsupported levels snap to the nearest listed one, and an alias can pin `effort` and `thinking`, so one local model can serve Claude Code's tiers at different depths. `/v1/models` lists the aliases and levels.
-- **Also:** non-standard finish reasons map to `max_tokens`, `end_turn` or an error; a configurable tool-error marker with opt-in `is_error` inference; `pingInterval` per upstream; and the Node.js floor drops to 22.15.
-- [View full v0.4.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.4.0.md)
+- **Events and opt-in logging** — everything the library logs is now an event: `translator.events.on(name, fn)`, `"*"` and an `onEvent` config callback, with general `log`/`warning`/`error` events alongside specific ones such as `fallback` and `usage`. Logging is off by default as a library; `logs: true` prints to the console and `logs: "<path>"` writes JSON lines.
+- **Also:** `response_format: json_object` reaches Anthropic upstreams as a schema, falling back to a system instruction when an upstream refuses it; refusals carry `stop_details`.
+- [View full v0.5.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.5.0.md)
 
 ### Recent Releases
 
+- **v0.4.0** (November 2026) — per-model effort levels and aliases that pin effort and thinking, non-standard finish reasons, a configurable tool-error marker, per-upstream `pingInterval` and a Node.js 22.15 floor ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.4.0.md))
 - **v0.3.1** (November 2026) — patched the dev-only `minimatch` and `katex` lint dependencies and corrected the v0.3.0 issue links; no runtime changes ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.1.md))
 - **v0.3.0** (November 2026) — usage reporting from `send()`, the `route()` leaf and the server `authorize` hook; drivers for llama.cpp, Ollama, SGLang and the DeepSeek API, endpoint pools, `reasoningRoundTrip` and `toolSearch`; requires Node.js 24 ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.0.md))
 - **v0.2.0** (October 2026) — the first working translator: six Anthropic Messages and OpenAI Chat Completions converters, backend detection (vLLM, OpenAI, Anthropic, generic), model aliases, the optional Fastify server and the `llm-translator` CLI for Claude Code ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.2.0.md))
-- **v0.1.0** (October 2026) — package scaffold: ESM and CommonJS entry points, tsup build, the `llm-translator-dev` condition with devcheck, tests on `@cldmv/vitest-runner` and the CLDMV v4 CI/release pipeline; the only export was a placeholder ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.1.0.md))
 
 📚 **For complete version history and detailed release notes, see the [docs/changelog/](https://github.com/CLDMV/llm-translator/tree/master/docs/changelog/) folder.**
 
@@ -105,6 +105,9 @@ if (reply.stream) for await (const { event, data } of reply.stream) console.log(
 // Where would a request go, and what did it cost? (see docs/server.md)
 const { upstream, model } = api.route({ model: "claude-opus-5-5" }); // no I/O
 const { input_tokens, output_tokens, reported, estimated } = await reply.usage; // or send(body, { onUsage }); `estimated` holds the guesses written into the client reply when the upstream sent no usage
+
+// Fallbacks, failovers and warnings are events (see docs/events.md); logging is off unless you set `logs`.
+const stop = api.events.on("fallback", ({ endpoint, status, reason }) => console.log(endpoint, status, reason));
 ```
 
 ### Server and Claude Code
@@ -124,7 +127,7 @@ Then point Claude Code at it with `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`. Th
 
 ## 📚 Configuration
 
-`createTranslator(config)` takes `front`, `upstreams` (URLs or objects with `url`, `apiKey`, `backend`, `models`, `default` and `settings`), `aliases` (a model name, or `{ model, effort, thinking }` to pin settings), `efforts` (the reasoning levels each model supports, see [docs/settings.md](https://github.com/CLDMV/llm-translator/blob/master/docs/settings.md#effort-levels-and-pinned-aliases-not-converter-settings)), global `settings`, `pool` (failover and load balancing between upstreams that serve the same model, see [docs/server.md](https://github.com/CLDMV/llm-translator/blob/master/docs/server.md#endpoint-pools-failover-and-load-balancing)), `detect` and a custom `transport`. The CLI reads the same keys from flags, `LLM_TRANSLATOR_*` environment variables and a JSON file, in that order of precedence.
+`createTranslator(config)` takes `front`, `upstreams` (URLs or objects with `url`, `apiKey`, `backend`, `models`, `default` and `settings`), `aliases` (a model name, or `{ model, effort, thinking }` to pin settings), `efforts` (the reasoning levels each model supports, see [docs/settings.md](https://github.com/CLDMV/llm-translator/blob/master/docs/settings.md#effort-levels-and-pinned-aliases-not-converter-settings)), global `settings`, `pool` (failover and load balancing between upstreams that serve the same model, see [docs/server.md](https://github.com/CLDMV/llm-translator/blob/master/docs/server.md#endpoint-pools-failover-and-load-balancing)), `detect`, `logs` (off by default; `true` prints warnings, a path appends JSON lines), `events` and `onEvent` (see [docs/events.md](https://github.com/CLDMV/llm-translator/blob/master/docs/events.md)) and a custom `transport`. `silent: true` is a deprecated alias for `logs: false`. The CLI reads the same keys from flags, `LLM_TRANSLATOR_*` environment variables and a JSON file, in that order of precedence.
 
 Settings tune how the converters map one protocol onto the other (`inlineSystem`, `images`, `imageFallback`, `toolStreaming`, `pingInterval` and more); they are resolved per upstream from defaults, probed values, driver defaults and your overrides. The full table is in [docs/settings.md](https://github.com/CLDMV/llm-translator/blob/master/docs/settings.md).
 
@@ -137,6 +140,7 @@ Settings tune how the converters map one protocol onto the other (`inlineSystem`
 - [Server and CLI](https://github.com/CLDMV/llm-translator/blob/master/docs/server.md)
 - [Settings](https://github.com/CLDMV/llm-translator/blob/master/docs/settings.md)
 - [Protocol support](https://github.com/CLDMV/llm-translator/blob/master/docs/protocol-support.md)
+- [Events and logging](https://github.com/CLDMV/llm-translator/blob/master/docs/events.md)
 - [Drivers, detection and routing](https://github.com/CLDMV/llm-translator/blob/master/docs/drivers.md)
 
 ### Guides

@@ -48,9 +48,13 @@ export function pinBody(body: any, pin: {
  * @param {any} body - Upstream body (mutated).
  * @param {EffortConfig} entry - Model's effort config.
  * @param {string} model - Model name, for the message.
- * @param {(message: string) => void} warn - Warning sink.
+ * @param {(message: string, details: {requested: string, used: string, levels: string[]}) => void} warn - Receives the message and the snapped levels.
  */
-export function fit(body: any, entry: EffortConfig, model: string, warn: (message: string) => void): void;
+export function fit(body: any, entry: EffortConfig, model: string, warn: (message: string, details: {
+    requested: string;
+    used: string;
+    levels: string[];
+}) => void): void;
 /** The effort levels a model can be configured with, lowest to highest. `none` is not one: it switches reasoning off and is never snapped. */
 export const LEVELS: readonly string[];
 export type EffortConfig = {

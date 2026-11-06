@@ -156,8 +156,12 @@ describe("openai chat completion to anthropic message", () => {
 		expect(response(completion({ content: "x" }, {}, { finish_reason: "length" })).stop_reason).toBe("max_tokens");
 		expect(response(completion({ content: "", refusal: "I can't." }, {}, { finish_reason: "content_filter" }))).toMatchObject({
 			stop_reason: "refusal",
+			stop_details: { type: "refusal", category: null, explanation: "I can't." },
 			content: [{ type: "text", text: "I can't." }]
 		});
+		const filtered = response(completion({ content: "cut off" }, {}, { finish_reason: "content_filter" }));
+		expect(filtered.stop_details).toEqual({ type: "refusal", category: null, explanation: null });
+		expect(response(completion({ content: "x" }, {}, { finish_reason: "stop" }))).not.toHaveProperty("stop_details");
 		expect(response(completion({ content: "x" }, {}, { stop_reason: "END" }))).toMatchObject({
 			stop_reason: "stop_sequence",
 			stop_sequence: "END"

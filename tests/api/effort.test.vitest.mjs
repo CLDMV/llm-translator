@@ -125,7 +125,11 @@ describe("fit", () => {
 		expect(run({ reasoning_effort: "max" }).reasoning_effort).toBe("max");
 		expect(warn).not.toHaveBeenCalled();
 		expect(run({ reasoning_effort: "medium" }).reasoning_effort).toBe("high");
-		expect(warn).toHaveBeenCalledWith('Effort "medium" is not supported by m (low, high, max); using "high".');
+		expect(warn).toHaveBeenCalledWith('Effort "medium" is not supported by m (low, high, max); using "high".', {
+			requested: "medium",
+			used: "high",
+			levels: GLM
+		});
 		expect(run({ reasoning_effort: "none" }).reasoning_effort).toBe("none");
 		expect(run({ chat_template_kwargs: { enable_thinking: false } }).reasoning_effort).toBeUndefined();
 		expect(run({ reasoning_effort: "weird" }).reasoning_effort).toBe("weird");
@@ -151,7 +155,7 @@ describe("request with a level list", () => {
 
 	it("snaps an unlisted level to the nearest in each direction and warns once", async () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-		const api = await make({ upstreams: [upstream], detect: false, silent: false, efforts: { "GLM-5.3-Flash": GLM } });
+		const api = await make({ upstreams: [upstream], detect: false, logs: true, efforts: { "GLM-5.3-Flash": GLM } });
 		const send = async (effort) => (await api.request({ ...base, output_config: { effort } })).body.reasoning_effort;
 		expect(await send("minimal")).toBe("low");
 		expect(await send("medium")).toBe("high");

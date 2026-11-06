@@ -45,6 +45,7 @@ describe("settings", () => {
 			thinking: "chat_template_kwargs",
 			toolSchema: "pass",
 			deferredTools: "forward",
+			jsonObject: "schema",
 			toolErrors: false,
 			toolErrorMarker: "[error] ",
 			toolErrorInference: false,
@@ -83,6 +84,11 @@ describe("settings", () => {
 		expect(resolve().thinkOpen).toBe(false);
 		expect(resolve({ thinkOpen: true }).thinkOpen).toBe(true);
 		expect(() => resolve({ thinkOpen: "yes" })).toThrow(/Invalid setting thinkOpen/);
+	});
+
+	test("jsonObject is one of schema, instruction or drop", () => {
+		for (const mode of ["schema", "instruction", "drop"]) expect(resolve({ jsonObject: mode }).jsonObject).toBe(mode);
+		expect(() => resolve({ jsonObject: "emulate" })).toThrow(/Invalid setting jsonObject/);
 	});
 
 	test("toolErrorMarker must be a non-blank string and toolErrorInference a boolean", () => {
