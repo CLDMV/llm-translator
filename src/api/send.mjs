@@ -112,7 +112,9 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 	 * @param {any} spec - Event spec (see `lib/events`).
 	 * @returns {void}
 	 */
-	const announce = (spec) => emit(captured, { ...spec, log: options.log });
+	const announce = (spec) => {
+		emit(captured, { ...spec, log: options.log });
+	};
 	// An OpenAI-front client sees the final usage chunk only when it asked for one; the meter always gets it.
 	const hide = meter.meta.front === "openai" && body?.stream_options?.include_usage !== true;
 	/**
