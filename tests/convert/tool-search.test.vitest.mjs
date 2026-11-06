@@ -361,7 +361,7 @@ describe("trimmed history, repeated ids and bad definitions", () => {
 				upstreams: [{ name: "gpu", url: "http://gpu.test", backend: "vllm", models: ["m"] }],
 				transport: fakeTransport(() => ({ body: completion("ok") })),
 				detect: false,
-				silent: false
+				logs: true
 			});
 			await api.send({ model: "m", max_tokens: 4, tools, messages });
 			await api.send({ model: "m", max_tokens: 4, tools, messages });

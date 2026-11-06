@@ -93,7 +93,7 @@ function usageChunk(data) {
  * Create the meter for one request.
  * @param {{front: "anthropic" | "openai", requested: string | null, model: string | null, upstream: string | null, stream: boolean}} meta - Request facts; `model` and `upstream` may be filled in later.
  * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
- * @param {(message: string) => void} warn - Receives a message when `onUsage` throws or rejects.
+ * @param {(message: string, details: {kind: "threw" | "rejected"}) => void} warn - Receives a message when `onUsage` throws or rejects.
  * @returns {{meta: any, usage: Promise<UsageReport>, json: (body: any) => void, event: (data: any) => void, finish: (reason: UsageReport["reason"]) => void, estimate: (counts: {input_tokens: number | null, output_tokens: number | null}) => void, source: (read: (() => any) | null, protocol?: "openai" | "folded") => void, track: (source: AsyncIterable<any>, signal?: AbortSignal, hide?: boolean) => any}} Meter.
  */
 export function meter(meta, onUsage, warn) {
@@ -138,9 +138,9 @@ export function meter(meta, onUsage, warn) {
 		const report = { ...seen, reported, estimated, complete: outcome === "done", reason: outcome, ...meta };
 		settle(report);
 		try {
-			Promise.resolve(onUsage?.(report)).catch((cause) => warn(`onUsage rejected: ${cause?.message ?? cause}`));
+			Promise.resolve(onUsage?.(report)).catch((cause) => warn(`onUsage rejected: ${cause?.message ?? cause}`, { kind: "rejected" }));
 		} catch (cause) {
-			warn(`onUsage threw: ${cause?.message ?? cause}`);
+			warn(`onUsage threw: ${cause?.message ?? cause}`, { kind: "threw" });
 		}
 	};
 

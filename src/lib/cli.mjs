@@ -35,7 +35,8 @@ Options:
   --api-key <key>              Key clients must send (x-api-key or Authorization: Bearer)
   --allow-unauthenticated      Allow a non-loopback --host without --api-key
   --config <file>              JSON config file (translator config plus a "server" object)
-  --silent                     Suppress warnings
+  --logs [path]                Log warnings and errors to the console (default), or append every event as a JSON line to <path>
+  --silent                     Same as logs: false (no console output, no file)
   --no-detect                  Skip upstream detection
   --version                    Print the version
   --help                       Print this help
@@ -51,8 +52,10 @@ environment, which wins over the config file.
  * @returns {any} Parsed values (see `parseArgs`).
  */
 export function parse(argv) {
+	// `--logs` takes an optional path: bare (last, or followed by another flag) it means the console, which parseArgs sees as an empty value.
+	const args = argv.map((arg, at) => (arg === "--logs" && (at === argv.length - 1 || argv[at + 1].startsWith("-")) ? "--logs=" : arg));
 	return parseArgs({
-		args: argv,
+		args,
 		allowPositionals: false,
 		options: {
 			front: { type: "string" },
@@ -65,6 +68,7 @@ export function parse(argv) {
 			"api-key": { type: "string" },
 			"allow-unauthenticated": { type: "boolean" },
 			config: { type: "string" },
+			logs: { type: "string" },
 			silent: { type: "boolean" },
 			"no-detect": { type: "boolean" },
 			version: { type: "boolean" },
@@ -99,7 +103,11 @@ export function merge(values, env, file) {
 			translator.aliases[pair.slice(0, at)] = pair.slice(at + 1);
 		}
 	}
-	if (values.silent) translator.silent = true;
+	// The CLI logs to the console by default, so a server user still sees warnings; `--logs` / `--silent` and a config file's `logs` / `silent` change that.
+	if (values.silent) translator.logs = false;
+	if (values.logs !== undefined) translator.logs = values.logs === "" ? true : values.logs;
+	translator.logs ??= translator.silent === true ? false : true;
+	delete translator.silent;
 	if (values["no-detect"]) translator.detect = false;
 	const port = values.port ?? env.LLM_TRANSLATOR_PORT;
 	const server = {

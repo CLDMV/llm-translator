@@ -83,7 +83,7 @@ test("dist mirrors the api folder slothlet scans", () => {
 
 test("a translator composed from dist/api converts, streams and serves", async () => {
 	const { createTranslator } = require(path.join(dist, "index.cjs"));
-	const api = await createTranslator({ upstreams: [{ url: "http://vllm.test", backend: "vllm" }], detect: false, silent: true, transport });
+	const api = await createTranslator({ upstreams: [{ url: "http://vllm.test", backend: "vllm" }], detect: false, logs: false, transport });
 	try {
 		assert.deepEqual(Object.keys(api.driver).sort(), [
 			"anthropic",

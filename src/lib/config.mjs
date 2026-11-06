@@ -94,6 +94,17 @@ export function normalize(config = {}) {
 	if (!list || list.length === 0) {
 		throw new TranslatorError("at least one upstream is required (config.upstreams)", { code: "INVALID_CONFIG", status: 500 });
 	}
+	// `logs` wins over the deprecated `silent`, which only ever meant "no output" and so is the default now.
+	const logs = config.logs ?? false;
+	if (typeof logs !== "boolean" && (typeof logs !== "string" || logs === "")) {
+		throw new TranslatorError("logs must be true, false or a file path (got " + JSON.stringify(logs) + ")", {
+			code: "INVALID_CONFIG",
+			status: 500
+		});
+	}
+	if (config.onEvent !== undefined && typeof config.onEvent !== "function") {
+		throw new TranslatorError("onEvent must be a function", { code: "INVALID_CONFIG", status: 500 });
+	}
 	return {
 		front,
 		endpoints: list.map(endpoint),
@@ -104,6 +115,8 @@ export function normalize(config = {}) {
 		detect: config.detect !== false,
 		detectTimeout: config.detectTimeout ?? 5000,
 		transport: config.transport,
-		silent: config.silent === true
+		logs,
+		events: config.events !== false,
+		onEvent: config.onEvent
 	};
 }

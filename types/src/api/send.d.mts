@@ -18,7 +18,7 @@
  * On the Anthropic front a stream carries them in the final `message_delta`, because `message_start` is sent before the output is known.
  * Replies passed through without conversion are never altered.
  * @param {any} body - Client request body (per `front`).
- * @param {any} [options] - `{ signal, front, headers, clientHeaders, filter, onUsage }`: abort signal for the upstream call, per-call front, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a warning and never breaks the reply).
+ * @param {any} [options] - `{ signal, front, headers, clientHeaders, filter, onUsage, log }`: abort signal for the upstream call, per-call front, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply) and the logger this request's events also go to (used by the server).
  * @returns {Promise<{status: number, headers: Record<string,string>, body: any, usage: Promise<any>} | {status: number, headers: Record<string,string>, stream: AsyncIterable<{event?: string, data: *}>, usage: Promise<any>}>} A JSON reply, or a stream reply when the client asked for streaming and the upstream accepted.
  */
 export function send(body: any, options?: any): Promise<{

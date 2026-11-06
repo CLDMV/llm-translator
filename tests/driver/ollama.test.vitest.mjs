@@ -153,7 +153,7 @@ describe("ollama through send", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			const transport = server({});
-			const api = await make({ upstreams: [{ url: "http://ollama.test", backend: "ollama" }], transport, silent: false });
+			const api = await make({ upstreams: [{ url: "http://ollama.test", backend: "ollama" }], transport, logs: true });
 			const ask = {
 				model: "llama3",
 				max_tokens: 8,
@@ -178,7 +178,7 @@ describe("ollama through send", () => {
 			const api = await make({
 				upstreams: [{ url: "http://ollama.test", backend: "ollama", settings: { contextWindow: 0 } }],
 				transport: server({}),
-				silent: false
+				logs: true
 			});
 			await api.send({ model: "llama3", max_tokens: 8, messages: [{ role: "user", content: "x".repeat(40000) }] });
 			expect(warn).not.toHaveBeenCalled();

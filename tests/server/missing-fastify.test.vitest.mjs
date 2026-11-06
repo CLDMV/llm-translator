@@ -30,7 +30,7 @@ describe("server.start without fastify", () => {
 		const api = await createTranslator({
 			upstreams: [{ url: "http://a.test", backend: "vllm" }],
 			detect: false,
-			silent: true,
+			logs: false,
 			slothlet: { import: (url) => import(url) }
 		});
 		await expect(api.server.start({ port: 0 })).rejects.toMatchObject({ code: "fastify_missing", status: 500 });

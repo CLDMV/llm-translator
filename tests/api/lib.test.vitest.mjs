@@ -20,6 +20,7 @@ import { atLeast, noEmptyTools, semver } from "../../src/lib/normalize.mjs";
 import { withPings } from "../../src/lib/ping.mjs";
 import { pick, serves } from "../../src/lib/route.mjs";
 import { warn } from "../../src/lib/warn.mjs";
+import { create, open } from "../../src/lib/events.mjs";
 import { estimate } from "../../src/lib/estimate.mjs";
 import { fetchModels } from "../../src/lib/models.mjs";
 import { fakeTransport } from "../helpers/translator.mjs";
@@ -27,7 +28,15 @@ import { fakeTransport } from "../helpers/translator.mjs";
 describe("lib/config", () => {
 	it("normalizes endpoints and defaults", () => {
 		const config = normalize({ upstreams: ["http://a.test/", { url: "http://b.test", models: ["x"], settings: { topK: false } }] });
-		expect(config).toMatchObject({ front: "anthropic", aliases: {}, settings: {}, detect: true, detectTimeout: 5000, silent: false });
+		expect(config).toMatchObject({
+			front: "anthropic",
+			aliases: {},
+			settings: {},
+			detect: true,
+			detectTimeout: 5000,
+			logs: false,
+			events: true
+		});
 		expect(config.endpoints[0]).toMatchObject({
 			name: "upstream-0",
 			url: "http://a.test",
@@ -38,7 +47,7 @@ describe("lib/config", () => {
 		expect(config.endpoints[1]).toMatchObject({ name: "upstream-1", models: ["x"], settings: { topK: false } });
 		expect(normalize({ upstreams: ["http://a.test"], detect: false, silent: true, detectTimeout: 10 })).toMatchObject({
 			detect: false,
-			silent: true,
+			logs: false,
 			detectTimeout: 10
 		});
 		expect(endpoint("http://z.test", 3).name).toBe("upstream-3");
@@ -234,14 +243,16 @@ describe("lib/ping", () => {
 
 describe("misc lib", () => {
 	it("warns once", () => {
-		const state = { warned: new Set() };
+		const state = { warned: new Set(), events: create() };
+		open(state.events, true);
 		const lines = [];
 		const original = console.warn;
 		console.warn = (line) => lines.push(line);
 		try {
-			expect(warn({ silent: false }, state, "x")).toBe(true);
-			expect(warn({ silent: false }, state, "x")).toBe(false);
-			expect(warn({ silent: true }, state, "y")).toBe(false);
+			warn({}, state, "x");
+			warn({}, state, "x");
+			open(state.events, false);
+			warn({}, state, "y");
 		} finally {
 			console.warn = original;
 		}
