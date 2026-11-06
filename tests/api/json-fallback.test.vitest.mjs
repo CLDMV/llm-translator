@@ -74,7 +74,7 @@ describe("retrying json_object as an instruction", () => {
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			const transport = picky();
-			const api = await upstreamOf(transport, undefined, { silent: false });
+			const api = await upstreamOf(transport, undefined, { logs: true });
 			const first = await api.send(jsonObject);
 			expect(first.status).toBe(200);
 			expect(first.body.choices[0].message.content).toBe("{}");
@@ -132,7 +132,7 @@ describe("retrying json_object as an instruction", () => {
 					? failure("schema nope")
 					: { status: 500, body: { type: "error", error: { type: "api_error", message: "boom" } } }
 			);
-			const api = await upstreamOf(transport, undefined, { silent: false });
+			const api = await upstreamOf(transport, undefined, { logs: true });
 			const reply = await api.send(jsonObject);
 			expect(reply.status).toBe(400);
 			expect(JSON.stringify(reply.body)).toContain("schema nope");

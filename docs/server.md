@@ -19,19 +19,23 @@ Streaming replies use `content-type: text/event-stream`. Errors are always retur
 llm-translator --front anthropic --upstream http://gpu-box:8000 --port 8787
 ```
 
-| Flag                                | Environment variable                        | Meaning                                           |
-| ----------------------------------- | ------------------------------------------- | ------------------------------------------------- |
-| `--front`                           | `LLM_TRANSLATOR_FRONT`                      | `anthropic` (default) or `openai`                 |
-| `--upstream <url>` (repeatable)     | `LLM_TRANSLATOR_UPSTREAM` (comma separated) | upstream base URL                                 |
-| `--upstream-key`                    | `LLM_TRANSLATOR_UPSTREAM_KEY`               | key sent to the upstream                          |
-| `--backend`                         | `LLM_TRANSLATOR_BACKEND`                    | driver name instead of auto-detection             |
-| `--model alias=target` (repeatable) |                                             | model alias                                       |
-| `--host`                            | `LLM_TRANSLATOR_HOST`                       | listen address, default `127.0.0.1`               |
-| `--port`                            | `LLM_TRANSLATOR_PORT`                       | listen port, default `8787`                       |
-| `--api-key`                         | `LLM_TRANSLATOR_API_KEY`                    | key clients must send                             |
-| `--config <file>`                   | `LLM_TRANSLATOR_CONFIG`                     | JSON config file                                  |
-| `--allow-unauthenticated`           | `LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED=1`    | allow a non-loopback `--host` without `--api-key` |
-| `--silent`, `--no-detect`           |                                             | suppress warnings, skip detection                 |
+| Flag                                | Environment variable                        | Meaning                                                          |
+| ----------------------------------- | ------------------------------------------- | ---------------------------------------------------------------- |
+| `--front`                           | `LLM_TRANSLATOR_FRONT`                      | `anthropic` (default) or `openai`                                |
+| `--upstream <url>` (repeatable)     | `LLM_TRANSLATOR_UPSTREAM` (comma separated) | upstream base URL                                                |
+| `--upstream-key`                    | `LLM_TRANSLATOR_UPSTREAM_KEY`               | key sent to the upstream                                         |
+| `--backend`                         | `LLM_TRANSLATOR_BACKEND`                    | driver name instead of auto-detection                            |
+| `--model alias=target` (repeatable) |                                             | model alias                                                      |
+| `--host`                            | `LLM_TRANSLATOR_HOST`                       | listen address, default `127.0.0.1`                              |
+| `--port`                            | `LLM_TRANSLATOR_PORT`                       | listen port, default `8787`                                      |
+| `--api-key`                         | `LLM_TRANSLATOR_API_KEY`                    | key clients must send                                            |
+| `--config <file>`                   | `LLM_TRANSLATOR_CONFIG`                     | JSON config file                                                 |
+| `--allow-unauthenticated`           | `LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED=1`    | allow a non-loopback `--host` without `--api-key`                |
+| `--logs [path]`                     |                                             | log to the console (the default), or append JSON lines to `path` |
+| `--silent`                          |                                             | same as `logs: false`: no console output, no file                |
+| `--no-detect`                       |                                             | skip detection                                                   |
+
+The CLI logs warnings and errors to the console by default (`logs: true`); `--logs path` writes every event to a file instead and `--silent` turns logging off. A config file can set `logs` (or the deprecated `silent`). See [events.md](events.md).
 
 Flags win over environment variables, which win over the config file. The config file is a translator config plus an optional `server` object:
 

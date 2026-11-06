@@ -170,7 +170,10 @@ async function stream(reply, api, controller, events, interval, status = 200, he
 		if (!controller.signal.aborted) {
 			const known = error instanceof TranslatorError;
 			// Details of unexpected failures stay in the server log, as for errors that happen before the stream is committed.
-			if (!known) reply.log.error(error);
+			if (!known) {
+				reply.log.error(error);
+				api.emit({ type: "error", kind: "route", level: "error", message: String(error?.message ?? error), log: false });
+			}
 			const { body } = api.build(
 				known ? error.status : 502,
 				known ? error.message : "Internal server error",
@@ -272,6 +275,7 @@ export function register(fastify, options, captured) {
 		const status = error.statusCode ?? 500;
 		if (status < 500) return reject(reply, api.build(status, error.message));
 		request.log.error(error);
+		api.emit({ type: "error", kind: "route", level: "error", message: String(error.message), status, log: false });
 		return reject(reply, api.build(status, "Internal server error"));
 	});
 
@@ -309,6 +313,7 @@ export function register(fastify, options, captured) {
 				);
 			} catch (error) {
 				request.log.error(error);
+				api.emit({ type: "error", kind: "route", level: "error", message: String(error?.message ?? error), log: false });
 				verdict = { ok: false, status: 401, message: "unauthorized" };
 			}
 			if (!verdict.ok) return reject(reply, api.build(verdict.status, verdict.message));
@@ -352,7 +357,12 @@ export function register(fastify, options, captured) {
 		// The same interval times the early-commit wait and the keep-alives, and it comes from the upstream the request is routed to.
 		// Read it before sending: send advances a round robin, and reading after would see the next member.
 		const interval = api.interval(request.body);
-		const sending = api.send(request.body, { signal: controller.signal, clientHeaders: forwardable(request.headers), onUsage });
+		const sending = api.send(request.body, {
+			signal: controller.signal,
+			clientHeaders: forwardable(request.headers),
+			onUsage,
+			log: request.log
+		});
 		sending.catch(() => {});
 		const gone = new Promise((resolve) => controller.signal.addEventListener("abort", () => resolve(GONE), { once: true }));
 		const result = await settle(Promise.race([sending, gone]), request.body?.stream === true ? interval : 0);

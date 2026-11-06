@@ -303,7 +303,7 @@ describe("send usage reporting, Anthropic front", () => {
 
 	it("keeps the reply intact and warns when onUsage throws or rejects", async () => {
 		const transport = fakeTransport(() => ({ body: completion() }));
-		const api = await make({ upstreams: [vllm], transport, detect: false, silent: false });
+		const api = await make({ upstreams: [vllm], transport, detect: false, logs: true });
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			const thrown = await api.send(ask, {

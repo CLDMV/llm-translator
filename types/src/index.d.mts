@@ -9,14 +9,17 @@
  * @property {boolean} [detect] Probe `auto` upstreams at startup (default true).
  * @property {number} [detectTimeout] Probe timeout in ms (default 5000).
  * @property {(url: string, init?: any) => Promise<Response>} [transport] fetch-compatible function used for all upstream calls.
- * @property {boolean} [silent] Suppress warnings.
+ * @property {boolean | string} [logs] Logging (default `false`: no console output, no file). `true` prints warnings and errors on the console, once per message; a path appends every event as a JSON line to that file (relative paths resolve against `process.cwd()`, a missing directory is created, a file that cannot be opened is reported once on the console and logging stays off).
+ * @property {boolean} [events] Emit events (default `true`); `false` turns emitting off. Logging does not depend on it.
+ * @property {(event: import("./lib/events.mjs").TranslatorEvent) => any} [onEvent] Callback for every event, registered before startup so it also sees startup events (see docs/events.md).
+ * @property {boolean} [silent] Deprecated alias for `logs: false` (the default); `logs` wins when both are given.
  * @property {{import?: (url: string) => Promise<any>}} [slothlet] Options forwarded to slothlet (for example `import` for coverage).
  */
 /**
  * Create a translator: a slothlet api instance (see the README for the leaves) bound to the given upstreams.
  * Endpoints with `backend: "auto"` are probed once before this resolves (set `detect: false` to skip all network access).
  * @param {TranslatorConfig} config - Translator config.
- * @returns {Promise<any>} The translator api (`request`, `response`, `stream`, `send`, `detect`, `status`, `token`, `model`, `error`, `sse`, `server`, `driver`, `convert`, `slothlet`).
+ * @returns {Promise<any>} The translator api (`request`, `response`, `stream`, `send`, `detect`, `status`, `token`, `model`, `error`, `events`, `sse`, `server`, `driver`, `convert`, `slothlet`).
  */
 export function createTranslator(config: TranslatorConfig): Promise<any>;
 export { TranslatorError } from "./lib/errors.mjs";
@@ -66,7 +69,19 @@ export type TranslatorConfig = {
      */
     transport?: (url: string, init?: any) => Promise<Response>;
     /**
-     * Suppress warnings.
+     * Logging (default `false`: no console output, no file). `true` prints warnings and errors on the console, once per message; a path appends every event as a JSON line to that file (relative paths resolve against `process.cwd()`, a missing directory is created, a file that cannot be opened is reported once on the console and logging stays off).
+     */
+    logs?: boolean | string;
+    /**
+     * Emit events (default `true`); `false` turns emitting off. Logging does not depend on it.
+     */
+    events?: boolean;
+    /**
+     * Callback for every event, registered before startup so it also sees startup events (see docs/events.md).
+     */
+    onEvent?: (event: import("./lib/events.mjs").TranslatorEvent) => any;
+    /**
+     * Deprecated alias for `logs: false` (the default); `logs` wins when both are given.
      */
     silent?: boolean;
     /**
