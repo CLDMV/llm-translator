@@ -82,4 +82,17 @@ describe("sampling fields on a request", () => {
 		expect(result.body.seed).toBeUndefined();
 		expect(result.body.metadata).toEqual({ user_id: "u" });
 	});
+
+	it("forwards an OpenAI-front body with the defaults added, and leaves an unaccepted field out", async () => {
+		const api = await build("ollama", { sampling: { min_p: 0.1, seed: 3 } }, { front: "openai" });
+		const result = await api.request({ ...hello, temperature: 0.5 });
+		expect(result.body).toMatchObject({ temperature: 0.5, seed: 3 });
+		expect(result.body.min_p).toBeUndefined();
+	});
+
+	it("does not list a field twice when the conversion already dropped it", async () => {
+		const api = await build("ollama", { topK: false, sampling: { top_k: 5 } });
+		const result = await api.request({ ...hello, top_k: 9 });
+		expect(result.state.convert.dropped.filter((name) => name === "top_k")).toHaveLength(1);
+	});
 });

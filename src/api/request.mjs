@@ -114,7 +114,7 @@ async function prepare(c, body, options, picked) {
 	if (endpoint.protocol === "openai.chat") {
 		const dropped = [];
 		upstream = addSampling(upstream, asked, settings, driver.info.fields, dropped);
-		if (converted && dropped.length > 0) for (const name of dropped) if (!converted.dropped.includes(name)) converted.dropped.push(name);
+		if (converted) converted.dropped.push(...dropped.filter((name) => !converted.dropped.includes(name)));
 	} else if (!convert && asked !== undefined && upstream.metadata?.sampling !== undefined) {
 		const { sampling: _, ...rest } = upstream.metadata;
 		upstream = { ...upstream, metadata: rest };
