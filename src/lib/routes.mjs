@@ -257,6 +257,7 @@ export function register(fastify, options, captured) {
 		send: (body, extra) => captured.send(body, { ...extra, front, filter }),
 		route: (body) => captured.route(body, { front }),
 		count: (body, extra) => captured.count(body, { ...extra, front }),
+		embed: (body, extra) => captured.embed(body, extra),
 		list: (extra) => captured.list({ ...extra, front }),
 		get: (id, extra) => captured.get(id, { ...extra, front })
 	};
@@ -378,6 +379,18 @@ export function register(fastify, options, captured) {
 		if (!result.stream) return reject(reply, result);
 		return stream(reply, api, controller, result.stream, interval, result.status, result.headers);
 	});
+
+	if (api.front === "openai") {
+		// A plain forward: no streaming, no conversion, so none of the chat route's early-commit machinery applies.
+		fastify.post("/v1/embeddings", { bodyLimit }, async (request, reply) => {
+			const controller = new AbortController();
+			reply.raw.on("close", () => {
+				if (!reply.raw.writableFinished) controller.abort();
+			});
+			// An abort answers 499 into a reply nobody reads.
+			return reject(reply, await api.embed(request.body, { signal: controller.signal, log: request.log }));
+		});
+	}
 
 	if (api.front === "anthropic") {
 		fastify.post("/v1/messages/count_tokens", { bodyLimit }, async (request, reply) => {
