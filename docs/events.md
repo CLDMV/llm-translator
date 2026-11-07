@@ -109,6 +109,39 @@ The CLI defaults to `logs: true` so a server still shows its warnings, and `--lo
 
 In server mode, when the Fastify `logger` is enabled, events also go to it as structured lines: `{ event }` plus the message, at the event's level. A request's events use that request's logger (so they carry its request id), and everything else uses the app logger. The existing `request.log.error` calls for unexpected route errors stay as they are, and the matching `error` event is not logged to Fastify a second time.
 
+## Capture for debugging
+
+`capture` records the exchanges that pass through `send` (and so the server) for troubleshooting a new backend. It is off by default.
+
+| Value             | Effect                                                                                                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `false` (default) | Nothing is recorded.                                                                                                                                                         |
+| `"<directory>"`   | One JSON file per exchange, named `<ms>-<id>.json`, written when the reply is complete. A relative path resolves against `process.cwd()` and a missing directory is created. |
+| `(record) => any` | Called with each record (an exception or a rejection is contained).                                                                                                          |
+
+A record holds the client request, the request converted for the upstream and the upstream's reply:
+
+```json
+{
+	"time": 1793995200000,
+	"id": "9f2c1a7b3d4e",
+	"front": "anthropic",
+	"requested": "my-alias",
+	"model": "qwen3-coder",
+	"endpoint": "a",
+	"stream": false,
+	"client": { "body": {} },
+	"upstream": { "url": "http://a.test/v1/chat/completions", "headers": {}, "body": {} },
+	"response": { "status": 200, "headers": {}, "body": {} }
+}
+```
+
+A non-stream reply is recorded as `response.body` (parsed JSON, or the text when it is not JSON). Upstream error replies are recorded the same way. A stream is recorded when it ends, fails or is closed early, as `response.raw` (the upstream's SSE text) and `response.events` (the events sent to the client), each capped at 1,000,000 characters; `response.truncated` is `true` when either was cut. Only the endpoint that answered is recorded (not failed-over attempts), and a request that never reaches an upstream is not recorded. Embeddings are not captured.
+
+Credentials are never written: the value of any header whose name contains `key`, `token`, `secret`, `auth`, `cookie` or `password` (case-insensitive; this covers `authorization`, `proxy-authorization`, `x-api-key` and `api-key`) is replaced by `[redacted]`, in the upstream request and the upstream reply. Bodies are recorded as they are, so treat the files as sensitive: they contain prompts and completions.
+
+A capture that cannot be written, or a callback that throws, is reported as a `warning` event with `kind: "capture"` and never changes the reply.
+
 ## Upgrade note
 
 Warnings no longer print by default. An application that relied on the console warnings should pass `logs: true`, or subscribe to `warning`.

@@ -27,6 +27,7 @@ import { meter as createMeter, normalize } from "../lib/usage.mjs";
 import { capture } from "../lib/capture.mjs";
 import { estimate, bodyLength, output, patch, stream as estimating } from "../lib/estimate.mjs";
 import { warn } from "../lib/warn.mjs";
+import { start as record } from "../lib/record.mjs";
 import { emit } from "../lib/events.mjs";
 import * as pool from "../lib/pool.mjs";
 import { createBudget } from "../lib/thinking.mjs";
@@ -360,9 +361,21 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 	held = null;
 	meter.usage.then(() => slot.health.inflight--);
 	const headers = http.plain(result.headers);
-	if (!result.ok) return fail(result.status, failure ?? (await parse(result)), headers, upstream.state, "upstream_error");
+	const recorder = record(captured, {
+		body,
+		sent: upstream,
+		front: meter.meta.front,
+		requested: meter.meta.requested,
+		headers,
+		log: options.log
+	});
+	if (!result.ok) {
+		const rejected = failure ?? (await parse(result));
+		recorder.reply(result.status, headers, rejected);
+		return fail(result.status, rejected, headers, upstream.state, "upstream_error");
+	}
 	if (upstream.state.stream) {
-		const events = stream(result.body, upstream.state);
+		const events = stream(recorder.raw(result.body), upstream.state);
 		const client = upstream.state.native
 			? events
 			: estimating(meter.meta.front, events, {
@@ -370,9 +383,10 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 					input: () => input(upstream),
 					report: (counts) => meter.estimate(counts)
 				});
-		return { status: 200, headers: SSE_HEADERS, stream: meter.track(client, options.signal, hide) };
+		return { status: 200, headers: SSE_HEADERS, stream: recorder.events(meter.track(client, options.signal, hide)) };
 	}
 	const parsed = await parse(result);
+	recorder.reply(result.status, headers, parsed);
 	if (parsed === null || typeof parsed !== "object") {
 		announce({
 			type: "error",
