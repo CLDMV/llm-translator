@@ -17,3 +17,10 @@ export function strictTools(body: any): {
     name: string;
     problems: string[];
 }[];
+/**
+ * Send the tools whose schema is outside the strict subset without `strict` (the key is removed, not set to false). Reads both wire shapes
+ * like `strictTools`. Nothing in `body` is modified: tools that change are rebuilt, and the body is copied only when one did.
+ * @param {any} body - Upstream request body.
+ * @returns {any} `body` itself when every strict tool conforms, otherwise a copy with the rebuilt `tools`.
+ */
+export function relax(body: any): any;
