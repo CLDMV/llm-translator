@@ -18,13 +18,14 @@
  */
 /**
  * Describe the Anthropic driver (native Messages API upstream).
- * @returns {{name: string, protocol: string, order: number, auth: string, headers: Record<string,string>, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, headers: Record<string,string>, paths: Record<string,string>}} Driver facts.
  */
 export function info(): {
     name: string;
     protocol: string;
     order: number;
     auth: string;
+    strict: boolean;
     headers: Record<string, string>;
     paths: Record<string, string>;
 };

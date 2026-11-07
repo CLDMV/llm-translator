@@ -20,7 +20,7 @@
 
 /**
  * Describe the Ollama driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
@@ -28,6 +28,7 @@ export function info() {
 		protocol: "openai.chat",
 		order: 60,
 		auth: "bearer",
+		strict: false,
 		probes: ["/api/version"],
 		paths: { chat: "/v1/chat/completions", models: "/v1/models", version: "/api/version" }
 	};

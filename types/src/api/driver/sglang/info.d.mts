@@ -18,13 +18,14 @@
  */
 /**
  * Describe the SGLang driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info(): {
     name: string;
     protocol: string;
     order: number;
     auth: string;
+    strict: boolean;
     probes: string[];
     fields: string[];
     paths: Record<string, string>;
