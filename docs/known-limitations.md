@@ -18,7 +18,7 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 - Claude Code's tool search works through the translator (`toolSearch`: `expand` by default), but it costs the model an extra `ToolSearch` call before it can use a deferred tool, and it has not been run against a real backend yet ([#65](https://github.com/CLDMV/llm-translator/issues/65)). Small models that do not call tools reliably should use `ENABLE_TOOL_SEARCH=false` in Claude Code. See [claude-code.md](claude-code.md#tool-search).
 - `is_error` on tool results is lost unless `toolErrors` is enabled (off for every driver), because Chat Completions has no error flag. The marker text is `toolErrorMarker`; `toolErrorInference` reads it back in the other direction.
 - Tool-call ids are not shortened or reformatted for servers with strict id formats (FI-067, [#20](https://github.com/CLDMV/llm-translator/issues/20)).
-- `strict` tool schemas are forwarded; whether the server enforces them depends on its configuration. Tracked in [#57](https://github.com/CLDMV/llm-translator/issues/57).
+- `strict` tools are carried to the upstream and their schemas are checked against the strict subset, but the translator cannot tell whether a server really enforces them: the `vllm` driver reports that it can, and enforcement there depends on its `--tool-strict-level` setting. Schemas outside the subset are reported, not rewritten, and still sent. Tracked in [#57](https://github.com/CLDMV/llm-translator/issues/57).
 
 ## Content
 
@@ -52,6 +52,6 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 
 ## Out of scope
 
-- Message Batches, Files, Skills, Responses, Conversations, Realtime, audio, image, embeddings and moderation endpoints are not provided. Batches: [#25](https://github.com/CLDMV/llm-translator/issues/25), [#29](https://github.com/CLDMV/llm-translator/issues/29); Responses: [#4](https://github.com/CLDMV/llm-translator/issues/4).
+- Message Batches, Files, Skills, Responses, Conversations, Realtime, audio, image and moderation endpoints are not provided. Embeddings are forwarded to OpenAI-protocol upstreams only (no usage reporting through `onUsage`). Batches: [#25](https://github.com/CLDMV/llm-translator/issues/25), [#29](https://github.com/CLDMV/llm-translator/issues/29); Responses: [#4](https://github.com/CLDMV/llm-translator/issues/4).
 - Server-side features of the Anthropic platform (MCP connector, container, fast mode, service tiers, task budgets, server-side fallback) have no equivalent on local servers.
 - Backend-specific behaviour beyond what the vLLM, llama.cpp, SGLang, Ollama, OpenAI, DeepSeek, Anthropic and generic OpenAI-compatible drivers implement (LM Studio, TGI, LocalAI and other hosted providers) is not special-cased yet. Driver issues start at [#33](https://github.com/CLDMV/llm-translator/issues/33).

@@ -27,7 +27,7 @@ import { emit } from "../../lib/events.mjs";
 
 /**
  * Fastify plugin. Anthropic front: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`,
- * `GET|HEAD /` and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{id}`, `GET|HEAD /`. Responses stream as
+ * `GET|HEAD /` and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `POST /v1/embeddings`, `GET /v1/models`, `GET /v1/models/{id}`, `GET|HEAD /`. Responses stream as
  * `text/event-stream` with keep-alive pings; a client disconnect aborts the upstream request. Register it with
  * `app.register(api.server.plugin, { apiKey })`. `authorize(request)` (sync or async) runs after `apiKey` and the body parse and decides
  * with `true` / `{ ok: true, context }` or `false` / `{ ok: false, status, message }`; `onUsage(report, context)` receives each request's usage report. When the Fastify `logger` is enabled, events also go to it as structured lines (`{ event }` plus the message), through the request's logger for events of a request.
@@ -50,7 +50,7 @@ export async function plugin(fastify, options = {}) {
 			throw new TranslatorError(`${name} must be a function`, { code: "invalid_config", status: 500 });
 		}
 	}
-	const { send, route, token, model, error, sse } = self;
+	const { send, route, token, model, error, sse, embeddings } = self;
 	const front = options.front ?? config.front;
 	// Events also go to this app's logger (as structured lines) until it closes; a request's own logger takes over for its events.
 	const { state } = context;
@@ -73,6 +73,7 @@ export async function plugin(fastify, options = {}) {
 			}
 		},
 		send,
+		embed: embeddings.send,
 		route,
 		count: token.count,
 		list: model.list,

@@ -62,6 +62,7 @@ describe("package surface", () => {
 					"convert",
 					"detect",
 					"driver",
+					"embeddings",
 					"endpoint",
 					"error",
 					"events",

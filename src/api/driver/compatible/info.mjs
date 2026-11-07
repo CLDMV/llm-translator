@@ -22,7 +22,7 @@ import { VLLM_FIELDS } from "../../../lib/passthrough.mjs";
 
 /**
  * Describe the generic OpenAI-compatible driver (matches last, after every specific driver).
- * @returns {{name: string, protocol: string, order: number, auth: string, fields: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
@@ -30,6 +30,7 @@ export function info() {
 		protocol: "openai.chat",
 		order: 100,
 		auth: "bearer",
+		strict: false,
 		fields: VLLM_FIELDS,
 		paths: { chat: "/v1/chat/completions", models: "/v1/models" }
 	};
