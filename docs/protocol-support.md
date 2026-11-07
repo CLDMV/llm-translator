@@ -215,14 +215,15 @@ Error type correspondence used by the converters: `400` and `invalid_request_err
 
 ## 6. Headers and endpoints
 
-| Item                                                                 | Status          | Notes                                                                          |
-| -------------------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------ |
-| `anthropic-version`, `anthropic-beta` request headers                | dropped         | They affect transport only.                                                    |
-| `x-api-key` / `Authorization: Bearer`                                | mapped          | The server accepts either from clients; upstream keys come from configuration. |
-| `POST /v1/messages`                                                  | mapped          | Anthropic front.                                                               |
-| `POST /v1/chat/completions`                                          | mapped          | OpenAI front.                                                                  |
-| `POST /v1/messages/count_tokens`                                     | best-effort     | vLLM `/tokenize` when available, otherwise a character-based estimate.         |
-| `GET /v1/models`                                                     | mapped          | Client-shaped list across upstreams plus aliases, with effort levels.          |
-| `GET /v1/models/{id}`                                                | mapped          | One entry of that list; 404 in the front's error format for an unknown id.     |
-| `HEAD` / `GET /` and `/api/hello`                                    | mapped          | Claude Code warm-up probe.                                                     |
-| Message Batches, Files, Skills, Responses, Embeddings, Audio, Images | not implemented | See [feature-inventory.md](feature-inventory.md).                              |
+| Item                                                     | Status          | Notes                                                                          |
+| -------------------------------------------------------- | --------------- | ------------------------------------------------------------------------------ |
+| `anthropic-version`, `anthropic-beta` request headers    | dropped         | They affect transport only.                                                    |
+| `x-api-key` / `Authorization: Bearer`                    | mapped          | The server accepts either from clients; upstream keys come from configuration. |
+| `POST /v1/messages`                                      | mapped          | Anthropic front.                                                               |
+| `POST /v1/chat/completions`                              | mapped          | OpenAI front.                                                                  |
+| `POST /v1/messages/count_tokens`                         | best-effort     | vLLM `/tokenize` when available, otherwise a character-based estimate.         |
+| `GET /v1/models`                                         | mapped          | Client-shaped list across upstreams plus aliases, with effort levels.          |
+| `GET /v1/models/{id}`                                    | mapped          | One entry of that list; 404 in the front's error format for an unknown id.     |
+| `HEAD` / `GET /` and `/api/hello`                        | mapped          | Claude Code warm-up probe.                                                     |
+| `POST /v1/embeddings`                                    | pass-through    | OpenAI front, OpenAI-protocol upstreams only; body and reply unchanged.        |
+| Message Batches, Files, Skills, Responses, Audio, Images | not implemented | See [feature-inventory.md](feature-inventory.md).                              |

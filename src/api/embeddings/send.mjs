@@ -1,0 +1,116 @@
+/**
+ *
+ *	@Project: @cldmv/llm-translator
+ *	@Filename: /src/api/embeddings/send.mjs
+ *	@Date: 2026-11-06T12:00:00-08:00 (1794081600)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-11-06T12:00:00-08:00 (1794081600)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
+ * @fileoverview Embeddings api: forward an OpenAI embeddings request to an upstream that serves the model, without conversion.
+ * @module @cldmv/llm-translator/embeddings/send
+ */
+import { context, self } from "../../lib/runtime.mjs";
+import { capture } from "../../lib/capture.mjs";
+import { resolve, serves } from "../../lib/route.mjs";
+import * as http from "../../lib/http.mjs";
+import * as pool from "../../lib/pool.mjs";
+import { emit } from "../../lib/events.mjs";
+
+const PATH = "/v1/embeddings";
+
+/**
+ * Forward `POST /v1/embeddings` to an OpenAI-protocol upstream that lists the model. The body and the reply pass through unchanged
+ * apart from `model`, which is the upstream's name for it (after `aliases`). The model is routed like a chat model: aliases, then the
+ * pool of endpoints serving it, which fails over on a connection error or a 5xx. Errors are replies in the OpenAI error shape (the
+ * return value, not a throw): `400` for a body that is not an object or has no `model`, `404` when no upstream serves the model and `400`
+ * (`embeddings_unsupported`) when the model is served only by Anthropic-protocol upstreams, which have no embeddings API, and `499` (`aborted`) when `signal` aborts.
+ * @param {any} body - OpenAI embeddings request body (`{ model, input, ... }`).
+ * @param {any} [options] - `{ signal, headers, log }`: abort signal for the upstream call, extra upstream headers and the logger events of this request also go to (used by the server).
+ * @returns {Promise<{status: number, headers: Record<string,string>, body: any}>} The upstream's JSON reply, or an OpenAI-shaped error reply.
+ */
+export async function send(body, options = {}) {
+	const { transport } = context.state;
+	const { error } = self;
+	const c = capture(self, context, "openai");
+	const fail = (status, message, extra = {}) => error.build(status, message, { ...extra, front: "openai" });
+	if (!body || typeof body !== "object" || Array.isArray(body)) {
+		return fail(400, "The request body must be a JSON object", { code: "invalid_body" });
+	}
+	if (typeof body.model !== "string" || body.model === "") return fail(400, "model is required", { code: "invalid_body", param: "model" });
+	// Unlike chat, no fallback: a lone upstream that knows one model must not answer for another, because vectors of different models do not mix.
+	const target = Object.hasOwn(c.config.aliases, body.model) ? c.config.aliases[body.model] : body.model;
+	if (!c.state.endpoints.some((endpoint) => serves(endpoint, target))) {
+		return fail(404, `The model "${body.model}" is not served by any configured upstream.`, { code: "model_not_found", param: "model" });
+	}
+	const picked = resolve(c, body, { advance: true });
+	const members = picked.pool.filter((endpoint) => endpoint.protocol === "openai.chat");
+	if (members.length === 0) {
+		return fail(400, `The model "${body.model}" is served by an Anthropic-protocol upstream, which has no embeddings API.`, {
+			code: "embeddings_unsupported",
+			param: "model"
+		});
+	}
+	const upstream = { ...body, model: picked.model };
+	let last;
+	for (let turn = 0; turn < members.length; turn++) {
+		const endpoint = members[turn];
+		const driver = c.driver(endpoint);
+		endpoint.health.inflight++;
+		endpoint.health.requests++;
+		let result;
+		try {
+			result = await http.json(transport, http.join(endpoint.url, PATH), {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					accept: "application/json",
+					...driver.info.headers,
+					...http.headers(endpoint, driver.info.auth, options.headers)
+				},
+				body: upstream,
+				signal: options.signal
+			});
+		} finally {
+			endpoint.health.inflight--;
+		}
+		if (options.signal?.aborted) return fail(499, "The request was aborted", { code: "aborted" });
+		const unreachable = result.status === 0;
+		if (!unreachable && result.status < 500) {
+			pool.succeeded(endpoint);
+			if (!result.ok) {
+				return error(result.status, result.body, {}, { front: "openai", upstream: endpoint.name, native: true, model: body.model });
+			}
+			if (result.body === null || typeof result.body !== "object") {
+				return fail(502, "The upstream returned a body that is not JSON", { code: "bad_gateway" });
+			}
+			return { status: 200, headers: { "content-type": "application/json" }, body: result.body };
+		}
+		const reason = unreachable ? `Could not reach the upstream (${endpoint.name}): ${result.error?.message}` : `HTTP ${result.status}`;
+		pool.failed(c.config, endpoint, reason);
+		emit(c, {
+			type: "error",
+			kind: unreachable ? "transport" : "upstream",
+			level: "error",
+			message: unreachable ? reason : `Upstream ${endpoint.name} answered HTTP ${result.status}`,
+			endpoint: endpoint.name,
+			model: picked.model,
+			log: options.log
+		});
+		last = { endpoint, result, reason };
+	}
+	if (last.result.status === 0) return fail(502, last.reason, { code: "upstream_unreachable" });
+	return error(
+		last.result.status,
+		last.result.body,
+		{},
+		{ front: "openai", upstream: last.endpoint.name, native: true, model: body.model }
+	);
+}
