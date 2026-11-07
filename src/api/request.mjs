@@ -29,6 +29,8 @@ import { LIMITS } from "../lib/toolsearch.mjs";
 import { warn } from "../lib/warn.mjs";
 import { emit } from "../lib/events.mjs";
 import { fit, pinBody } from "../lib/effort.mjs";
+import { strictTools } from "../lib/strict.mjs";
+import { TranslatorError } from "../lib/errors.mjs";
 
 /**
  * Who produced reasoning data signed for this endpoint: driver, protocol and host, so two upstreams on the generic driver stay apart.
@@ -57,6 +59,43 @@ export async function request(body, options = {}) {
 	} catch (cause) {
 		picked.endpoint.health.inflight--;
 		throw cause;
+	}
+}
+
+/**
+ * Report strict tools the upstream cannot honour: a schema outside the strict subset (an error under `unknownFields: "error"`, a
+ * warning otherwise) and a driver whose backend does not enforce strict use. The tools are sent either way.
+ * @param {any} c - Captured translator parts.
+ * @param {any} upstream - Upstream body.
+ * @param {any} endpoint - Chosen endpoint.
+ * @param {any} driver - The endpoint's driver.
+ * @param {any} settings - Resolved settings for the endpoint.
+ * @param {any} options - The `request` options.
+ * @throws {TranslatorError} For a schema outside the subset when `unknownFields` is `"error"`.
+ */
+function checkStrict(c, upstream, endpoint, driver, settings, options) {
+	const strict = strictTools(upstream);
+	if (strict.length === 0) return;
+	const bad = strict.filter((tool) => tool.problems.length > 0);
+	if (bad.length > 0 && settings.unknownFields === "error") {
+		throw new TranslatorError(`tools: ${bad[0].name}: schema is outside the strict subset (${bad[0].problems.join("; ")})`, {
+			code: "unsupported_content",
+			param: "tools"
+		});
+	}
+	if (options.retry === true) return;
+	const tell = (message, kind) => warn(c.config, c.state, message, { kind, endpoint: endpoint.name, log: options.log });
+	for (const tool of bad) {
+		tell(
+			`Upstream ${endpoint.name}: strict tool ${tool.name} has a schema outside the strict subset: ${tool.problems.join("; ")}`,
+			"strict"
+		);
+	}
+	if (driver.info.strict !== true) {
+		tell(
+			`Upstream ${endpoint.name}: the ${driver.name} backend does not enforce strict tool use (${strict.map((t) => t.name).join(", ")})`,
+			"strict"
+		);
 	}
 }
 
@@ -131,6 +170,7 @@ async function prepare(c, body, options, picked) {
 	if (text && !convert && c.front === "openai") upstream = images.strip(upstream);
 	if (options.tools === false) upstream = tools.strip(upstream);
 	upstream.model = model;
+	checkStrict(c, upstream, endpoint, driver, settings, options);
 	// A model with a configured level list gets an effort it supports (and the default one when the request names none).
 	if (levels && endpoint.protocol === "openai.chat")
 		fit(upstream, levels, model, (message, details) =>

@@ -20,7 +20,7 @@
 
 /**
  * Describe the OpenAI driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
@@ -28,6 +28,7 @@ export function info() {
 		protocol: "openai.chat",
 		order: 30,
 		auth: "bearer",
+		strict: true,
 		paths: { chat: "/v1/chat/completions", models: "/v1/models" }
 	};
 }

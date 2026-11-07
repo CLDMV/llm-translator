@@ -166,6 +166,7 @@ export async function request(chatBody, settings) {
 		const schema = fn.parameters ?? { type: "object", properties: {} };
 		const converted = { name: fit(fn.name), input_schema: s.toolSchema === "sanitize" ? sanitize(schema) : schema };
 		if (fn.description !== undefined) converted.description = fn.description;
+		if (fn.strict !== undefined) converted.strict = fn.strict;
 		tools.push(converted);
 	}
 	if (tools.length > 0) {
