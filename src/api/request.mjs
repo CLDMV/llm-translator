@@ -22,6 +22,7 @@ import { capture } from "../lib/capture.mjs";
 import { resolve } from "../lib/route.mjs";
 import * as http from "../lib/http.mjs";
 import { filterChatBody } from "../lib/passthrough.mjs";
+import { addSampling } from "../lib/sampling.mjs";
 import * as images from "../lib/images.mjs";
 import * as tools from "../lib/tools.mjs";
 import { LIMITS } from "../lib/toolsearch.mjs";
@@ -106,6 +107,17 @@ async function prepare(c, body, options, picked) {
 			c.front === "openai" && (options.filter ?? settings.passthroughFilter === true)
 				? filterChatBody(body, driver.info.fields)
 				: { ...body };
+	}
+	// Sampling extensions: the upstream's `sampling` setting and an Anthropic request's `metadata.sampling` (which is not a real metadata key,
+	// so it never travels upstream as such).
+	const asked = c.front === "anthropic" ? body.metadata?.sampling : undefined;
+	if (endpoint.protocol === "openai.chat") {
+		const dropped = [];
+		upstream = addSampling(upstream, asked, settings, driver.info.fields, dropped);
+		if (converted) converted.dropped.push(...dropped.filter((name) => !converted.dropped.includes(name)));
+	} else if (!convert && asked !== undefined && upstream.metadata?.sampling !== undefined) {
+		const { sampling: _, ...rest } = upstream.metadata;
+		upstream = { ...upstream, metadata: rest };
 	}
 	if (options.usage === true && stream && c.front === "openai") {
 		// Internal (used by `send`): always ask for the final usage chunk so usage can be metered; `send` hides it from clients that did not ask.

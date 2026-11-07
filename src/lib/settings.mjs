@@ -53,6 +53,7 @@ import { TranslatorError } from "./errors.mjs";
  * @property {boolean} responseFormat - Map `output_config.format` to `response_format`.
  * @property {boolean} parallelToolCalls - Map `disable_parallel_tool_use` to `parallel_tool_calls: false`.
  * @property {"drop"|"error"} unknownFields - Unknown request fields are dropped (and listed in `state.dropped`) or rejected.
+ * @property {Record<string, any>} sampling - Sampling extension fields (`min_p`, `repetition_penalty`, `seed`, ...) added to requests for an OpenAI-protocol upstream when the request does not carry them, merged key by key. A request may set them itself (OpenAI front, or `metadata.sampling` on the Anthropic front). A field the upstream's driver does not accept follows `unknownFields`.
  * @property {number} pingInterval - Milliseconds of upstream silence before the SSE writer emits a `ping` (0 disables).
  * @property {"buffer"|"stream"} toolStreaming - OpenAI to Anthropic streams: `buffer` holds each tool call until its arguments are complete and emits one whole `tool_use` block (text and thinking keep streaming and appear before the block); `stream` forwards argument fragments incrementally and holds text that arrives meanwhile until the tool blocks are done.
  * @property {boolean} effortPassthrough - vLLM driver: send `xhigh` and `max` reasoning effort unchanged instead of clamping them to `high`.
@@ -94,6 +95,7 @@ export const DEFAULTS = Object.freeze({
 	responseFormat: true,
 	parallelToolCalls: true,
 	unknownFields: "drop",
+	sampling: Object.freeze({}),
 	pingInterval: 10000,
 	toolStreaming: "buffer",
 	effortPassthrough: false,
@@ -135,12 +137,14 @@ const BOOLEANS = [
  * @returns {Settings} Resolved settings.
  */
 export function resolve(...layers) {
-	const out = { ...DEFAULTS, pdf: { ...DEFAULTS.pdf } };
+	const out = { ...DEFAULTS, pdf: { ...DEFAULTS.pdf }, sampling: { ...DEFAULTS.sampling } };
 	for (const layer of layers) {
 		if (!layer) continue;
 		for (const [key, value] of Object.entries(layer)) {
 			if (value === undefined) continue;
 			if (key === "pdf") Object.assign(out.pdf, value);
+			else if (key === "sampling" && value !== null && typeof value === "object" && !Array.isArray(value))
+				Object.assign(out.sampling, value);
 			else out[key] = value;
 		}
 	}
@@ -167,6 +171,13 @@ export function resolve(...layers) {
 			code: "invalid_setting",
 			status: 500,
 			details: { key: "toolErrorMarker" }
+		});
+	}
+	if (out.sampling === null || typeof out.sampling !== "object" || Array.isArray(out.sampling)) {
+		throw new TranslatorError(`Invalid setting sampling: ${JSON.stringify(out.sampling)} (expected an object of field names and values)`, {
+			code: "invalid_setting",
+			status: 500,
+			details: { key: "sampling" }
 		});
 	}
 	// unpdf 2 throws on a render scale of 0, so catch a bad value here with the setting's name.
