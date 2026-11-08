@@ -19,3 +19,10 @@ export function isLlamacppProps(body: Record<string, any>): boolean;
  * @returns {boolean} True when it names a model or tokenizer path.
  */
 export function isSglangInfo(body: Record<string, any>): boolean;
+/**
+ * Does a `GET /api/v0/models` reply come from LM Studio? The match is strict so no other server binds: `object: "list"`, a non-empty `data`
+ * array, and every entry an `object: "model"` with string `id`, `arch`, `compatibility_type` and `state` and a known `type`.
+ * @param {Record<string, any>} body - Reply object (see `objectOf`).
+ * @returns {boolean} True for LM Studio's model listing.
+ */
+export function isLmstudioModels(body: Record<string, any>): boolean;

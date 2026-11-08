@@ -47,3 +47,25 @@ export function isLlamacppProps(body) {
 export function isSglangInfo(body) {
 	return typeof body.model_path === "string" || typeof body.tokenizer_path === "string";
 }
+
+/** Model kinds LM Studio's `GET /api/v0/models` reports in `type`. */
+const LMSTUDIO_TYPES = ["llm", "vlm", "embeddings"];
+
+/**
+ * Does a `GET /api/v0/models` reply come from LM Studio? The match is strict so no other server binds: `object: "list"`, a non-empty `data`
+ * array, and every entry an `object: "model"` with string `id`, `arch`, `compatibility_type` and `state` and a known `type`.
+ * @param {Record<string, any>} body - Reply object (see `objectOf`).
+ * @returns {boolean} True for LM Studio's model listing.
+ */
+export function isLmstudioModels(body) {
+	if (body.object !== "list" || !Array.isArray(body.data) || body.data.length === 0) return false;
+	return body.data.every(
+		(entry) =>
+			entry?.object === "model" &&
+			typeof entry.id === "string" &&
+			typeof entry.arch === "string" &&
+			typeof entry.compatibility_type === "string" &&
+			typeof entry.state === "string" &&
+			LMSTUDIO_TYPES.includes(entry.type)
+	);
+}
