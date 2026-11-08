@@ -52,6 +52,6 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 
 ## Out of scope
 
-- Message Batches, Files, Skills, Responses, Conversations, Realtime, audio, image and moderation endpoints are not provided. Embeddings are forwarded to OpenAI-protocol upstreams only (no usage reporting through `onUsage`, [#121](https://github.com/CLDMV/llm-translator/issues/121)). Batches: [#25](https://github.com/CLDMV/llm-translator/issues/25), [#29](https://github.com/CLDMV/llm-translator/issues/29); Responses: [#4](https://github.com/CLDMV/llm-translator/issues/4).
+- Message Batches, Files, Skills, Responses, Conversations, Realtime, audio, image and moderation endpoints are not provided. Embeddings are forwarded to OpenAI-protocol upstreams only. Batches: [#25](https://github.com/CLDMV/llm-translator/issues/25), [#29](https://github.com/CLDMV/llm-translator/issues/29); Responses: [#4](https://github.com/CLDMV/llm-translator/issues/4).
 - Server-side features of the Anthropic platform (MCP connector, container, fast mode, service tiers, task budgets, server-side fallback) have no equivalent on local servers.
 - Backend-specific behaviour beyond what the vLLM, llama.cpp, SGLang, Ollama, OpenAI, DeepSeek, Anthropic and generic OpenAI-compatible drivers implement (LM Studio, TGI, LocalAI and other hosted providers) is not special-cased yet. Driver issues start at [#33](https://github.com/CLDMV/llm-translator/issues/33).

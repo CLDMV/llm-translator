@@ -16,7 +16,7 @@
 /**
  * @fileoverview `embeddings.send` and `POST /v1/embeddings`: pass-through, routing, failover and error shapes.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeAll, fakeTransport, make } from "../helpers/translator.mjs";
 
 afterEach(closeAll);
@@ -234,5 +234,136 @@ describe("POST /v1/embeddings", () => {
 		await expect(sending).rejects.toThrow();
 		// The server is still healthy afterwards.
 		expect((await fetch(`${server.url}/`)).status).toBe(200);
+	});
+});
+
+describe("embeddings usage reporting", () => {
+	const base = {
+		input_tokens: 3,
+		output_tokens: null,
+		cache_read_input_tokens: null,
+		cache_creation_input_tokens: null,
+		reported: true,
+		estimated: null,
+		complete: true,
+		reason: "done",
+		model: "embed-1",
+		requested: "small",
+		upstream: "a",
+		front: "openai",
+		stream: false
+	};
+
+	it("reports a successful reply once through onUsage and reply.usage", async () => {
+		const { api } = await farm({ a: () => ({ body: vector }) }, {}, { aliases: { small: "embed-1" } });
+		const onUsage = vi.fn();
+		const reply = await api.embeddings.send({ ...ask, model: "small" }, { onUsage });
+		expect(await reply.usage).toEqual(base);
+		expect(onUsage).toHaveBeenCalledTimes(1);
+		expect(onUsage).toHaveBeenCalledWith(base);
+		expect(Object.keys(reply)).toEqual(["status", "headers", "body"]);
+	});
+
+	it("reports the endpoint that answered after a failover", async () => {
+		const { api } = await farm({ a: down, b: () => ({ body: vector }) });
+		const onUsage = vi.fn();
+		await api.embeddings.send(ask, { onUsage });
+		expect(onUsage).toHaveBeenCalledTimes(1);
+		expect(onUsage.mock.calls[0][0]).toMatchObject({ upstream: "b", reason: "done", input_tokens: 3 });
+	});
+
+	it("reports reported: false for a reply without usage", async () => {
+		const { api } = await farm({ a: () => ({ body: { ...vector, usage: undefined } }) });
+		const onUsage = vi.fn();
+		const reply = await api.embeddings.send(ask, { onUsage });
+		expect(reply.status).toBe(200);
+		expect(await reply.usage).toMatchObject({ reported: false, input_tokens: null, complete: true, reason: "done" });
+		expect(onUsage).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports error replies with no token counts", async () => {
+		const seen = [];
+		const onUsage = (report) => seen.push(report);
+		const four = await farm({ a: () => ({ status: 400, body: { error: { message: "too long" } } }) });
+		await four.api.embeddings.send(ask, { onUsage });
+		const five = await farm({ a: () => ({ status: 500, body: { error: { message: "boom" } } }) });
+		await five.api.embeddings.send(ask, { onUsage });
+		const unreachable = await farm({ a: down });
+		await unreachable.api.embeddings.send(ask, { onUsage });
+		const html = await farm({ a: () => ({ body: "<html>" }) });
+		await html.api.embeddings.send(ask, { onUsage });
+		expect(seen.map((report) => [report.reason, report.reported, report.complete, report.upstream])).toEqual([
+			["upstream_error", false, false, "a"],
+			["upstream_error", false, false, "a"],
+			["error", false, false, "a"],
+			["error", false, false, "a"]
+		]);
+	});
+
+	it("reports a request that never reached an upstream", async () => {
+		const { api } = await farm({ a: () => ({ body: vector }) });
+		const seen = [];
+		const onUsage = (report) => seen.push(report);
+		const missing = await api.embeddings.send({ ...ask, model: "nope" }, { onUsage });
+		await api.embeddings.send(null, { onUsage });
+		await api.embeddings.send({ input: "x" }, { onUsage });
+		expect(await missing.usage).toMatchObject({ reason: "error", requested: "nope", model: null, upstream: null });
+		expect(seen.map((report) => [report.reason, report.requested, report.model, report.upstream])).toEqual([
+			["error", "nope", null, null],
+			["error", null, null, null],
+			["error", null, null, null]
+		]);
+	});
+
+	it("reports an abort as aborted", async () => {
+		const controller = new AbortController();
+		const { api } = await farm({
+			a: (init) => {
+				controller.abort(new Error("gone"));
+				init.signal.throwIfAborted();
+			}
+		});
+		const onUsage = vi.fn();
+		await api.embeddings.send(ask, { signal: controller.signal, onUsage });
+		expect(onUsage).toHaveBeenCalledTimes(1);
+		expect(onUsage.mock.calls[0][0]).toMatchObject({ reason: "aborted", complete: false, upstream: "a" });
+	});
+
+	it("warns and carries on when onUsage throws or rejects", async () => {
+		const { api } = await farm({ a: () => ({ body: vector }) });
+		const events = [];
+		api.events.on("warning", (event) => events.push(event));
+		const thrown = await api.embeddings.send(ask, {
+			onUsage: () => {
+				throw new Error("meter down");
+			}
+		});
+		const rejected = await api.embeddings.send(ask, { onUsage: async () => Promise.reject(new Error("db down")) });
+		expect([thrown.status, rejected.status]).toEqual([200, 200]);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		const usage = events.filter((event) => event.type === "usage");
+		expect(usage.map((event) => [event.kind, event.message])).toEqual([
+			["threw", "onUsage threw: meter down"],
+			["rejected", "onUsage rejected: db down"]
+		]);
+	});
+
+	it("passes the authorize context to onUsage on the server route", async () => {
+		const { api } = await farm({ a: () => ({ body: vector }) });
+		const calls = [];
+		const server = await api.server.start({
+			port: 0,
+			authorize: () => ({ ok: true, context: { keyId: "k1" } }),
+			onUsage: (report, context) => calls.push([report, context])
+		});
+		const res = await fetch(`${server.url}/v1/embeddings`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(ask)
+		});
+		expect(res.status).toBe(200);
+		expect(calls).toHaveLength(1);
+		expect(calls[0][1]).toEqual({ keyId: "k1" });
+		expect(calls[0][0]).toMatchObject({ input_tokens: 3, requested: "embed-1", upstream: "a", front: "openai", reason: "done" });
 	});
 });
