@@ -25,7 +25,8 @@ describe("driver info", () => {
 		const api = await make({ upstreams: ["http://x.test"], detect: false });
 		const infos = Object.fromEntries(["vllm", "anthropic", "openai", "compatible"].map((name) => [name, api.driver[name].info()]));
 		expect(infos.vllm).toMatchObject({ name: "vllm", protocol: "openai.chat", order: 10, auth: "bearer" });
-		expect(infos.anthropic).toMatchObject({ name: "anthropic", protocol: "anthropic.messages", order: 20, auth: "x-api-key" });
+		expect(infos.anthropic).toMatchObject({ name: "anthropic", protocol: "anthropic.messages", order: 38, auth: "x-api-key" });
+		expect(infos.anthropic).toMatchObject({ hosts: ["api.anthropic.com"], probes: ["/v1/models"] });
 		expect(infos.openai).toMatchObject({ name: "openai", protocol: "openai.chat", order: 30 });
 		expect(infos.compatible).toMatchObject({ name: "compatible", order: 100 });
 		expect(infos.vllm.paths.tokenize).toBe("/tokenize");
@@ -170,8 +171,7 @@ describe("openai / anthropic / compatible", () => {
 		const api = await make({ upstreams: ["http://x.test"], detect: false });
 		expect(api.driver.openai.detect({ endpoint: { url: "https://api.openai.com/v1" } })).toEqual({ host: "api.openai.com" });
 		expect(api.driver.openai.detect({ endpoint: { url: "https://example.com" } })).toBeNull();
-		expect(api.driver.anthropic.detect({ endpoint: { url: "https://api.anthropic.com" } })).toEqual({ host: "api.anthropic.com" });
-		expect(api.driver.anthropic.detect({ endpoint: { url: "nope" } })).toBeNull();
+		expect(await api.driver.anthropic.detect({ endpoint: { url: "https://api.anthropic.com" } })).toEqual({ host: "api.anthropic.com" });
 	});
 
 	it("compatible detect reports reachability", async () => {

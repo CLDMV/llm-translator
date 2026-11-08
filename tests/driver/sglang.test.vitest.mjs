@@ -108,8 +108,11 @@ describe("sglang detection", () => {
 	it("is detected after vLLM and llama.cpp without extra sequential waits (each path once)", async () => {
 		const transport = server({ "/get_server_info": INFO, "/v1/models": models("sglang") });
 		await make({ upstreams: ["http://sg.test"], transport });
-		const paths = transport.calls.map((call) => new URL(call.url).pathname).sort();
+		const bearer = transport.calls.filter((call) => !call.init.headers["anthropic-version"]);
+		const paths = bearer.map((call) => new URL(call.url).pathname).sort();
 		expect(paths).toEqual(["/api/version", "/get_server_info", "/props", "/v1/models", "/version"]);
+		// The Anthropic driver's own request, sent in the same batch.
+		expect(transport.calls.filter((call) => call.init.headers["anthropic-version"])).toHaveLength(1);
 	});
 });
 

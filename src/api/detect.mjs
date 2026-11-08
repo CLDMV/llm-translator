@@ -72,12 +72,14 @@ async function bind(c, endpoint, network, probe) {
 		// Paths are fetched once per endpoint and shared between drivers (see `http.probe`). Host-name drivers need no network. At the
 		// first driver that probes, the paths every remaining driver declares in `info().probes` are requested together, so detection
 		// costs the slowest probe, not their sum, and a server that matches an earlier driver is never asked for them.
+		// A driver that lists `hosts` and matches this endpoint's host is answered without a request, so it does not start the batch.
+		const host = URL.canParse(endpoint.url) ? new URL(endpoint.url).hostname : "";
 		const context = { endpoint, ...probe, probes: new Map() };
 		let fetched = false;
 		for (const [index, candidate] of c.drivers.entries()) {
-			if (!fetched && candidate.info.probes?.length > 0) {
+			if (!fetched && candidate.info.probes?.length > 0 && !candidate.info.hosts?.includes(host)) {
 				fetched = true;
-				for (const later of c.drivers.slice(index)) for (const path of later.info.probes ?? []) http.probe(context, path);
+				for (const later of c.drivers.slice(index)) for (const path of later.info.probes ?? []) http.probe(context, path, later.info);
 			}
 			facts = await detectWith(candidate, context);
 			if (facts) {

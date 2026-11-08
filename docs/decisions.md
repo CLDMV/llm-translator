@@ -201,7 +201,7 @@ Scope: the library translates between Anthropic Messages and OpenAI Chat Complet
 
 - **Context.** The OpenAI and Anthropic APIs need credentials to probe, and probing arbitrary servers for Anthropic compatibility is unreliable.
 - **Decision.** The `openai` and `anthropic` drivers match `api.openai.com` and `api.anthropic.com` without network access. Other Anthropic-compatible servers set `backend: "anthropic"`.
-- **Rationale.** The hosts are unambiguous, and the explicit setting is a complete workaround. Automatic detection of other hosts is tracked as FI-175.
+- **Rationale.** The hosts are unambiguous, and the explicit setting is a complete workaround. Automatic detection of other hosts is tracked as FI-175 and now done by a strict `/v1/models` shape probe (see the Detection section of [drivers.md](drivers.md)); the host names are still matched without a request.
 - **Alternatives.** A response-shape probe (risk of binding OpenAI-style servers wrongly).
 
 ### D-33 Routing: alias, serving endpoint, default; native forwarding when protocols match

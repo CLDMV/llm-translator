@@ -57,15 +57,24 @@ export function headers(endpoint, auth = "bearer", extra) {
  * GET a path of the endpoint for detection. Within one detection pass (`context.probes` is a shared `Map`) each path is requested
  * once and every driver that asks for it gets the same result, so a path fetched for one backend (for example `/v1/models`) is
  * not fetched again for the next. Never rejects; treat the result as read-only.
+ *
+ * Without `driver` the request carries the upstream's bearer key. A driver whose `info()` says `auth: "x-api-key"` or carries
+ * `headers` passes its `info()` so the probe is sent the way the driver talks to its own backend; that request is a different
+ * request from the bearer one, so it is cached under its own key.
  * @param {any} context - `{ endpoint, transport, signal, timeout, probes? }`.
  * @param {string} path - Path starting with `/`.
+ * @param {any} [driver] - A driver's `info()`; its `auth` and `headers` shape the request.
  * @returns {Promise<{ok: boolean, status: number, body: any, error?: Error}>} Outcome (see `json`).
  */
-export function probe({ endpoint, transport, signal, timeout, probes }, path) {
-	const run = () => json(transport, join(endpoint.url, path), { method: "GET", headers: headers(endpoint), signal, timeout });
+export function probe({ endpoint, transport, signal, timeout, probes }, path, driver) {
+	const custom = driver !== undefined && (driver.auth === "x-api-key" || driver.headers !== undefined);
+	const request = custom ? { auth: driver.auth, extra: driver.headers } : {};
+	const run = () =>
+		json(transport, join(endpoint.url, path), { method: "GET", headers: headers(endpoint, request.auth, request.extra), signal, timeout });
 	if (!probes) return run();
-	if (!probes.has(path)) probes.set(path, run());
-	return probes.get(path);
+	const key = custom ? JSON.stringify([path, request.auth, request.extra]) : path;
+	if (!probes.has(key)) probes.set(key, run());
+	return probes.get(key);
 }
 
 /**

@@ -91,7 +91,9 @@ describe("llamacpp detection", () => {
 		expect(vllm.calls.some((call) => call.url.endsWith("/props"))).toBe(false);
 		const generic = server({ "/v1/models": models("library") });
 		await make({ upstreams: ["http://llama.test"], transport: generic });
-		const gets = generic.calls.map((call) => new URL(call.url).pathname);
+		// The Anthropic driver's own `/v1/models` request (different headers) is the one extra request; the bearer one is still shared.
+		const gets = generic.calls.filter((call) => !call.init.headers["anthropic-version"]).map((call) => new URL(call.url).pathname);
+		expect(generic.calls.filter((call) => call.init.headers["anthropic-version"])).toHaveLength(1);
 		expect(gets.filter((path) => path === "/v1/models")).toHaveLength(1);
 		expect(gets.filter((path) => path === "/props")).toHaveLength(1);
 	});
