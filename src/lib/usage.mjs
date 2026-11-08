@@ -90,6 +90,56 @@ function usageChunk(data) {
 }
 
 /**
+ * Hand a report to the caller's `onUsage`. An exception or a rejection becomes a warning and never reaches the reply.
+ * @param {UsageReport} report - The report.
+ * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
+ * @param {(message: string, details: {kind: "threw" | "rejected"}) => void} warn - Receives a message when `onUsage` throws or rejects.
+ * @returns {void}
+ */
+export function deliver(report, onUsage, warn) {
+	try {
+		Promise.resolve(onUsage?.(report)).catch((cause) => warn(`onUsage rejected: ${cause?.message ?? cause}`, { kind: "rejected" }));
+	} catch (cause) {
+		warn(`onUsage threw: ${cause?.message ?? cause}`, { kind: "threw" });
+	}
+}
+
+/**
+ * Add up a field across reports: null when no report knew it.
+ * @param {any[]} values - The field's values (numbers or null).
+ * @returns {number | null} The sum of the known values, or null.
+ */
+const total = (values) => {
+	const known = values.filter((value) => value !== null && value !== undefined);
+	return known.length === 0 ? null : known.reduce((sum, value) => sum + value, 0);
+};
+
+/**
+ * Combine the reports of the branches of one fanned-out request (`n` above 1) into the single report the caller gets. Token fields and
+ * estimates are summed (null stays null when no branch knew the field), `reported` is true when any branch reported, `complete` only
+ * when every branch did, and the reason is the lead branch's (the one that failed first) when there is one, else the first branch that
+ * did not finish normally, else `"done"`. The request facts (`model`, `upstream`) come from the first branch that knew them.
+ * @param {UsageReport[]} reports - One report per branch, in choice order.
+ * @param {number} [lead] - Index of the branch whose failure ended the request, or -1 when none did.
+ * @returns {UsageReport} The combined report.
+ */
+export function combine(reports, lead = -1) {
+	const out = { ...reports[0] };
+	for (const field of FIELDS) out[field] = total(reports.map((report) => report[field]));
+	out.reported = reports.some((report) => report.reported);
+	const estimates = reports.map((report) => report.estimated).filter(Boolean);
+	out.estimated =
+		estimates.length === 0
+			? null
+			: { input_tokens: total(estimates.map((e) => e.input_tokens)), output_tokens: total(estimates.map((e) => e.output_tokens)) };
+	out.complete = reports.every((report) => report.complete);
+	out.reason = (reports[lead] ?? reports.find((report) => report.reason !== "done") ?? reports[0]).reason;
+	out.model = reports.find((report) => report.model)?.model ?? null;
+	out.upstream = reports.find((report) => report.upstream)?.upstream ?? null;
+	return out;
+}
+
+/**
  * Create the meter for one request.
  * @param {{front: "anthropic" | "openai", requested: string | null, model: string | null, upstream: string | null, stream: boolean}} meta - Request facts; `model` and `upstream` may be filled in later.
  * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
@@ -137,11 +187,7 @@ export function meter(meta, onUsage, warn) {
 		/** @type {any} */
 		const report = { ...seen, reported, estimated, complete: outcome === "done", reason: outcome, ...meta };
 		settle(report);
-		try {
-			Promise.resolve(onUsage?.(report)).catch((cause) => warn(`onUsage rejected: ${cause?.message ?? cause}`, { kind: "rejected" }));
-		} catch (cause) {
-			warn(`onUsage threw: ${cause?.message ?? cause}`, { kind: "threw" });
-		}
+		deliver(report, onUsage, warn);
 	};
 
 	return {
