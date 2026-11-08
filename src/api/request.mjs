@@ -29,7 +29,7 @@ import { LIMITS } from "../lib/toolsearch.mjs";
 import { warn } from "../lib/warn.mjs";
 import { emit } from "../lib/events.mjs";
 import { fit, pinBody } from "../lib/effort.mjs";
-import { strictTools } from "../lib/strict.mjs";
+import { relax, strictTools } from "../lib/strict.mjs";
 import { TranslatorError } from "../lib/errors.mjs";
 
 /**
@@ -63,19 +63,21 @@ export async function request(body, options = {}) {
 }
 
 /**
- * Report strict tools the upstream cannot honour: a schema outside the strict subset (an error under `unknownFields: "error"`, a
- * warning otherwise) and a driver whose backend does not enforce strict use. The tools are sent either way.
+ * Handle strict tools the upstream cannot honour. A schema outside the strict subset is an error under `unknownFields: "error"`;
+ * otherwise the tool is sent without `strict` (also on a retry, which only skips the warnings) and a warning says so. A driver whose
+ * backend does not enforce strict use gets a warning listing the tools that are still strict. Tools with conforming schemas keep `strict`.
  * @param {any} c - Captured translator parts.
  * @param {any} upstream - Upstream body.
  * @param {any} endpoint - Chosen endpoint.
  * @param {any} driver - The endpoint's driver.
  * @param {any} settings - Resolved settings for the endpoint.
  * @param {any} options - The `request` options.
+ * @returns {any} The upstream body to send: `upstream` itself, or a copy when `strict` was removed from a tool.
  * @throws {TranslatorError} For a schema outside the subset when `unknownFields` is `"error"`.
  */
 function checkStrict(c, upstream, endpoint, driver, settings, options) {
 	const strict = strictTools(upstream);
-	if (strict.length === 0) return;
+	if (strict.length === 0) return upstream;
 	const bad = strict.filter((tool) => tool.problems.length > 0);
 	if (bad.length > 0 && settings.unknownFields === "error") {
 		throw new TranslatorError(`tools: ${bad[0].name}: schema is outside the strict subset (${bad[0].problems.join("; ")})`, {
@@ -83,20 +85,23 @@ function checkStrict(c, upstream, endpoint, driver, settings, options) {
 			param: "tools"
 		});
 	}
-	if (options.retry === true) return;
+	const sent = relax(upstream);
+	if (options.retry === true) return sent;
 	const tell = (message, kind) => warn(c.config, c.state, message, { kind, endpoint: endpoint.name, log: options.log });
 	for (const tool of bad) {
 		tell(
-			`Upstream ${endpoint.name}: strict tool ${tool.name} has a schema outside the strict subset: ${tool.problems.join("; ")}`,
+			`Upstream ${endpoint.name}: strict tool ${tool.name} has a schema outside the strict subset: ${tool.problems.join("; ")} (sent without strict)`,
 			"strict"
 		);
 	}
-	if (driver.info.strict !== true) {
+	const kept = strict.filter((tool) => tool.problems.length === 0);
+	if (driver.info.strict !== true && kept.length > 0) {
 		tell(
-			`Upstream ${endpoint.name}: the ${driver.name} backend does not enforce strict tool use (${strict.map((t) => t.name).join(", ")})`,
+			`Upstream ${endpoint.name}: the ${driver.name} backend does not enforce strict tool use (${kept.map((t) => t.name).join(", ")})`,
 			"strict"
 		);
 	}
+	return sent;
 }
 
 /**
@@ -170,7 +175,7 @@ async function prepare(c, body, options, picked) {
 	if (text && !convert && c.front === "openai") upstream = images.strip(upstream);
 	if (options.tools === false) upstream = tools.strip(upstream);
 	upstream.model = model;
-	checkStrict(c, upstream, endpoint, driver, settings, options);
+	upstream = checkStrict(c, upstream, endpoint, driver, settings, options);
 	// A model with a configured level list gets an effort it supports (and the default one when the request names none).
 	if (levels && endpoint.protocol === "openai.chat")
 		fit(upstream, levels, model, (message, details) =>
