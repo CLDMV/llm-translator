@@ -136,7 +136,7 @@ A record holds the client request, the request converted for the upstream and th
 }
 ```
 
-A non-stream reply is recorded as `response.body` (parsed JSON, or the text when it is not JSON). Upstream error replies are recorded the same way. A stream is recorded when it ends, fails or is closed early, as `response.raw` (the upstream's SSE text) and `response.events` (the events sent to the client), each capped at 1,000,000 characters; `response.truncated` is `true` when either was cut. Only the endpoint that answered is recorded (not failed-over attempts), and a request that never reaches an upstream is not recorded. Embeddings are not captured.
+A non-stream reply is recorded as `response.body` (parsed JSON, or the text when it is not JSON). Upstream error replies are recorded the same way. A stream is recorded when it ends, fails or is closed early, as `response.raw` (the upstream's SSE text) and `response.events` (the events sent to the client), each capped at 1,000,000 characters; `response.truncated` is `true` when either was cut. Only the endpoint that answered is recorded (not failed-over attempts), and a request that never reaches an upstream is not recorded. Embeddings are not captured. Failed-over attempts and embeddings are tracked in [#122](https://github.com/CLDMV/llm-translator/issues/122).
 
 Credentials are never written: the value of any header whose name contains `key`, `token`, `secret`, `auth`, `cookie` or `password` (case-insensitive; this covers `authorization`, `proxy-authorization`, `x-api-key` and `api-key`) is replaced by `[redacted]`, in the upstream request and the upstream reply. Bodies are recorded as they are, so treat the files as sensitive: they contain prompts and completions.
 

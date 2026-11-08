@@ -25,7 +25,7 @@ Streaming replies use `content-type: text/event-stream`. Errors are always retur
 | Every upstream is unreachable                                   | 502     | `upstream_unreachable`    |
 | The upstream refused it                                         | as sent | the upstream's own `code` |
 
-Anthropic-protocol endpoints in a pool are skipped. Embeddings are not streamed, and their usage is not reported to `onUsage`.
+Anthropic-protocol endpoints in a pool are skipped. Embeddings are not streamed, and their usage is not reported to `onUsage` yet ([#121](https://github.com/CLDMV/llm-translator/issues/121)).
 
 ## CLI
 
