@@ -18,7 +18,7 @@
  */
 
 import { resolve } from "../../../../../../../lib/settings.mjs";
-import { restoreName } from "../../../../../../../lib/ids.mjs";
+import { restoreId, restoreName } from "../../../../../../../lib/ids.mjs";
 import { detailOf } from "../../../../../../../lib/thinking.mjs";
 import { toOpenAIFinish, toOpenAIUsage } from "../../../../../../../lib/finish.mjs";
 
@@ -35,6 +35,7 @@ import { toOpenAIFinish, toOpenAIUsage } from "../../../../../../../lib/finish.m
 export function response(message, state, settings) {
 	const s = resolve(settings);
 	const toolNames = state?.toolNames ?? {};
+	const toolIds = state?.toolIds ?? {};
 	const text = [];
 	const reasoning = [];
 	const toolCalls = [];
@@ -55,7 +56,7 @@ export function response(message, state, settings) {
 		else if (block.type === "thinking") reasoning.push(block.thinking);
 		else if (block.type === "tool_use") {
 			toolCalls.push({
-				id: block.id,
+				id: restoreId(toolIds, block.id),
 				type: "function",
 				function: { name: restoreName(toolNames, block.name), arguments: JSON.stringify(block.input ?? {}) }
 			});

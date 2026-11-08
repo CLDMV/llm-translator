@@ -40,6 +40,7 @@ describe("openai chat request to anthropic request", () => {
 			includeUsage: false,
 			reasoningField: "reasoning",
 			toolNames: {},
+			toolIds: {},
 			dropped: []
 		});
 	});

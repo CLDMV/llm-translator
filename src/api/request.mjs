@@ -136,7 +136,8 @@ async function prepare(c, body, options, picked) {
 		({ body: upstream, state: converted } = await convert.request(body, settings, {
 			producer: producerOf(endpoint),
 			budget: options.budget,
-			listed: levels !== undefined
+			listed: levels !== undefined,
+			toolCallIds: driver.info.toolCallIds
 		}));
 		if (converted.toolSearch?.capped) {
 			warn(
