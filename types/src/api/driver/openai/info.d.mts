@@ -18,12 +18,13 @@
  */
 /**
  * Describe the OpenAI driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, paths: Record<string,string>}} Driver facts.
  */
 export function info(): {
     name: string;
     protocol: string;
     order: number;
     auth: string;
+    strict: boolean;
     paths: Record<string, string>;
 };

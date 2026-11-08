@@ -20,7 +20,7 @@
 
 /**
  * Describe the Anthropic driver (native Messages API upstream).
- * @returns {{name: string, protocol: string, order: number, auth: string, headers: Record<string,string>, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, headers: Record<string,string>, paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
@@ -28,6 +28,7 @@ export function info() {
 		protocol: "anthropic.messages",
 		order: 20,
 		auth: "x-api-key",
+		strict: true,
 		headers: { "anthropic-version": "2023-06-01" },
 		paths: { messages: "/v1/messages", models: "/v1/models", count: "/v1/messages/count_tokens" }
 	};

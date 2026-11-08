@@ -19,6 +19,7 @@
  */
 import { TranslatorError } from "./errors.mjs";
 import * as pool from "./pool.mjs";
+import { valid as validCapture } from "./record.mjs";
 import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
 
 /**
@@ -105,6 +106,12 @@ export function normalize(config = {}) {
 	if (config.onEvent !== undefined && typeof config.onEvent !== "function") {
 		throw new TranslatorError("onEvent must be a function", { code: "INVALID_CONFIG", status: 500 });
 	}
+	if (!validCapture(config.capture)) {
+		throw new TranslatorError("capture must be false, a directory path or a function (got " + JSON.stringify(config.capture) + ")", {
+			code: "INVALID_CONFIG",
+			status: 500
+		});
+	}
 	return {
 		front,
 		endpoints: list.map(endpoint),
@@ -116,6 +123,7 @@ export function normalize(config = {}) {
 		detectTimeout: config.detectTimeout ?? 5000,
 		transport: config.transport,
 		logs,
+		capture: config.capture || false,
 		events: config.events !== false,
 		onEvent: config.onEvent
 	};

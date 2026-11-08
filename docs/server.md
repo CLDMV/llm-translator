@@ -9,9 +9,23 @@ The server speaks one client protocol, the front, chosen with `front` (default `
 | Front       | Routes                                                                                                                                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` and `/api/hello` |
-| `openai`    | `POST /v1/chat/completions`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/`                                            |
+| `openai`    | `POST /v1/chat/completions`, `POST /v1/embeddings`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/`                     |
 
 Streaming replies use `content-type: text/event-stream`. Errors are always returned in the front's own error shape.
+
+### Embeddings
+
+`POST /v1/embeddings` (OpenAI front only; also `api.embeddings.send(body, { signal, headers })` as a library call) forwards the request to an OpenAI-protocol upstream that lists the model. The body and the reply pass through unchanged, except that `model` is replaced by the upstream's name for it after `aliases`. Routing, pools and failover work as for chat (a connection error or a 5xx moves on to the next endpoint serving the model), `apiKey` and `authorize` apply, and `authorize` sees the routed model. Errors use the OpenAI shape:
+
+| Case                                                            | Status  | `error.code`              |
+| --------------------------------------------------------------- | ------- | ------------------------- |
+| Body is not an object, or `model` is missing                    | 400     | `invalid_body`            |
+| No upstream lists the model (there is no single-model fallback) | 404     | `model_not_found`         |
+| The model is served only by Anthropic-protocol upstreams        | 400     | `embeddings_unsupported`  |
+| Every upstream is unreachable                                   | 502     | `upstream_unreachable`    |
+| The upstream refused it                                         | as sent | the upstream's own `code` |
+
+Anthropic-protocol endpoints in a pool are skipped. Embeddings are not streamed, and their usage is not reported to `onUsage` yet ([#121](https://github.com/CLDMV/llm-translator/issues/121)).
 
 ## CLI
 

@@ -20,7 +20,7 @@
 
 /**
  * Describe the SGLang driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
@@ -28,6 +28,7 @@ export function info() {
 		protocol: "openai.chat",
 		order: 50,
 		auth: "bearer",
+		strict: false,
 		probes: ["/get_server_info"],
 		fields: [
 			"top_k",
