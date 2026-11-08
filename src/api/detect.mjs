@@ -23,6 +23,7 @@ import { TranslatorError } from "../lib/errors.mjs";
 import { warn } from "../lib/warn.mjs";
 import { emit } from "../lib/events.mjs";
 import * as http from "../lib/http.mjs";
+import { validToolIdPolicy } from "../lib/ids.mjs";
 
 /**
  * Bind every endpoint to a driver. `backend: "auto"` endpoints are probed (drivers tried in `info().order`, the generic
@@ -41,6 +42,15 @@ export async function detect(options = {}) {
 				code: "invalid_driver",
 				status: 500
 			});
+		}
+	}
+	for (const driver of c.drivers) {
+		const ids = driver.info.toolCallIds;
+		if (ids !== undefined && !validToolIdPolicy(ids)) {
+			throw new TranslatorError(
+				`Driver ${driver.name}: info().toolCallIds must be { alphabet, min?, max? } with a character-class alphabet and positive integer bounds`,
+				{ code: "invalid_driver", status: 500 }
+			);
 		}
 	}
 	const probe = { transport: c.state.transport, signal: options.signal, timeout: c.config.detectTimeout };

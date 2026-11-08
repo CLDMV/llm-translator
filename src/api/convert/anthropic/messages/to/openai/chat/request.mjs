@@ -19,7 +19,7 @@
 
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
-import { createNameFitter } from "../../../../../../../lib/ids.mjs";
+import { createIdFitter, createNameFitter } from "../../../../../../../lib/ids.mjs";
 import { sanitize } from "../../../../../../../lib/schema.mjs";
 import { NOTE } from "../../../../../../../lib/images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
@@ -54,7 +54,7 @@ const BILLING = "x-anthropic-billing-header:";
  * tool-name map, thinking mode, fields that were dropped).
  * @param {any} body - Anthropic `POST /v1/messages` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
- * @param {{ producer?: string, budget?: ReturnType<typeof createBudget>, listed?: boolean }} [context] - `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts). `listed` says the model has a configured effort list, so the default `medium` effort is left to it.
+ * @param {{ producer?: string, budget?: ReturnType<typeof createBudget>, listed?: boolean, toolCallIds?: { alphabet: string, min?: number, max?: number } }} [context] - `toolCallIds` is the driver's tool-call id policy: ids that do not satisfy it are rewritten (and recorded in `state.toolIds` for the way back). `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts). `listed` says the model has a configured effort list, so the default `medium` effort is left to it.
  * @returns {Promise<{ body: any, state: any }>} OpenAI request body and conversion state.
  * @throws {TranslatorError} For malformed requests, unsupported content when configured to error, or PDF limit violations.
  */
@@ -70,11 +70,16 @@ export async function request(body, settings, context) {
 		thinking: body.thinking?.type ?? null,
 		reasoningField: s.reasoningField,
 		toolNames: {},
+		toolIds: {},
 		dropped: []
 	};
 	// Names the producer of the reply this request answers (signed into reasoning data) and the one a signature must match to be restored.
 	if (context?.producer !== undefined) state.producer = context.producer;
 	const fit = createNameFitter({ max: 64, map: state.toolNames });
+	// Without a policy ids pass through; with one, every id of the request is fitted together so a call and its result agree.
+	const fitId = context?.toolCallIds
+		? createIdFitter({ policy: context.toolCallIds, ids: idsOf(body.messages), map: state.toolIds })
+		: (id) => id;
 	// Every tool name is fitted in request order before anything else, whether or not the tool is offered, so a name's wire form never
 	// depends on which deferred tools happen to be loaded.
 	for (const tool of body.tools ?? []) if (tool.type === undefined || tool.type === "custom") fit(tool.name);
@@ -97,6 +102,7 @@ export async function request(body, settings, context) {
 		s,
 		state,
 		fit,
+		fitId,
 		system,
 		thinkingTurnsToKeep(body.context_management, state),
 		context?.budget ?? createBudget()
@@ -185,16 +191,33 @@ function asBlocks(content) {
 }
 
 /**
+ * Every tool-use id and tool-result id of a conversation, in order.
+ * @param {any[]} messages - Anthropic messages.
+ * @returns {unknown[]} The ids as the client sent them.
+ */
+function idsOf(messages) {
+	const ids = [];
+	for (const message of messages) {
+		for (const block of asBlocks(message.content)) {
+			if (block.type === "tool_use") ids.push(block.id);
+			else if (block.type === "tool_result") ids.push(block.tool_use_id);
+		}
+	}
+	return ids;
+}
+
+/**
  * Convert a list of Anthropic messages.
  * @param {any[]} messages - Anthropic messages.
  * @param {import("../../../../../../../lib/settings.mjs").Settings} s - Settings.
  * @param {any} state - Conversion state.
  * @param {(name: string) => string} fit - Tool name fitter.
+ * @param {(id: unknown) => unknown} fitId - Tool-call id fitter (the identity without a driver policy).
  * @param {string} system - Leading system text.
  * @param {number} keepThinking - Reasoning-bearing assistant turns to keep.
  * @returns {Promise<{ messages: any[], prefill: boolean }>} OpenAI messages and whether the last message is a prefill.
  */
-async function convertMessages(messages, s, state, fit, system, keepThinking, budget) {
+async function convertMessages(messages, s, state, fit, fitId, system, keepThinking, budget) {
 	const out = [];
 	const hoisted = [];
 	const toolInputs = new Map();
@@ -281,7 +304,7 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 				const images = inner.filter((p) => p.type === "image_url");
 				let content = inner.some((p) => p.type === "tool_reference") ? inner.filter((p) => p.type !== "image_url") : texts.join("\n");
 				if (images.length > 0) {
-					toolParts.push({ type: "text", text: `Image output of tool call ${block.tool_use_id}:` }, ...images);
+					toolParts.push({ type: "text", text: `Image output of tool call ${fitId(block.tool_use_id)}:` }, ...images);
 					if (content === "") content = "(image output attached in the next message)";
 				}
 				if (block.is_error === true && s.toolErrors)
@@ -289,7 +312,7 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 						typeof content === "string"
 							? `${s.toolErrorMarker}${content}`
 							: [{ type: "text", text: s.toolErrorMarker.trimEnd() }, ...content];
-				out.push({ role: "tool", tool_call_id: block.tool_use_id, content });
+				out.push({ role: "tool", tool_call_id: fitId(block.tool_use_id), content });
 			}
 			const all = [...toolParts, ...parts];
 			if (all.length > 0) pushUser(all);
@@ -309,7 +332,7 @@ async function convertMessages(messages, s, state, fit, system, keepThinking, bu
 				} else if (block.type === "tool_use") {
 					toolInputs.set(block.id, block.input);
 					turn.tool_calls.push({
-						id: block.id,
+						id: fitId(block.id),
 						type: "function",
 						function: { name: fit(block.name), arguments: JSON.stringify(block.input ?? {}) }
 					});

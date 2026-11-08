@@ -19,7 +19,7 @@
 
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
-import { anthropicToolId, createNameFitter } from "../../../../../../../lib/ids.mjs";
+import { anthropicToolId, createIdFitter, createNameFitter } from "../../../../../../../lib/ids.mjs";
 import { parseArguments } from "../../../../../../../lib/arguments.mjs";
 import { sanitize } from "../../../../../../../lib/schema.mjs";
 import { blocksOf } from "../../../../../../../lib/thinking.mjs";
@@ -55,10 +55,11 @@ const DATA_URL = /^data:([^;,]+);base64,(.*)$/s;
  * tool results are grouped into one user turn with the results first, as Anthropic requires.
  * @param {any} chatBody - OpenAI `POST /v1/chat/completions` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
+ * @param {{ toolCallIds?: { alphabet: string, min?: number, max?: number } }} [context] - `toolCallIds` is the driver's tool-call id policy: ids that do not satisfy it are rewritten (and recorded in `state.toolIds` for the way back).
  * @returns {Promise<{ body: any, state: any }>} Anthropic request body and conversion state.
  * @throws {TranslatorError} For malformed requests, `n` above 1, unknown roles, or unknown fields when configured to error.
  */
-export async function request(chatBody, settings) {
+export async function request(chatBody, settings, context) {
 	const s = resolve(settings);
 	if (chatBody === null || typeof chatBody !== "object" || !Array.isArray(chatBody.messages)) {
 		throw new TranslatorError("messages is a required property", { code: "invalid_request", param: "messages" });
@@ -73,9 +74,14 @@ export async function request(chatBody, settings) {
 		includeUsage: chatBody.stream_options?.include_usage === true,
 		reasoningField: s.reasoningField,
 		toolNames: {},
+		toolIds: {},
 		dropped: []
 	};
 	const fit = createNameFitter({ max: 128, map: state.toolNames });
+	// With a driver policy every id of the request is fitted together (a call and its result agree); without one ids are only made Anthropic-valid.
+	const fitId = context?.toolCallIds
+		? createIdFitter({ policy: context.toolCallIds, ids: idsOf(chatBody.messages), map: state.toolIds })
+		: anthropicToolId;
 
 	for (const key of Object.keys(chatBody)) {
 		if (HANDLED.has(key) || SILENT.has(key)) continue;
@@ -115,7 +121,7 @@ export async function request(chatBody, settings) {
 				for (const call of message.tool_calls ?? []) {
 					blocks.push({
 						type: "tool_use",
-						id: anthropicToolId(call.id),
+						id: fitId(call.id),
 						name: fit(call.function.name),
 						input: parseArguments(call.function.arguments)
 					});
@@ -125,7 +131,7 @@ export async function request(chatBody, settings) {
 				break;
 			}
 			case "tool": {
-				const result = { type: "tool_result", tool_use_id: anthropicToolId(message.tool_call_id), content: plainText(message.content) };
+				const result = { type: "tool_result", tool_use_id: fitId(message.tool_call_id), content: plainText(message.content) };
 				if (s.toolErrorInference) {
 					// The marker is only a convention (see `toolErrors` on the other direction), so it is looked for only when asked.
 					const marker = s.toolErrorMarker.trimEnd();
@@ -201,6 +207,20 @@ export async function request(chatBody, settings) {
 
 /** System instruction that stands in for `response_format: json_object` when `jsonObject` is `"instruction"`. */
 const JSON_INSTRUCTION = "Respond with a single valid JSON object and nothing else.";
+
+/**
+ * Every tool-call id and tool-message id of a conversation, in order.
+ * @param {any[]} messages - Chat messages.
+ * @returns {unknown[]} The ids as the client sent them.
+ */
+function idsOf(messages) {
+	const ids = [];
+	for (const message of messages) {
+		if (message.role === "assistant") for (const call of message.tool_calls ?? []) ids.push(call.id);
+		else if (message.role === "tool") ids.push(message.tool_call_id);
+	}
+	return ids;
+}
 
 /**
  * Record a dropped field once.

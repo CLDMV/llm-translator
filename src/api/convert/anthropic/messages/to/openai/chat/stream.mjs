@@ -19,7 +19,7 @@
 
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { anthropicToOpenAIType, anthropicTypeToStatus } from "../../../../../../../lib/errors.mjs";
-import { completionId, restoreName } from "../../../../../../../lib/ids.mjs";
+import { completionId, restoreId, restoreName } from "../../../../../../../lib/ids.mjs";
 import { toOpenAIFinish, toOpenAIUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
 import { detailOf } from "../../../../../../../lib/thinking.mjs";
@@ -39,6 +39,7 @@ import { detailOf } from "../../../../../../../lib/thinking.mjs";
 export async function* stream(source, state, settings) {
 	const s = resolve(settings);
 	const toolNames = state?.toolNames ?? {};
+	const toolIds = state?.toolIds ?? {};
 	const includeUsage = state?.includeUsage ?? true;
 	const created = Math.floor(Date.now() / 1000);
 	const tools = new Map();
@@ -84,7 +85,9 @@ export async function* stream(source, state, settings) {
 					tools.set(data.index, tools.size);
 					const name = restoreName(toolNames, block.name);
 					yield chunk({
-						tool_calls: [{ index: tools.get(data.index), id: block.id, type: "function", function: { name, arguments: "" } }]
+						tool_calls: [
+							{ index: tools.get(data.index), id: restoreId(toolIds, block.id), type: "function", function: { name, arguments: "" } }
+						]
 					});
 				}
 			} else if (data.type === "content_block_delta") {
