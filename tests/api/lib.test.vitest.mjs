@@ -73,12 +73,13 @@ describe("lib/http", () => {
 		expect(await http.json(okay, "http://x.test", { body: { q: 1 }, timeout: 500, signal: new AbortController().signal })).toEqual({
 			ok: true,
 			status: 200,
-			body: { a: 1 }
+			body: { a: 1 },
+			headers: { "content-type": "application/json" }
 		});
 		const alone = await http.json(okay, "http://x.test", { timeout: 500 });
 		expect(alone.ok).toBe(true);
 		const text = fakeTransport(() => new Response("hello", { status: 500 }));
-		expect(await http.json(text, "http://x.test")).toEqual({ ok: false, status: 500, body: "hello" });
+		expect(await http.json(text, "http://x.test")).toMatchObject({ ok: false, status: 500, body: "hello" });
 		const empty = fakeTransport(() => new Response("", { status: 200 }));
 		expect((await http.json(empty, "http://x.test")).body).toBeNull();
 		const fail = await http.json(() => Promise.reject(new Error("net")), "http://x.test");

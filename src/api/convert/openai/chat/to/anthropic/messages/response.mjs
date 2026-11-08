@@ -72,11 +72,12 @@ export function response(completion, state, settings) {
 	if (text !== "") content.push({ type: "text", text });
 
 	const toolNames = state?.toolNames ?? {};
+	const toolIds = state?.toolIds ?? {};
 	const calls = message.tool_calls ?? [];
 	for (const call of calls) {
 		content.push({
 			type: "tool_use",
-			id: anthropicToolId(call.id),
+			id: anthropicToolId(call.id, toolIds),
 			name: restoreName(toolNames, call.function.name),
 			input: parseArguments(call.function.arguments)
 		});

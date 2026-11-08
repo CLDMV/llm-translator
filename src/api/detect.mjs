@@ -23,6 +23,7 @@ import { TranslatorError } from "../lib/errors.mjs";
 import { warn } from "../lib/warn.mjs";
 import { emit } from "../lib/events.mjs";
 import * as http from "../lib/http.mjs";
+import { validToolIdPolicy } from "../lib/ids.mjs";
 
 /**
  * Bind every endpoint to a driver. `backend: "auto"` endpoints are probed (drivers tried in `info().order`, the generic
@@ -41,6 +42,15 @@ export async function detect(options = {}) {
 				code: "invalid_driver",
 				status: 500
 			});
+		}
+	}
+	for (const driver of c.drivers) {
+		const ids = driver.info.toolCallIds;
+		if (ids !== undefined && !validToolIdPolicy(ids)) {
+			throw new TranslatorError(
+				`Driver ${driver.name}: info().toolCallIds must be { alphabet, min?, max? } with a character-class alphabet and positive integer bounds`,
+				{ code: "invalid_driver", status: 500 }
+			);
 		}
 	}
 	const probe = { transport: c.state.transport, signal: options.signal, timeout: c.config.detectTimeout };
@@ -72,12 +82,14 @@ async function bind(c, endpoint, network, probe) {
 		// Paths are fetched once per endpoint and shared between drivers (see `http.probe`). Host-name drivers need no network. At the
 		// first driver that probes, the paths every remaining driver declares in `info().probes` are requested together, so detection
 		// costs the slowest probe, not their sum, and a server that matches an earlier driver is never asked for them.
+		// A driver that lists `hosts` and matches this endpoint's host is answered without a request, so it does not start the batch.
+		const host = URL.canParse(endpoint.url) ? new URL(endpoint.url).hostname : "";
 		const context = { endpoint, ...probe, probes: new Map() };
 		let fetched = false;
 		for (const [index, candidate] of c.drivers.entries()) {
-			if (!fetched && candidate.info.probes?.length > 0) {
+			if (!fetched && candidate.info.probes?.length > 0 && !candidate.info.hosts?.includes(host)) {
 				fetched = true;
-				for (const later of c.drivers.slice(index)) for (const path of later.info.probes ?? []) http.probe(context, path);
+				for (const later of c.drivers.slice(index)) for (const path of later.info.probes ?? []) http.probe(context, path, later.info);
 			}
 			facts = await detectWith(candidate, context);
 			if (facts) {

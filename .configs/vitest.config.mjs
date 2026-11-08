@@ -17,6 +17,7 @@ import { defineConfig, mergeConfig } from "vitest/config";
 import { devCondition } from "@cldmv/configs/vitest.config.mjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { existsSync } from "node:fs";
 
 // Anchor the project root to the package directory so include/exclude work no
 // matter what cwd vitest is invoked from.
@@ -28,10 +29,37 @@ const blobRun = process.argv.includes("--reporter=blob");
 // devCondition() puts the package's llm-translator-dev condition (which routes the "."
 // export to src/) ahead of Vite's default conditions for the client and SSR resolvers,
 // and on the worker command line.
+// LLM_TRANSLATOR_TEST_DIST=1 (set by `node tests/run-vitest.mjs --dist`) runs the whole suite against the built dist/ folder.
+const distMode = process.env.LLM_TRANSLATOR_TEST_DIST === "1";
+const srcDir = path.join(root, "src") + path.sep;
+const distDir = path.join(root, "dist") + path.sep;
+
+if (distMode && !existsSync(path.join(root, "dist", "index.mjs"))) {
+	throw new Error("LLM_TRANSLATOR_TEST_DIST is set but dist/ is missing: run `npm run build` first (npm run test:dist does).");
+}
+
+// dist/** mirrors src/** file by file, so every module a test imports from src/ exists at the same relative path under
+// dist/. The plugin resolves the id normally, then moves any result under src/ to dist/. Vitest resolves static imports,
+// dynamic import() and vi.doMock/doUnmock ids through the same plugin pipeline, so a mocked ../../src/lib/pdf.mjs and the
+// ./lib/pdf.mjs that dist/index.mjs imports land on the same dist file.
+const srcToDist = {
+	name: "llm-translator-src-to-dist",
+	enforce: "pre",
+	async resolveId(source, importer, options) {
+		const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+		if (resolved && !resolved.external && resolved.id.startsWith(srcDir)) {
+			return { ...resolved, id: distDir + resolved.id.slice(srcDir.length) };
+		}
+		return null;
+	}
+};
+
 export default mergeConfig(
-	devCondition({ root }),
+	// In dist mode devCondition is skipped, so the package's "." export resolves to dist/ like it does for a consumer.
+	distMode ? { root } : devCondition({ root }),
 	defineConfig({
 		root,
+		plugins: distMode ? [srcToDist] : [],
 		test: {
 			include: ["tests/**/*.test.vitest.mjs"],
 			exclude: ["node_modules"],
@@ -45,6 +73,8 @@ export default mergeConfig(
 			// passed" / "Tests Y passed" summary is unaffected — every built-in
 			// reporter prints it regardless of per-test verbosity.
 			reporters: ["dot"],
+			setupFiles: distMode ? ["tests/helpers/dist-guard.mjs"] : [],
+			// Coverage measures src/, so run-vitest.mjs refuses --dist together with --coverage.
 			coverage: {
 				provider: "v8",
 				include: ["src/**/*.mjs"],

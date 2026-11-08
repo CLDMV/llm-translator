@@ -5,7 +5,7 @@
  * tool-name map, thinking mode, fields that were dropped).
  * @param {any} body - Anthropic `POST /v1/messages` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
- * @param {{ producer?: string, budget?: ReturnType<typeof createBudget>, listed?: boolean }} [context] - `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts). `listed` says the model has a configured effort list, so the default `medium` effort is left to it.
+ * @param {{ producer?: string, budget?: ReturnType<typeof createBudget>, listed?: boolean, toolCallIds?: { alphabet: string, min?: number, max?: number } }} [context] - `toolCallIds` is the driver's tool-call id policy: ids that do not satisfy it are rewritten (and recorded in `state.toolIds` for the way back). `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts). `listed` says the model has a configured effort list, so the default `medium` effort is left to it.
  * @returns {Promise<{ body: any, state: any }>} OpenAI request body and conversion state.
  * @throws {TranslatorError} For malformed requests, unsupported content when configured to error, or PDF limit violations.
  */
@@ -13,6 +13,11 @@ export function request(body: any, settings?: Partial<import("../../../../../../
     producer?: string;
     budget?: ReturnType<typeof createBudget>;
     listed?: boolean;
+    toolCallIds?: {
+        alphabet: string;
+        min?: number;
+        max?: number;
+    };
 }): Promise<{
     body: any;
     state: any;

@@ -388,7 +388,8 @@ export function register(fastify, options, captured) {
 				if (!reply.raw.writableFinished) controller.abort();
 			});
 			// An abort answers 499 into a reply nobody reads.
-			return reject(reply, await api.embed(request.body, { signal: controller.signal, log: request.log }));
+			const onUsage = typeof options.onUsage === "function" ? (report) => options.onUsage(report, contexts.get(request)) : undefined;
+			return reject(reply, await api.embed(request.body, { signal: controller.signal, onUsage, log: request.log }));
 		});
 	}
 

@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T09:42:33-08:00 (1793554953)
+ *	@Last modified time: 2026-11-07T20:56:53-08:00 (1794113813)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -16,7 +16,7 @@
 /**
  * @fileoverview Checks the built dist/ output end to end: the ESM entry and the CJS shim expose the same exports, and a
  * translator composed from `dist/api` (slothlet scans it at runtime) converts, routes and serves. Run after
- * `npm run build` (see `test:dist`).
+ * `npm run build` (see `test:cjs`).
  */
 "use strict";
 

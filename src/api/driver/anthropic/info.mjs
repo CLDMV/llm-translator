@@ -20,15 +20,19 @@
 
 /**
  * Describe the Anthropic driver (native Messages API upstream).
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, headers: Record<string,string>, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hosts: string[], probes: string[], headers: Record<string,string>, paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
 		name: "anthropic",
 		protocol: "anthropic.messages",
-		order: 20,
+		order: 38,
 		auth: "x-api-key",
 		strict: true,
+		// Hosted API: matched by name with no request, so the batched probes below are not started for it.
+		hosts: ["api.anthropic.com"],
+		// Any other host: `GET /v1/models` sent the Anthropic way, requested together with the later drivers' probes.
+		probes: ["/v1/models"],
 		headers: { "anthropic-version": "2023-06-01" },
 		paths: { messages: "/v1/messages", models: "/v1/models", count: "/v1/messages/count_tokens" }
 	};

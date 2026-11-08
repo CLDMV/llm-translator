@@ -17,18 +17,18 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.6.0 (November 2026)
+### Latest: v0.7.0 (November 2026)
 
-- **Embeddings pass-through** — `POST /v1/embeddings` on the OpenAI front, and `api.embeddings.send()` as a library call, forward to an OpenAI-protocol upstream that lists the model. Aliases, pools, failover, `apiKey` and `authorize` work as they do for chat.
-- **Sampling, strict tools and capture** — the `sampling` setting and `metadata.sampling` send `min_p`, `repetition_penalty` and similar fields to upstreams that accept them. `strict` now round trips: a tool whose schema is outside the strict subset is sent without `strict` and reported, and a backend that does not enforce strict use gets a warning. The `capture` option records redacted request and response pairs to a directory or a callback.
-- [View full v0.6.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.6.0.md)
+- **Anthropic-protocol servers detected by probe** — an Anthropic-compatible server on any host is now recognised from its `GET /v1/models` answer, matched strictly on the Anthropic model-list shape, so it no longer needs `backend: "anthropic"`. api.anthropic.com is still matched by host name.
+- **Tool-call ids, embeddings usage and capture** — a driver can declare a tool-call id format with `info().toolCallIds`, and ids are rewritten into it and mapped back statelessly. Embeddings usage now reaches `onUsage`. `capture` records every failed-over attempt, linked by `exchange`, and captures embeddings too.
+- [View full v0.7.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.7.0.md)
 
 ### Recent Releases
 
+- **v0.6.0** (November 2026) — `POST /v1/embeddings` pass-through, sampling extensions per upstream and per request, `strict` tool use end to end with a schema check, and the `capture` option for debugging ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.6.0.md))
 - **v0.5.0** (November 2026) — everything the library logs is available as events, logging is opt-in through `logs`, `json_object` reaches Anthropic upstreams as a schema with a fallback, and refusals carry `stop_details` ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.5.0.md))
 - **v0.4.0** (November 2026) — per-model effort levels and aliases that pin effort and thinking, non-standard finish reasons, a configurable tool-error marker, per-upstream `pingInterval` and a Node.js 22.15 floor ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.4.0.md))
 - **v0.3.1** (November 2026) — patched the dev-only `minimatch` and `katex` lint dependencies and corrected the v0.3.0 issue links; no runtime changes ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.1.md))
-- **v0.3.0** (November 2026) — usage reporting from `send()`, the `route()` leaf and the server `authorize` hook; drivers for llama.cpp, Ollama, SGLang and the DeepSeek API, endpoint pools, `reasoningRoundTrip` and `toolSearch`; requires Node.js 24 ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.3.0.md))
 
 📚 **For complete version history and detailed release notes, see the [docs/changelog/](https://github.com/CLDMV/llm-translator/tree/master/docs/changelog/) folder.**
 
