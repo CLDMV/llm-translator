@@ -24,5 +24,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
  * @returns {Promise<any>} Slothlet api.
  */
 export async function composeApi() {
-	return await slothlet({ base: path.join(root, "src/api"), mode: "eager", silent: true, import: (url) => import(url) });
+	// LLM_TRANSLATOR_TEST_DIST=1 (node tests/run-vitest.mjs --dist) composes the built dist/api instead of src/api.
+	const base = path.join(root, process.env.LLM_TRANSLATOR_TEST_DIST === "1" ? "dist/api" : "src/api");
+	return await slothlet({ base, mode: "eager", silent: true, import: (url) => import(url) });
 }

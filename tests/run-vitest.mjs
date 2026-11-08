@@ -24,6 +24,7 @@
  *   node tests/run-vitest.mjs                 # run all tests
  *   node tests/run-vitest.mjs --coverage      # with coverage (verbose)
  *   node tests/run-vitest.mjs --coverage-quiet # with coverage (progress bar + summary)
+ *   node tests/run-vitest.mjs --dist          # run every test against the built dist/ (run `npm run build` first)
  *   node tests/run-vitest.mjs <pattern...>     # filter by path/name
  *
  *   Args before a `--` delimiter are forwarded to Vitest; args after it are test
@@ -47,7 +48,15 @@ const testPatterns = delimiter === -1 ? argv.filter((a) => !a.startsWith("-")) :
 
 const coverageQuiet = forwarded.includes("--coverage-quiet");
 const coverage = coverageQuiet || forwarded.includes("--coverage");
-const passthrough = forwarded.filter((a) => a !== "--coverage" && a !== "--coverage-quiet");
+// --dist is consumed here: it sets the env var the vitest config reads (child processes spawned by the runner inherit it).
+const dist = forwarded.includes("--dist");
+const passthrough = forwarded.filter((a) => a !== "--coverage" && a !== "--coverage-quiet" && a !== "--dist");
+
+if (dist && coverage) {
+	console.error("--dist can't be combined with coverage: coverage measures src/, and --dist tests dist/.");
+	process.exit(1);
+}
+if (dist) process.env.LLM_TRANSLATOR_TEST_DIST = "1";
 
 // VITEST_WORKERS overrides the worker count; ignore an unset / invalid / non-positive value.
 const parsedWorkers = parseInt(process.env.VITEST_WORKERS ?? "", 10);
