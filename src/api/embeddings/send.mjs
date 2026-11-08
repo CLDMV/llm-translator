@@ -25,6 +25,7 @@ import * as pool from "../../lib/pool.mjs";
 import { emit } from "../../lib/events.mjs";
 import { meter as createMeter } from "../../lib/usage.mjs";
 import { warn } from "../../lib/warn.mjs";
+import { start as record } from "../../lib/record.mjs";
 
 const PATH = "/v1/embeddings";
 
@@ -93,25 +94,34 @@ export async function send(body, options = {}) {
 	const upstream = { ...body, model: picked.model };
 	meter.meta.model = picked.model;
 	let last;
+	// The id of the first attempt's capture record, shared by every attempt of this request.
+	let group = null;
 	for (let turn = 0; turn < members.length; turn++) {
 		const endpoint = members[turn];
 		meter.meta.upstream = endpoint.name;
 		const driver = c.driver(endpoint);
 		endpoint.health.inflight++;
 		endpoint.health.requests++;
+		const url = http.join(endpoint.url, PATH);
+		const headers = {
+			"content-type": "application/json",
+			accept: "application/json",
+			...driver.info.headers,
+			...http.headers(endpoint, driver.info.auth, options.headers)
+		};
+		const recorder = record(c, {
+			body,
+			sent: { upstream: endpoint.name, url, headers, body: upstream, state: { stream: false } },
+			front: "openai",
+			requested: meter.meta.requested,
+			log: options.log,
+			exchange: group,
+			attempt: turn + 1
+		});
+		group ??= recorder.id;
 		let result;
 		try {
-			result = await http.json(transport, http.join(endpoint.url, PATH), {
-				method: "POST",
-				headers: {
-					"content-type": "application/json",
-					accept: "application/json",
-					...driver.info.headers,
-					...http.headers(endpoint, driver.info.auth, options.headers)
-				},
-				body: upstream,
-				signal: options.signal
-			});
+			result = await http.json(transport, url, { method: "POST", headers, body: upstream, signal: options.signal });
 		} finally {
 			endpoint.health.inflight--;
 		}
@@ -119,6 +129,7 @@ export async function send(body, options = {}) {
 		const unreachable = result.status === 0;
 		if (!unreachable && result.status < 500) {
 			pool.succeeded(endpoint);
+			recorder.reply(result.status, result.headers, result.body);
 			if (!result.ok) {
 				return end(
 					error(result.status, result.body, {}, { front: "openai", upstream: endpoint.name, native: true, model: body.model }),
@@ -133,6 +144,8 @@ export async function send(body, options = {}) {
 		}
 		const reason = unreachable ? `Could not reach the upstream (${endpoint.name}): ${result.error?.message}` : `HTTP ${result.status}`;
 		pool.failed(c.config, endpoint, reason);
+		const response = unreachable ? { error: reason } : { status: result.status, headers: result.headers, body: result.body };
+		recorder.attempt(response, turn + 1 < members.length ? reason : undefined);
 		emit(c, {
 			type: "error",
 			kind: unreachable ? "transport" : "upstream",

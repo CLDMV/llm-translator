@@ -279,10 +279,51 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 	const release = () => held.health.inflight--;
 	let result;
 	let failure;
+	// The id of the first attempt's record (shared by every attempt of this request) and the number of attempts made.
+	let group = null;
+	let tried = 0;
+	/**
+	 * Start the capture record of the attempt just made (the shape `lib/record` takes).
+	 * @param {Record<string,string>} [headers] - Response headers of the attempt.
+	 * @returns {any} Recorder.
+	 */
+	const begin = (headers) => {
+		const recorder = record(captured, {
+			body,
+			sent: upstream,
+			front: meter.meta.front,
+			requested: meter.meta.requested,
+			headers,
+			log: options.log,
+			exchange: group,
+			attempt: tried
+		});
+		group ??= recorder.id;
+		return recorder;
+	};
+	/**
+	 * Capture an attempt that did not produce the reply: the status, headers and body of a 5xx, or the message of an unreachable upstream.
+	 * The body is read only when capture is on. A body that cannot be read is recorded as null and never affects the request.
+	 * @param {string} [failover] - Why the request moved on to the next endpoint, omitted for the final failure.
+	 * @returns {Promise<void>} Resolves once the record is handed over.
+	 */
+	const keep = async (failover) => {
+		const recorder = begin();
+		if (!recorder.on) return;
+		if (result === undefined) return recorder.attempt({ error: failure.message }, failover);
+		let text = null;
+		try {
+			text = failure ?? (await parse(result));
+		} catch {
+			// A body that cannot be read is recorded as null.
+		}
+		recorder.attempt({ status: result.status, headers: http.plain(result.headers), body: text }, failover);
+	};
 	try {
 		for (;;) {
 			const endpoint = held;
 			endpoint.health.requests++;
+			tried++;
 			note(upstream);
 			// Only a connection error (or timeout) or a 5xx before the first byte of the reply moves on to the next endpoint of the pool; 4xx,
 			// the abort of the caller and anything that happens once the reply has started never do.
@@ -331,9 +372,13 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 			}
 			if (next === null) {
 				// Nothing left to try: the last endpoint's failure is the reply.
-				if (result === undefined) throw failure;
+				if (result === undefined) {
+					await keep();
+					throw failure;
+				}
 				break;
 			}
+			await keep(reason);
 			announce({
 				type: "failover",
 				level: "warn",
@@ -361,14 +406,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 	held = null;
 	meter.usage.then(() => slot.health.inflight--);
 	const headers = http.plain(result.headers);
-	const recorder = record(captured, {
-		body,
-		sent: upstream,
-		front: meter.meta.front,
-		requested: meter.meta.requested,
-		headers,
-		log: options.log
-	});
+	const recorder = begin(headers);
 	if (!result.ok) {
 		const rejected = failure ?? (await parse(result));
 		recorder.reply(result.status, headers, rejected);
