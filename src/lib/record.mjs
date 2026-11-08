@@ -52,6 +52,10 @@ export function valid(value) {
 }
 
 const OFF = {
+	/** No record is kept, so there is nothing to read a failed attempt's body for. */
+	on: false,
+	/** No record id while capture is off. */
+	id: null,
 	/**
 	 * Capture is off: the stream is returned as it is.
 	 * @param {any} source - Stream.
@@ -68,14 +72,19 @@ const OFF = {
 	 * Capture is off: nothing is recorded.
 	 * @returns {void}
 	 */
-	reply() {}
+	reply() {},
+	/**
+	 * Capture is off: nothing is recorded.
+	 * @returns {void}
+	 */
+	attempt() {}
 };
 
 /**
  * Begin the record of one exchange. With `capture` unset this returns a stand-in that does nothing.
  * @param {{config: any, state: any}} ctx - Translator `{ config, state }`.
- * @param {{body: any, sent: any, front: string, requested: string | null, headers?: Record<string, string>, log?: any}} exchange - Client body, the upstream request (result of `request`), front and the logger of the request.
- * @returns {{raw: (source: any) => any, events: (source: any) => any, reply: (status: number, headers: Record<string, string>, body: any) => void}} Recorder: `raw` taps the upstream stream bytes, `events` taps the client events and writes the record when the stream ends, `reply` writes the record of a non-stream reply.
+ * @param {{body: any, sent: any, front: string, requested: string | null, headers?: Record<string, string>, log?: any, exchange?: string | null, attempt: number}} exchange - Client body, the upstream request (result of `request`), front, the logger of the request, and where this attempt sits: `exchange` is the id of the first attempt of the request (omit it for the first attempt) and `attempt` the 1-based number.
+ * @returns {{on: boolean, id: string, raw: (source: any) => any, events: (source: any) => any, reply: (status: number, headers: Record<string, string>, body: any) => void, attempt: (response: any, failover?: string) => void}} Recorder: `id` is the record id (pass it as `exchange` for the later attempts), `raw` taps the upstream stream bytes, `events` taps the client events and writes the record when the stream ends, `reply` writes the record of a non-stream reply, `attempt` writes the record of an attempt that did not produce the reply (`failover` is the reason the request moved on to the next endpoint, absent for the final failure).
  */
 export function start({ config, state }, exchange) {
 	const sink = config.capture;
@@ -86,6 +95,8 @@ export function start({ config, state }, exchange) {
 	const record = {
 		time,
 		id,
+		exchange: exchange.exchange ?? id,
+		attempt: exchange.attempt,
 		front: exchange.front,
 		requested: exchange.requested,
 		model: sent.body?.model ?? null,
@@ -135,6 +146,8 @@ export function start({ config, state }, exchange) {
 		);
 	};
 	return {
+		on: true,
+		id,
 		raw(source) {
 			return (async function* () {
 				const decoder = new TextDecoder();
@@ -171,6 +184,11 @@ export function start({ config, state }, exchange) {
 		},
 		reply(status, headers, body) {
 			record.response = { status, headers: redact(headers), body };
+			emit();
+		},
+		attempt(response, failover) {
+			record.response = response.headers ? { ...response, headers: redact(response.headers) } : response;
+			if (failover !== undefined) record.failover = failover;
 			emit();
 		}
 	};

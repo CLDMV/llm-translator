@@ -67,11 +67,12 @@ export function plain(source: Headers | Record<string, string> | undefined): Rec
  * @param {Function} transport - fetch-compatible function.
  * @param {string} url - Absolute URL.
  * @param {any} [options] - `{ method, headers, body, signal, timeout }`.
- * @returns {Promise<{ok: boolean, status: number, body: any, error?: Error}>} Outcome.
+ * @returns {Promise<{ok: boolean, status: number, body: any, headers?: Record<string,string>, error?: Error}>} Outcome (`headers` only when a response arrived).
  */
 export function json(transport: Function, url: string, options?: any): Promise<{
     ok: boolean;
     status: number;
     body: any;
+    headers?: Record<string, string>;
     error?: Error;
 }>;

@@ -101,7 +101,7 @@ export function plain(source) {
  * @param {Function} transport - fetch-compatible function.
  * @param {string} url - Absolute URL.
  * @param {any} [options] - `{ method, headers, body, signal, timeout }`.
- * @returns {Promise<{ok: boolean, status: number, body: any, error?: Error}>} Outcome.
+ * @returns {Promise<{ok: boolean, status: number, body: any, headers?: Record<string,string>, error?: Error}>} Outcome (`headers` only when a response arrived).
  */
 export async function json(transport, url, options = {}) {
 	const { timeout, signal, body, ...rest } = options;
@@ -122,7 +122,7 @@ export async function json(transport, url, options = {}) {
 		} catch {
 			parsed = text === "" ? null : text;
 		}
-		return { ok: res.ok, status: res.status, body: parsed };
+		return { ok: res.ok, status: res.status, body: parsed, headers: plain(res.headers) };
 	} catch (error) {
 		return { ok: false, status: 0, body: null, error };
 	}

@@ -111,7 +111,7 @@ In server mode, when the Fastify `logger` is enabled, events also go to it as st
 
 ## Capture for debugging
 
-`capture` records the exchanges that pass through `send` (and so the server) for troubleshooting a new backend. It is off by default.
+`capture` records the exchanges that pass through `send` and `embeddings.send` (and so the server) for troubleshooting a new backend. It is off by default.
 
 | Value             | Effect                                                                                                                                                                       |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -119,12 +119,14 @@ In server mode, when the Fastify `logger` is enabled, events also go to it as st
 | `"<directory>"`   | One JSON file per exchange, named `<ms>-<id>.json`, written when the reply is complete. A relative path resolves against `process.cwd()` and a missing directory is created. |
 | `(record) => any` | Called with each record (an exception or a rejection is contained).                                                                                                          |
 
-A record holds the client request, the request converted for the upstream and the upstream's reply:
+A record holds the client request, the request converted for the upstream and the upstream's reply. Every attempt at an upstream is its own record: `exchange` is shared by all attempts of one request (it is the `id` of the first attempt, so for a request that was tried once it equals `id`) and `attempt` counts them from 1.
 
 ```json
 {
 	"time": 1793995200000,
 	"id": "9f2c1a7b3d4e",
+	"exchange": "9f2c1a7b3d4e",
+	"attempt": 1,
 	"front": "anthropic",
 	"requested": "my-alias",
 	"model": "qwen3-coder",
@@ -136,7 +138,20 @@ A record holds the client request, the request converted for the upstream and th
 }
 ```
 
-A non-stream reply is recorded as `response.body` (parsed JSON, or the text when it is not JSON). Upstream error replies are recorded the same way. A stream is recorded when it ends, fails or is closed early, as `response.raw` (the upstream's SSE text) and `response.events` (the events sent to the client), each capped at 1,000,000 characters; `response.truncated` is `true` when either was cut. Only the endpoint that answered is recorded (not failed-over attempts), and a request that never reaches an upstream is not recorded. Embeddings are not captured. Failed-over attempts and embeddings are tracked in [#122](https://github.com/CLDMV/llm-translator/issues/122).
+A non-stream reply is recorded as `response.body` (parsed JSON, or the text when it is not JSON). Upstream error replies are recorded the same way. A stream is recorded when it ends, fails or is closed early, as `response.raw` (the upstream's SSE text) and `response.events` (the events sent to the client), each capped at 1,000,000 characters; `response.truncated` is `true` when either was cut. A request that moved on to another endpoint (a 5xx before the reply started, or an unreachable upstream) leaves one record per failed attempt, with `failover` set to the reason given in the `failover` event and `response` holding what the endpoint said, `{ status, headers, body }`, or `{ error: "<message>" }` when it could not be reached. The last attempt, the one that answered or the final failure that became the reply, is recorded as described above and has no `failover`. A failed attempt's body is only read when capture is on. A request that fails before it reaches an upstream is not recorded.
+
+```json
+{
+	"id": "5a1e0c9d7b21",
+	"exchange": "5a1e0c9d7b21",
+	"attempt": 1,
+	"endpoint": "a",
+	"failover": "HTTP 503",
+	"response": { "status": 503, "headers": {}, "body": { "error": { "message": "busy" } } }
+}
+```
+
+`embeddings.send` is captured the same way, with `front: "openai"` and `stream: false`: the upstream request and its JSON reply, credentials redacted, and one record per attempt. An embeddings request that is rejected before any upstream is tried (an invalid body, an unknown model, a model only Anthropic-protocol upstreams serve) is not recorded.
 
 Credentials are never written: the value of any header whose name contains `key`, `token`, `secret`, `auth`, `cookie` or `password` (case-insensitive; this covers `authorization`, `proxy-authorization`, `x-api-key` and `api-key`) is replaced by `[redacted]`, in the upstream request and the upstream reply. Bodies are recorded as they are, so treat the files as sensitive: they contain prompts and completions.
 
