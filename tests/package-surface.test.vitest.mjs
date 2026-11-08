@@ -29,7 +29,7 @@ describe("package surface", () => {
 	});
 
 	it("CJS entry re-exports the ESM entry", () => {
-		const cjs = require("../src/index.cjs");
+		const cjs = require(process.env.LLM_TRANSLATOR_TEST_DIST === "1" ? "../dist/index.cjs" : "../src/index.cjs");
 		expect(
 			Object.keys(cjs)
 				.filter((key) => key !== "__esModule")
