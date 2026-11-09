@@ -1,7 +1,7 @@
 /**
  *
  *	@Project: @cldmv/llm-translator
- *	@Filename: /src/api/src/api/driver/lmstudio/info.mjs
+ *	@Filename: /src/api/driver/lmstudio/info.mjs
  *	@Date: 2026-10-31T14:00:00-07:00 (1793480400)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
