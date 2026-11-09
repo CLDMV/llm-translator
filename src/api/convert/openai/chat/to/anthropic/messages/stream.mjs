@@ -174,7 +174,7 @@ export async function* stream(source, state, settings) {
 
 	function* toolCall(call) {
 		let key = call.index;
-		if (key === undefined) key = call.id === undefined ? lastTool : tools.size;
+		if (key === undefined) key = call.id === undefined || call.id === null ? lastTool : tools.size;
 		lastTool = key;
 		let entry = tools.get(key);
 		if (entry === undefined) {

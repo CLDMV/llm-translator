@@ -15,8 +15,9 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `anthropic`  | `anthropic.messages` | 38    | host `api.anthropic.com` (no request), or `GET /v1/models` answers with an Anthropic model list |
 | `llamacpp`   | `openai.chat`        | 40    | `GET /props` has llama-server fields, or `GET /v1/models` lists `owned_by: "llamacpp"`          |
 | `sglang`     | `openai.chat`        | 50    | `GET /get_server_info` has `model_path`, or `GET /v1/models` lists `owned_by: "sglang"`         |
+| `lmstudio`   | `openai.chat`        | 55    | `GET /api/v0/models` is LM Studio's model listing (strict shape check)                          |
 | `ollama`     | `openai.chat`        | 60    | `GET /api/version` returns a version                                                            |
-| `compatible` | `openai.chat`        | 100   | always; the fallback for LM Studio and other servers without a driver                           |
+| `compatible` | `openai.chat`        | 100   | always; the fallback for servers without a driver                                               |
 
 A driver folder contains these files, all optional except `info`:
 
@@ -31,7 +32,7 @@ A driver folder contains these files, all optional except `info`:
 
 `createTranslator` binds every upstream during creation. Upstreams with `backend: "auto"` (the default) are probed with the drivers in `info().order`; the first driver whose `detect` returns facts wins. The generic `compatible` driver always matches, so detection cannot fail outright. If the server did not answer at all, `compatible` is bound with `facts.reachable === false` and one `detect` warning is emitted (printed on the console when `logs` is on, see [events.md](events.md)).
 
-- Servers that no earlier driver claims (a generic OpenAI-compatible server on any host that is not a hosted API) are sent the later drivers' probes at startup: `GET /props`, `/get_server_info` and `/api/version`, with the upstream's bearer key like every other probe, plus `GET /v1/models` with the Anthropic headers (see below), in parallel and bounded by `detectTimeout`. Set `backend` to skip them.
+- Servers that no earlier driver claims (a generic OpenAI-compatible server on any host that is not a hosted API) are sent the later drivers' probes at startup: `GET /props`, `/get_server_info`, `/api/v0/models` and `/api/version`, with the upstream's bearer key like every other probe, plus `GET /v1/models` with the Anthropic headers (see below), in parallel and bounded by `detectTimeout`. Set `backend` to skip them.
 - Detection costs the slowest probe, not their sum. Host-name drivers need no network. At the first driver that declares `probes`, the paths of every remaining driver are requested in parallel, and each path is requested once per upstream and shared (`GET /v1/models` is fetched once for vLLM, llama.cpp and the generic driver). A server that matches an earlier driver, vLLM first, is never asked for the later drivers' paths.
 - Set `backend: "vllm"` (or any driver name) on an upstream to skip detection and all probing for it. `version` can be supplied so version-mapped settings still apply.
 - Set `detect: false` on the translator to skip every request. Auto upstreams are then bound to `compatible`.
@@ -42,6 +43,7 @@ A driver folder contains these files, all optional except `info`:
 - vLLM: `GET /version` and `GET /v1/models` in parallel. Facts are `{ version, models, maxModelLen }`. After binding, when the resolved `inlineSystem` is still `auto`, `POST /tokenize` is called with `[system, user, system, user]`; success means the chat template tolerates inline system messages (`keep`), failure means they are folded into the neighbouring user turn (`user`). Unless `images` is configured, a one-token chat completion with a 1x1 image is also sent: a `400` saying the model is not multimodal sets `images: false` (so images and PDF page images become text notes instead of failing every request), success keeps `images: true`, and any other answer (including a timeout) leaves the default. Settings you configure yourself are never probed.
 - llama.cpp: `GET /props` (fields `default_generation_settings`, `total_slots` or `build_info`) and `GET /v1/models` (`owned_by: "llamacpp"`). Facts are `{ models, build, vision }`; `vision` comes from `modalities.vision` in newer builds and sets `images`.
 - SGLang: `GET /get_server_info` and `GET /v1/models` (`owned_by: "sglang"`). Facts are `{ version, models, modelPath, reasoningParser, toolCallParser }`. SGLang also answers `/version`, so vLLM detection steps aside when `/v1/models` names `sglang` or `llamacpp`, and, when a server answers `/version` without naming itself vLLM (for example because its model list failed), when `/get_server_info` or `/props` identify SGLang or llama.cpp. A real vLLM server names itself in `/v1/models` and is never asked for those paths.
+- LM Studio: `GET /api/v0/models`, LM Studio's REST listing. Bound only when `object` is `"list"`, `data` is a non-empty array and every entry has `object: "model"`, string `id`, `arch`, `compatibility_type` and `state`, and a `type` of `llm`, `vlm` or `embeddings`; OpenAI's plain `/v1/models` shape or any other server's reply can never pass. Facts are `{ models, loaded }`: the ids of the chat models (embedding models left out) and those with `state: "loaded"`.
 - Ollama: `GET /api/version` (and the shared `GET /v1/models` for the model list). Facts are `{ version, models }`.
 - Anthropic: `api.anthropic.com` is matched by host name with no request. Any other host is asked for `GET /v1/models` with `anthropic-version` and the upstream's key as `x-api-key` (no bearer header), and is bound only when the answer is an Anthropic model list: no `object` key, a boolean `has_more`, `first_id` and `last_id` that are null or strings and name the first and last entry of `data` (both null when it is empty), and every entry has `type: "model"`, a string `id` and a string `display_name`. OpenAI's `{ object: "list", data: [{ id, object: "model" }] }` can never pass, and a server that answers with the OpenAI shape whatever headers it is sent stays on the generic driver. Facts are `{ models }`, so the served model list comes from the server. The driver is tried at order 38, after the host-name drivers and before llama.cpp. The request is sent together with the other later probes, so it adds one request but no round trip, and it is a separate request from the bearer `GET /v1/models` the other drivers share because the headers differ. A server that requires a key and has none configured answers 401 and is not detected; set `apiKey`, or `backend: "anthropic"`.
 - OpenAI, DeepSeek and Mistral: a host-name check, no request of their own. (vLLM is tried first and probes any host; a hosted API answers it with a 404 or an error.)
@@ -94,6 +96,17 @@ What the `mistral` driver changes compared with the generic one:
 - `reasoningField: "reasoning_content"`, `maxTokensField: "max_tokens"`, `topK: false`, `prefill: "none"`, and no thinking switch. Reasoning thinking blocks are not sent back to Mistral.
 
 Nothing here has been run against the real API: the field names, the id format and the chunk shapes are from the [Mistral API reference](https://docs.mistral.ai/api/) and its [reasoning guide](https://docs.mistral.ai/capabilities/reasoning/), and real-backend validation is tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70).
+
+## LM Studio
+
+What the `lmstudio` driver changes compared with the generic one:
+
+- It is found through `GET /api/v0/models`, which only LM Studio answers in that shape (see Detection), and it declares that path in `info().probes`, so the request is shared with and bounded like every other probe (`detectTimeout`, once per upstream).
+- Settings are the generic conservative set: no `top_k`, no prefill, no thinking switch, usage on the last content chunk.
+- Streamed tool calls whose later chunks carry `id: null` (LM Studio sends the id only on the first fragment) stay one `tool_use` block. The shared stream converter treats a `null` id the same as a missing one, with or without an `index`. Models without native tool support use prompt-based calls and can leave text in `content` next to the call; that text is passed through as a `text` block.
+- LM Studio also serves an Anthropic-compatible `POST /v1/messages` ([LM Studio docs](https://lmstudio.ai/docs/developer/anthropic-compat)). To use it instead of the OpenAI-style translation, set `backend: "anthropic"` on the upstream, for example `{ url: "http://localhost:1234", backend: "anthropic" }`; the request is then forwarded as Anthropic Messages and none of this driver's handling applies. Which of the two works better depends on the model, and neither has been compared.
+
+Nothing here has been run against a real LM Studio server: the `/api/v0/models` shape and the Anthropic endpoint come from the LM Studio documentation, and real-backend validation is tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70) (epic [#62](https://github.com/CLDMV/llm-translator/issues/62)).
 
 ## SGLang
 
