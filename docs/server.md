@@ -176,6 +176,19 @@ When the front and the upstream speak the same protocol the body is forwarded wi
 
 Redirects from an upstream are never followed. Unexpected errors reach the client as a generic `Internal server error` message; the details go to the Fastify logger when one is enabled.
 
+## Several choices (`n`)
+
+An OpenAI client that sends `n` above 1 to an Anthropic-protocol upstream (Anthropic has no `n`) gets the choices from `n` parallel upstream requests. An OpenAI-protocol upstream receives `n` unchanged and answers it itself, and nothing changes on the Anthropic front. The decision is made on the endpoint the router picks first; an `n` above 128 is answered with a 400.
+
+Each branch is a full `send` of the same body with `n: 1`, so pools, failover, timeouts, retries and capture apply per branch, and each branch takes its own in-flight slot. Anthropic has no seed either, so the branches are `n` identical requests and the variety comes from sampling.
+
+- **Not streaming.** The reply is the first branch's with every branch's choice, numbered 0 to n-1 in branch order, and the usage summed (`prompt_tokens`, `completion_tokens`, `total_tokens` and the detail fields).
+- **Streaming.** Chunks go out as they arrive from any branch, each one re-indexed to its branch and carrying the id of the first chunk. The branches' own `[DONE]` sentinels are dropped. When the client asked for usage (`stream_options.include_usage`) there is one final usage chunk holding the sum, then a single `[DONE]`.
+- **Failures.** The first branch to fail ends the request and the others are aborted. Before the stream has started that failure is the reply (an error reply, or a thrown error when the caller aborted). After it has started, the stream ends with the error chunk and `[DONE]`, the way a failed single stream does.
+- **Cancelling.** The caller's `signal` aborts every branch, and `return()` on the stream (or the client disconnecting) cancels them too.
+- **Usage.** `onUsage` and `reply.usage` carry one report: token fields and `estimated` are summed, `complete` is true only when every branch finished, `model` and `upstream` come from the first branch that knew them, and `reason` is the failing branch's when one failed.
+- **Capture and events.** Each branch is its own exchange with its own attempt records, and its events (failover, fallbacks, warnings) are emitted as they happen. There is no event for the fan-out itself.
+
 ## Pings and early commit
 
 Claude Code treats a silent stream as a dead connection, and a local model can stay silent for a long time while it processes a long prompt or thinks. vLLM only sends response headers together with the first token, so the translator handles the silence itself:

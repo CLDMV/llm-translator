@@ -7,6 +7,26 @@
  */
 export function normalize(protocol: "anthropic" | "openai" | "folded", usage: any): Record<string, number | null> | null;
 /**
+ * Hand a report to the caller's `onUsage`. An exception or a rejection becomes a warning and never reaches the reply.
+ * @param {UsageReport} report - The report.
+ * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
+ * @param {(message: string, details: {kind: "threw" | "rejected"}) => void} warn - Receives a message when `onUsage` throws or rejects.
+ * @returns {void}
+ */
+export function deliver(report: UsageReport, onUsage: ((report: UsageReport) => any) | undefined, warn: (message: string, details: {
+    kind: "threw" | "rejected";
+}) => void): void;
+/**
+ * Combine the reports of the branches of one fanned-out request (`n` above 1) into the single report the caller gets. Token fields and
+ * estimates are summed (null stays null when no branch knew the field), `reported` is true when any branch reported, `complete` only
+ * when every branch did, and the reason is the lead branch's (the one that failed first) when there is one, else the first branch that
+ * did not finish normally, else `"done"`. The request facts (`model`, `upstream`) come from the first branch that knew them.
+ * @param {UsageReport[]} reports - One report per branch, in choice order.
+ * @param {number} [lead] - Index of the branch whose failure ended the request, or -1 when none did.
+ * @returns {UsageReport} The combined report.
+ */
+export function combine(reports: UsageReport[], lead?: number): UsageReport;
+/**
  * Create the meter for one request.
  * @param {{front: "anthropic" | "openai", requested: string | null, model: string | null, upstream: string | null, stream: boolean}} meta - Request facts; `model` and `upstream` may be filled in later.
  * @param {((report: UsageReport) => any) | undefined} onUsage - Caller's callback.
