@@ -22,7 +22,7 @@ import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
 import { sign, reasoningOf, reasoningKey, detailsText, splitThink } from "../../../../../../../lib/thinking.mjs";
 import { isComplete, parseArguments } from "../../../../../../../lib/arguments.mjs";
-import { finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
+import { filterCategory, finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 
 /**
  * Convert a (non-streaming) OpenAI chat completion into an Anthropic message.
@@ -88,6 +88,7 @@ export function response(completion, state, settings) {
 		hasToolCalls: calls.length > 0,
 		matchedStop: choice.stop_reason,
 		refusal: message.refusal,
+		category: filterCategory(choice.content_filter_results),
 		argumentsComplete: calls.length === 0 || isComplete(calls.at(-1).function.arguments)
 	});
 	if (state && completion.usage) state.upstreamUsage = completion.usage;

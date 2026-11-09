@@ -130,6 +130,22 @@ describe("text streaming", () => {
 		expect((await run([chunk({ content: "x" }, {}, "stop")])).at(-2).data.delta).not.toHaveProperty("stop_details");
 	});
 
+	test("a streamed Azure filter annotation sets the category, and a later empty one does not clear it", async () => {
+		const annotated = (delta, results, finish = null) => {
+			const out = chunk(delta, {}, finish);
+			out.choices[0].content_filter_results = results;
+			return out;
+		};
+		const refused = await run([
+			annotated({ content: "x" }, { hate: { filtered: false, severity: "safe" } }),
+			annotated({}, { hate: { filtered: true, severity: "high" } }, "content_filter"),
+			annotated({}, {})
+		]);
+		expect(refused.at(-2).data.delta.stop_details).toEqual({ type: "refusal", category: "general_harms", explanation: null });
+		const clean = await run([annotated({ content: "x" }, { hate: { filtered: false } }), chunk({}, {}, "content_filter")]);
+		expect(clean.at(-2).data.delta.stop_details.category).toBeNull();
+	});
+
 	test.each([
 		["model_length", "max_tokens"],
 		["eos", "end_turn"],
