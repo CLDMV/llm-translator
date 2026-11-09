@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { toAnthropicStop, toAnthropicUsage, toOpenAIFinish, toOpenAIUsage } from "../../src/lib/finish.mjs";
+import { filterCategory, toAnthropicStop, toAnthropicUsage, toOpenAIFinish, toOpenAIUsage } from "../../src/lib/finish.mjs";
 
 describe("finish mapping", () => {
 	test("openai finish reason to anthropic stop", () => {
@@ -95,5 +95,16 @@ describe("finish mapping", () => {
 			completion_tokens: 2,
 			total_tokens: 5
 		});
+	});
+});
+
+describe("filterCategory", () => {
+	test("maps a filtered harm category to general_harms and everything else to null", () => {
+		expect(filterCategory({ violence: { filtered: true } })).toBe("general_harms");
+		expect(filterCategory({ violence: { filtered: false }, jailbreak: { filtered: true } })).toBeNull();
+		expect(filterCategory(null)).toBeNull();
+		expect(toAnthropicStop("content_filter", { hasToolCalls: false, category: "general_harms" }).stop_details.category).toBe(
+			"general_harms"
+		);
 	});
 });

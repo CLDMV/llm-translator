@@ -162,6 +162,21 @@ describe("openai chat completion to anthropic message", () => {
 		const filtered = response(completion({ content: "cut off" }, {}, { finish_reason: "content_filter" }));
 		expect(filtered.stop_details).toEqual({ type: "refusal", category: null, explanation: null });
 		expect(response(completion({ content: "x" }, {}, { finish_reason: "stop" }))).not.toHaveProperty("stop_details");
+	});
+
+	test("an Azure content filter annotation sets stop_details.category, other annotations leave it null", () => {
+		const choice = (results) => ({ finish_reason: "content_filter", ...(results ? { content_filter_results: results } : {}) });
+		const category = (results) => response(completion({ content: "" }, {}, choice(results))).stop_details.category;
+		expect(category({ hate: { filtered: true, severity: "high" }, violence: { filtered: false, severity: "safe" } })).toBe("general_harms");
+		expect(category({ self_harm: { filtered: true, severity: "medium" } })).toBe("general_harms");
+		expect(category({ sexual: { filtered: false, severity: "safe" }, jailbreak: { filtered: true, detected: true } })).toBeNull();
+		expect(category({ protected_material_text: { filtered: true, detected: true } })).toBeNull();
+		expect(category({})).toBeNull();
+		expect(category(undefined)).toBeNull();
+		expect(category("filtered")).toBeNull();
+		expect(
+			response(completion({ content: "x" }, {}, { finish_reason: "stop", content_filter_results: { hate: { filtered: true } } }))
+		).not.toHaveProperty("stop_details");
 		expect(response(completion({ content: "x" }, {}, { stop_reason: "END" }))).toMatchObject({
 			stop_reason: "stop_sequence",
 			stop_sequence: "END"
