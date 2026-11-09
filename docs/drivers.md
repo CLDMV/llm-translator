@@ -11,6 +11,7 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `vllm`       | `openai.chat`        | 10    | `GET /version` returns a version, or `GET /v1/models` lists a model with `owned_by: "vllm"`     |
 | `openai`     | `openai.chat`        | 30    | host `api.openai.com` (no network access)                                                       |
 | `deepseek`   | `openai.chat`        | 35    | host `api.deepseek.com` (no request of its own)                                                 |
+| `mistral`    | `openai.chat`        | 36    | host `api.mistral.ai` (no request of its own)                                                   |
 | `anthropic`  | `anthropic.messages` | 38    | host `api.anthropic.com` (no request), or `GET /v1/models` answers with an Anthropic model list |
 | `llamacpp`   | `openai.chat`        | 40    | `GET /props` has llama-server fields, or `GET /v1/models` lists `owned_by: "llamacpp"`          |
 | `sglang`     | `openai.chat`        | 50    | `GET /get_server_info` has `model_path`, or `GET /v1/models` lists `owned_by: "sglang"`         |
@@ -43,14 +44,14 @@ A driver folder contains these files, all optional except `info`:
 - SGLang: `GET /get_server_info` and `GET /v1/models` (`owned_by: "sglang"`). Facts are `{ version, models, modelPath, reasoningParser, toolCallParser }`. SGLang also answers `/version`, so vLLM detection steps aside when `/v1/models` names `sglang` or `llamacpp`, and, when a server answers `/version` without naming itself vLLM (for example because its model list failed), when `/get_server_info` or `/props` identify SGLang or llama.cpp. A real vLLM server names itself in `/v1/models` and is never asked for those paths.
 - Ollama: `GET /api/version` (and the shared `GET /v1/models` for the model list). Facts are `{ version, models }`.
 - Anthropic: `api.anthropic.com` is matched by host name with no request. Any other host is asked for `GET /v1/models` with `anthropic-version` and the upstream's key as `x-api-key` (no bearer header), and is bound only when the answer is an Anthropic model list: no `object` key, a boolean `has_more`, `first_id` and `last_id` that are null or strings and name the first and last entry of `data` (both null when it is empty), and every entry has `type: "model"`, a string `id` and a string `display_name`. OpenAI's `{ object: "list", data: [{ id, object: "model" }] }` can never pass, and a server that answers with the OpenAI shape whatever headers it is sent stays on the generic driver. Facts are `{ models }`, so the served model list comes from the server. The driver is tried at order 38, after the host-name drivers and before llama.cpp. The request is sent together with the other later probes, so it adds one request but no round trip, and it is a separate request from the bearer `GET /v1/models` the other drivers share because the headers differ. A server that requires a key and has none configured answers 401 and is not detected; set `apiKey`, or `backend: "anthropic"`.
-- OpenAI and DeepSeek: a host-name check, no request of their own. (vLLM is tried first and probes any host; a hosted API answers it with a 404 or an error.)
+- OpenAI, DeepSeek and Mistral: a host-name check, no request of their own. (vLLM is tried first and probes any host; a hosted API answers it with a 404 or an error.)
 - Generic: `GET /v1/models` for reachability and the served model ids.
 
 ### Tool-call ids for backends with a strict format
 
 A driver that declares `toolCallIds` gets the client's tool-call ids rewritten into its format, in both directions: Anthropic client to an OpenAI-style server (`tool_use` and `tool_result` ids become `tool_calls[].id` and `tool_call_id`) and OpenAI client to an Anthropic-protocol upstream. The translator keeps no state between requests, so the mapping is a pure function of the request. An id that already satisfies the policy passes through unchanged, so history replayed from the upstream's own ids keeps its ids. Any other id becomes a SHA-256 hash of itself written in the allowed alphabet, `min` characters long when `min` and `max` are equal, otherwise 16 characters clamped into the range. The same client id gets the same value on every request, and a call and the result that answers it always get the same value. Every id of the request is looked at before any is rewritten: conforming ids are reserved first, and when a hash lands on a reserved or already used value the hash is taken again with a counter, so two different originals never share an id. A format with too few free ids for the conversation fails the request with `invalid_request` rather than looping.
 
-Rewritten ids are recorded in the conversion state as `toolIds` (`{ rewritten: original }`). In a reply, an id found there is restored to the client's original (non-streaming and streaming). Ids the upstream makes itself pass through to the client as they were, with the same sanitizing to the Anthropic pattern that an OpenAI-style reply already gets on the Anthropic front. No built-in driver declares `toolCallIds` yet (the Mistral driver is tracked in [#42](https://github.com/CLDMV/llm-translator/issues/42)); a third-party driver does it in `info.mjs`.
+Rewritten ids are recorded in the conversion state as `toolIds` (`{ rewritten: original }`). In a reply, an id found there is restored to the client's original (non-streaming and streaming). Ids the upstream makes itself pass through to the client as they were, with the same sanitizing to the Anthropic pattern that an OpenAI-style reply already gets on the Anthropic front. The `mistral` driver declares `toolCallIds`; a third-party driver does it in `info.mjs`.
 
 ### Text-only models behind any OpenAI-protocol driver
 
@@ -82,6 +83,17 @@ What the `deepseek` driver changes compared with the generic one:
 - With tools, DeepSeek requires the `reasoning_content` of earlier turns to be sent back. The driver turns `reasoningRoundTrip` on: the reasoning text of each reply is written into its thinking block's `llmt:` signature and restored exactly on the next request, so a conversation works even when the client dropped or rewrote the thinking text, as long as it keeps the signature. When neither the signature nor any thinking text comes back (a client that discards thinking blocks, or `clear_thinking` removing old turns), the turn is sent without reasoning, one warning is printed per upstream, and DeepSeek's 400 gets an explanation. See [decision D-46](decisions.md).
 
 Nothing here has been run against the real API: the `/v1` paths, the model names that mean thinking mode and the error wording are from the DeepSeek documentation (tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70)). See [decision D-44](decisions.md).
+
+## Mistral API
+
+What the `mistral` driver changes compared with the generic one:
+
+- Tool-call ids are declared as `{ alphabet: "a-zA-Z0-9", min: 9, max: 9 }`, so history replayed from an Anthropic client (or an OpenAI client with other ids) is sent with valid 9-character ids, and the ids Mistral returns map back to the client's originals.
+- `seed` is sent as `random_seed` (Mistral's name for it), and `tool_choice: "required"` is sent as `"any"`. A named function and `auto`/`none` stay as they are.
+- Reasoning models answer with `content` as a list of typed chunks: `{ type: "text", text }` and `{ type: "thinking", thinking: [{ type: "text", text }] }`. The response normalizer turns the text chunks into `content` and the thinking chunks into `reasoning_content`, which becomes `thinking` and `text` blocks. While streaming, `delta.content` is a list during thinking, a list with the closing thinking chunk and the first text chunk at the switch, and a plain string afterwards; the chunk normalizer handles all three. Other chunk types are skipped.
+- `reasoningField: "reasoning_content"`, `maxTokensField: "max_tokens"`, `topK: false`, `prefill: "none"`, and no thinking switch. Reasoning thinking blocks are not sent back to Mistral.
+
+Nothing here has been run against the real API: the field names, the id format and the chunk shapes are from the [Mistral API reference](https://docs.mistral.ai/api/) and its [reasoning guide](https://docs.mistral.ai/capabilities/reasoning/), and real-backend validation is tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70).
 
 ## SGLang
 
