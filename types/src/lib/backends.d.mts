@@ -34,3 +34,17 @@ export function isLmstudioModels(body: Record<string, any>): boolean;
  * @returns {boolean} True for TGI's `/info`.
  */
 export function isTgiInfo(body: Record<string, any>): boolean;
+/**
+ * Does a `GET /version` reply come from LocalAI? It answers `{ version: "<version> (<commit>)" }` (the version, a space, and the build
+ * commit in parentheses, which is empty for a source build), where vLLM and SGLang answer a bare version, so the shape names LocalAI.
+ * @param {Record<string, any>} body - Reply object (see `objectOf`).
+ * @returns {boolean} True for LocalAI's version reply.
+ */
+export function isLocalaiVersion(body: Record<string, any>): boolean;
+/**
+ * Does a `GET /.well-known/localai.json` reply come from LocalAI? It is LocalAI's discovery document: a string `version` and an
+ * `endpoints` map that names the OpenAI routes (`models`, `chat_completions`) by path.
+ * @param {Record<string, any>} body - Reply object (see `objectOf`).
+ * @returns {boolean} True for LocalAI's discovery document.
+ */
+export function isLocalaiDiscovery(body: Record<string, any>): boolean;

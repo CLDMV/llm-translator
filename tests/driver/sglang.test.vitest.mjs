@@ -110,7 +110,16 @@ describe("sglang detection", () => {
 		await make({ upstreams: ["http://sg.test"], transport });
 		const bearer = transport.calls.filter((call) => !call.init.headers["anthropic-version"]);
 		const paths = bearer.map((call) => new URL(call.url).pathname).sort();
-		expect(paths).toEqual(["/api/v0/models", "/api/version", "/get_server_info", "/info", "/props", "/v1/models", "/version"]);
+		expect(paths).toEqual([
+			"/.well-known/localai.json",
+			"/api/v0/models",
+			"/api/version",
+			"/get_server_info",
+			"/info",
+			"/props",
+			"/v1/models",
+			"/version"
+		]);
 		// The Anthropic driver's own request, sent in the same batch.
 		expect(transport.calls.filter((call) => call.init.headers["anthropic-version"])).toHaveLength(1);
 	});

@@ -18,7 +18,7 @@
  * @module @cldmv/llm-translator/driver/vllm
  */
 import * as http from "../../../lib/http.mjs";
-import { isLlamacppProps, isSglangInfo, isTgiInfo, objectOf } from "../../../lib/backends.mjs";
+import { isLlamacppProps, isLocalaiVersion, isSglangInfo, isTgiInfo, objectOf } from "../../../lib/backends.mjs";
 
 /** `owned_by` values of other backends that also answer `/version`. */
 const OTHERS = new Set(["sglang", "llamacpp"]);
@@ -26,11 +26,13 @@ const OTHERS = new Set(["sglang", "llamacpp"]);
 /**
  * Probe an endpoint for vLLM.
  * @param {any} context - `{ endpoint, transport, signal, timeout, probes }`.
- * @returns {Promise<any | null>} Facts `{ version, models, maxModelLen }`, or null when the endpoint is not vLLM (or is SGLang, llama.cpp or TGI, which can also answer `/version`).
+ * @returns {Promise<any | null>} Facts `{ version, models, maxModelLen }`, or null when the endpoint is not vLLM (or is LocalAI, SGLang, llama.cpp or TGI, which can also answer `/version`).
  */
 export async function detect({ endpoint, transport, signal, timeout, probes }) {
 	const context = { endpoint, transport, signal, timeout, probes };
 	const [versionResult, modelsResult] = await Promise.all([http.probe(context, "/version"), http.probe(context, "/v1/models")]);
+	// LocalAI answers `/version` as `<version> (<commit>)`; it is not vLLM, whatever its model list says.
+	if (isLocalaiVersion(objectOf(versionResult))) return null;
 	const version = typeof versionResult.body?.version === "string" ? versionResult.body.version : undefined;
 	const models = Array.isArray(modelsResult.body?.data) ? modelsResult.body.data : [];
 	// SGLang also answers `/version`; its model list names it, so it is not taken for vLLM.
