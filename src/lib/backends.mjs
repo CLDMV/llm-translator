@@ -85,3 +85,29 @@ export function isTgiInfo(body) {
 		typeof body.max_total_tokens === "number"
 	);
 }
+
+/**
+ * Does a `GET /version` reply come from LocalAI? It answers `{ version: "<version> (<commit>)" }` (the version, a space, and the build
+ * commit in parentheses, which is empty for a source build), where vLLM and SGLang answer a bare version, so the shape names LocalAI.
+ * @param {Record<string, any>} body - Reply object (see `objectOf`).
+ * @returns {boolean} True for LocalAI's version reply.
+ */
+export function isLocalaiVersion(body) {
+	return typeof body.version === "string" && /^\S* \([0-9a-f]*\)$/i.test(body.version);
+}
+
+/**
+ * Does a `GET /.well-known/localai.json` reply come from LocalAI? It is LocalAI's discovery document: a string `version` and an
+ * `endpoints` map that names the OpenAI routes (`models`, `chat_completions`) by path.
+ * @param {Record<string, any>} body - Reply object (see `objectOf`).
+ * @returns {boolean} True for LocalAI's discovery document.
+ */
+export function isLocalaiDiscovery(body) {
+	return (
+		typeof body.version === "string" &&
+		body.endpoints !== null &&
+		typeof body.endpoints === "object" &&
+		body.endpoints.models === "/v1/models" &&
+		body.endpoints.chat_completions === "/v1/chat/completions"
+	);
+}

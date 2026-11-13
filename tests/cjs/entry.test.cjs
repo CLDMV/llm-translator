@@ -92,6 +92,7 @@ test("a translator composed from dist/api converts, streams and serves", async (
 			"deepseek",
 			"llamacpp",
 			"lmstudio",
+			"localai",
 			"mistral",
 			"ollama",
 			"openai",
