@@ -73,6 +73,10 @@ export async function request(body, settings, context) {
 		toolIds: {},
 		dropped: []
 	};
+	// The thinking budget a driver that takes a token budget for reasoning (OpenRouter's `reasoning.max_tokens`) can use. An explicit effort wins.
+	if (body.thinking?.type === "enabled" && Number.isInteger(body.thinking.budget_tokens) && body.output_config?.effort === undefined) {
+		state.thinkingBudget = body.thinking.budget_tokens;
+	}
 	// Names the producer of the reply this request answers (signed into reasoning data) and the one a signature must match to be restored.
 	if (context?.producer !== undefined) state.producer = context.producer;
 	const fit = createNameFitter({ max: 64, map: state.toolNames });
