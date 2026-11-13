@@ -95,6 +95,7 @@ test("a translator composed from dist/api converts, streams and serves", async (
 			"mistral",
 			"ollama",
 			"openai",
+			"openrouter",
 			"sglang",
 			"vllm"
 		]);
