@@ -22,7 +22,7 @@ import { TranslatorError, openaiToAnthropicType, rewriteContextOverflow } from "
 import { isComplete } from "../../../../../../../lib/arguments.mjs";
 import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
 import { sign, reasoningOf, reasoningKey, detailsText, mergeDetail, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
-import { finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
+import { filterCategory, finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
 
 /**
@@ -58,6 +58,7 @@ export async function* stream(source, state, settings) {
 	let finish = null;
 	let matchedStop = null;
 	let refusal = "";
+	let category = null;
 	let sawText = false;
 	let done = false;
 	let lastTool = 0;
@@ -174,7 +175,7 @@ export async function* stream(source, state, settings) {
 
 	function* toolCall(call) {
 		let key = call.index;
-		if (key === undefined) key = call.id === undefined ? lastTool : tools.size;
+		if (key === undefined) key = call.id === undefined || call.id === null ? lastTool : tools.size;
 		lastTool = key;
 		let entry = tools.get(key);
 		if (entry === undefined) {
@@ -253,6 +254,8 @@ export async function* stream(source, state, settings) {
 				else yield* piece("text", delta.content);
 			}
 			if (typeof delta.refusal === "string") refusal += delta.refusal;
+			// Azure annotates each chunk; the one that was filtered names the category (an earlier one is kept if a later annotation is empty).
+			category = filterCategory(choice.content_filter_results) ?? category;
 			for (const call of delta.tool_calls ?? []) yield* toolCall(call);
 			if (choice.finish_reason) finish = choice.finish_reason;
 			if (typeof choice.stop_reason === "string") matchedStop = choice.stop_reason;
@@ -285,7 +288,7 @@ export async function* stream(source, state, settings) {
 		yield* begin("text", { type: "text", text: "" });
 		yield* close();
 	}
-	const stop = toAnthropicStop(finish, { hasToolCalls: tools.size > 0, matchedStop, argumentsComplete, refusal });
+	const stop = toAnthropicStop(finish, { hasToolCalls: tools.size > 0, matchedStop, argumentsComplete, refusal, category });
 	yield event("message_delta", { delta: stop, usage: toAnthropicUsage(usage) });
 	yield event("message_stop", {});
 }

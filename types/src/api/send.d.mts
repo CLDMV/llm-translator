@@ -17,6 +17,13 @@
  * `estimated: { input_tokens, output_tokens }` (null for a side that was reported, and null altogether when nothing was estimated).
  * On the Anthropic front a stream carries them in the final `message_delta`, because `message_start` is sent before the output is known.
  * Replies passed through without conversion are never altered.
+ *
+ * An OpenAI-front request with `n` above 1 whose upstream speaks the Anthropic protocol (which has no `n`) is answered by `n` parallel
+ * single-choice requests, one `send` each (so pools, failover, capture and events apply per branch). The choices come back numbered 0 to
+ * n-1 and the usage is the sum of the branches; `onUsage` is called once with the summed report (`reason` and `complete` follow the
+ * branch that failed first). The first branch to fail ends the request: the others are aborted and the failure is the reply, or, once
+ * a stream has started, an error chunk and `[DONE]`. Aborting the caller's signal aborts every branch. An OpenAI-protocol upstream
+ * receives `n` unchanged and answers it itself.
  * @param {any} body - Client request body (per `front`).
  * @param {any} [options] - `{ signal, front, headers, clientHeaders, filter, onUsage, log }`: abort signal for the upstream call, per-call front, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply) and the logger this request's events also go to (used by the server).
  * @returns {Promise<{status: number, headers: Record<string,string>, body: any, usage: Promise<any>} | {status: number, headers: Record<string,string>, stream: AsyncIterable<{event?: string, data: *}>, usage: Promise<any>}>} A JSON reply, or a stream reply when the client asked for streaming and the upstream accepted.

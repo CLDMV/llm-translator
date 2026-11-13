@@ -57,7 +57,7 @@ const DATA_URL = /^data:([^;,]+);base64,(.*)$/s;
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @param {{ toolCallIds?: { alphabet: string, min?: number, max?: number } }} [context] - `toolCallIds` is the driver's tool-call id policy: ids that do not satisfy it are rewritten (and recorded in `state.toolIds` for the way back).
  * @returns {Promise<{ body: any, state: any }>} Anthropic request body and conversion state.
- * @throws {TranslatorError} For malformed requests, `n` above 1, unknown roles, or unknown fields when configured to error.
+ * @throws {TranslatorError} For malformed requests, `n` above 1 (`send` fans that out instead), unknown roles, or unknown fields when configured to error.
  */
 export async function request(chatBody, settings, context) {
 	const s = resolve(settings);
