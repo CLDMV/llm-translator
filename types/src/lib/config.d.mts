@@ -29,6 +29,14 @@ export type UpstreamConfig = {
      */
     headers?: Record<string, string>;
     /**
+     * Azure OpenAI `api-version`. Set, it selects the classic per-deployment URLs; unset, the v1 API is used.
+     */
+    apiVersion?: string;
+    /**
+     * Azure OpenAI deployment name for the classic URLs. Defaults to the request's model.
+     */
+    deployment?: string;
+    /**
      * Driver name, or `"auto"` (default) to detect.
      */
     backend?: string;

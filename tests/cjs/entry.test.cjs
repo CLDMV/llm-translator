@@ -87,6 +87,7 @@ test("a translator composed from dist/api converts, streams and serves", async (
 	try {
 		assert.deepEqual(Object.keys(api.driver).sort(), [
 			"anthropic",
+			"azure",
 			"compatible",
 			"deepseek",
 			"llamacpp",

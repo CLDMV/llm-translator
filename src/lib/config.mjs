@@ -28,6 +28,8 @@ import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
  * @property {string} url Base URL of the upstream server (`http://host:8000`).
  * @property {string} [apiKey] Key sent to the upstream.
  * @property {Record<string,string>} [headers] Extra headers sent to the upstream.
+ * @property {string} [apiVersion] Azure OpenAI `api-version`. Set, it selects the classic per-deployment URLs; unset, the v1 API is used.
+ * @property {string} [deployment] Azure OpenAI deployment name for the classic URLs. Defaults to the request's model.
  * @property {string} [backend] Driver name, or `"auto"` (default) to detect.
  * @property {string[]} [models] Models this upstream serves (routing).
  * @property {boolean} [default] Marks the fallback upstream.
@@ -59,11 +61,18 @@ export function endpoint(entry, index) {
 	if (!raw || typeof raw !== "object" || typeof raw.url !== "string" || raw.url === "") {
 		throw new TranslatorError(`upstreams[${index}] needs a "url"`, { code: "INVALID_CONFIG", status: 500 });
 	}
+	for (const key of ["apiVersion", "deployment"]) {
+		if (raw[key] !== undefined && (typeof raw[key] !== "string" || raw[key] === "")) {
+			throw new TranslatorError(`upstreams[${index}].${key} must be a non-empty string`, { code: "INVALID_CONFIG", status: 500 });
+		}
+	}
 	return {
 		name: raw.name ?? `upstream-${index}`,
 		url: baseUrl(raw.url),
 		apiKey: raw.apiKey,
 		headers: { ...raw.headers },
+		apiVersion: raw.apiVersion,
+		deployment: raw.deployment,
 		backend: raw.backend ?? "auto",
 		models: Array.isArray(raw.models) ? [...raw.models] : undefined,
 		default: raw.default === true,
