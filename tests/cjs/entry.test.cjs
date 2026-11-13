@@ -97,6 +97,7 @@ test("a translator composed from dist/api converts, streams and serves", async (
 			"openai",
 			"openrouter",
 			"sglang",
+			"tgi",
 			"vllm"
 		]);
 		assert.equal(api.status().upstreams[0].driver, "vllm");

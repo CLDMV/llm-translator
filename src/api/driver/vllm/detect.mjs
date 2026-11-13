@@ -18,7 +18,7 @@
  * @module @cldmv/llm-translator/driver/vllm
  */
 import * as http from "../../../lib/http.mjs";
-import { isLlamacppProps, isSglangInfo, objectOf } from "../../../lib/backends.mjs";
+import { isLlamacppProps, isSglangInfo, isTgiInfo, objectOf } from "../../../lib/backends.mjs";
 
 /** `owned_by` values of other backends that also answer `/version`. */
 const OTHERS = new Set(["sglang", "llamacpp"]);
@@ -26,7 +26,7 @@ const OTHERS = new Set(["sglang", "llamacpp"]);
 /**
  * Probe an endpoint for vLLM.
  * @param {any} context - `{ endpoint, transport, signal, timeout, probes }`.
- * @returns {Promise<any | null>} Facts `{ version, models, maxModelLen }`, or null when the endpoint is not vLLM (or is SGLang or llama.cpp, which also answer `/version`).
+ * @returns {Promise<any | null>} Facts `{ version, models, maxModelLen }`, or null when the endpoint is not vLLM (or is SGLang, llama.cpp or TGI, which can also answer `/version`).
  */
 export async function detect({ endpoint, transport, signal, timeout, probes }) {
 	const context = { endpoint, transport, signal, timeout, probes };
@@ -40,8 +40,12 @@ export async function detect({ endpoint, transport, signal, timeout, probes }) {
 	// A server that answers `/version` but does not say it is vLLM may be SGLang or llama.cpp whose model list failed. Only then are their
 	// identifying paths asked for, so a real vLLM server (which names itself in `/v1/models`) is never sent an extra request.
 	if (!owned) {
-		const [sglang, llamacpp] = await Promise.all([http.probe(context, "/get_server_info"), http.probe(context, "/props")]);
-		if (isSglangInfo(objectOf(sglang)) || isLlamacppProps(objectOf(llamacpp))) return null;
+		const [sglang, llamacpp, tgi] = await Promise.all([
+			http.probe(context, "/get_server_info"),
+			http.probe(context, "/props"),
+			http.probe(context, "/info")
+		]);
+		if (isSglangInfo(objectOf(sglang)) || isLlamacppProps(objectOf(llamacpp)) || isTgiInfo(objectOf(tgi))) return null;
 	}
 	return {
 		version,
