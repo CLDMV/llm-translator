@@ -29,6 +29,24 @@ export function join(base, path) {
 }
 
 /**
+ * The path (with any query) of a call on an upstream. A driver that has a `path(kind, { endpoint, model })` leaf builds it from the endpoint
+ * and the model (Azure OpenAI puts the deployment and `api-version` there); otherwise `info().paths[kind]` is used, with the standard
+ * OpenAI path for `embeddings` and `models` when the driver does not name one.
+ * @param {any} driver - Driver record (`info` and the optional `path` leaf).
+ * @param {"chat" | "messages" | "embeddings" | "models"} kind - Which call.
+ * @param {any} endpoint - Runtime endpoint.
+ * @param {string} [model] - The upstream's model name for the request.
+ * @returns {Promise<string>} Path starting with `/`.
+ */
+export async function pathOf(driver, kind, endpoint, model) {
+	if (driver.path) return driver.path(kind, { endpoint, model });
+	return driver.info.paths[kind] ?? DEFAULT_PATHS[kind];
+}
+
+/** Standard OpenAI paths for the calls a driver does not name in `info().paths`. */
+const DEFAULT_PATHS = { embeddings: "/v1/embeddings", models: "/v1/models" };
+
+/**
  * Whether a listen address only accepts connections from this machine.
  * @param {string} host - Host or address.
  * @returns {boolean} True for `localhost`, `127.x.x.x` and `::1`.
@@ -40,14 +58,14 @@ export function isLoopback(host) {
 /**
  * Build the request headers for an upstream call.
  * @param {any} endpoint - Runtime endpoint.
- * @param {string} [auth] - `"bearer"` (default) or `"x-api-key"`.
+ * @param {string} [auth] - `"bearer"` (default), `"x-api-key"` or `"api-key"` (Azure OpenAI).
  * @param {Record<string,string>} [extra] - Extra headers applied last.
  * @returns {Record<string,string>} Header map.
  */
 export function headers(endpoint, auth = "bearer", extra) {
 	const out = { ...endpoint.headers };
 	if (endpoint.apiKey) {
-		if (auth === "x-api-key") out["x-api-key"] = endpoint.apiKey;
+		if (auth === "x-api-key" || auth === "api-key") out[auth] = endpoint.apiKey;
 		else out.authorization = `Bearer ${endpoint.apiKey}`;
 	}
 	return { ...out, ...extra };
@@ -58,7 +76,7 @@ export function headers(endpoint, auth = "bearer", extra) {
  * once and every driver that asks for it gets the same result, so a path fetched for one backend (for example `/v1/models`) is
  * not fetched again for the next. Never rejects; treat the result as read-only.
  *
- * Without `driver` the request carries the upstream's bearer key. A driver whose `info()` says `auth: "x-api-key"` or carries
+ * Without `driver` the request carries the upstream's bearer key. A driver whose `info()` says `auth: "x-api-key"` or `"api-key"`, or carries
  * `headers` passes its `info()` so the probe is sent the way the driver talks to its own backend; that request is a different
  * request from the bearer one, so it is cached under its own key.
  * @param {any} context - `{ endpoint, transport, signal, timeout, probes? }`.
@@ -67,7 +85,7 @@ export function headers(endpoint, auth = "bearer", extra) {
  * @returns {Promise<{ok: boolean, status: number, body: any, error?: Error}>} Outcome (see `json`).
  */
 export function probe({ endpoint, transport, signal, timeout, probes }, path, driver) {
-	const custom = driver !== undefined && (driver.auth === "x-api-key" || driver.headers !== undefined);
+	const custom = driver !== undefined && (driver.auth === "x-api-key" || driver.auth === "api-key" || driver.headers !== undefined);
 	const request = custom ? { auth: driver.auth, extra: driver.headers } : {};
 	const run = () =>
 		json(transport, join(endpoint.url, path), { method: "GET", headers: headers(endpoint, request.auth, request.extra), signal, timeout });

@@ -24,6 +24,17 @@
  */
 export function join(base: string, path: string): string;
 /**
+ * The path (with any query) of a call on an upstream. A driver that has a `path(kind, { endpoint, model })` leaf builds it from the endpoint
+ * and the model (Azure OpenAI puts the deployment and `api-version` there); otherwise `info().paths[kind]` is used, with the standard
+ * OpenAI path for `embeddings` and `models` when the driver does not name one.
+ * @param {any} driver - Driver record (`info` and the optional `path` leaf).
+ * @param {"chat" | "messages" | "embeddings" | "models"} kind - Which call.
+ * @param {any} endpoint - Runtime endpoint.
+ * @param {string} [model] - The upstream's model name for the request.
+ * @returns {Promise<string>} Path starting with `/`.
+ */
+export function pathOf(driver: any, kind: "chat" | "messages" | "embeddings" | "models", endpoint: any, model?: string): Promise<string>;
+/**
  * Whether a listen address only accepts connections from this machine.
  * @param {string} host - Host or address.
  * @returns {boolean} True for `localhost`, `127.x.x.x` and `::1`.
@@ -32,7 +43,7 @@ export function isLoopback(host: string): boolean;
 /**
  * Build the request headers for an upstream call.
  * @param {any} endpoint - Runtime endpoint.
- * @param {string} [auth] - `"bearer"` (default) or `"x-api-key"`.
+ * @param {string} [auth] - `"bearer"` (default), `"x-api-key"` or `"api-key"` (Azure OpenAI).
  * @param {Record<string,string>} [extra] - Extra headers applied last.
  * @returns {Record<string,string>} Header map.
  */
@@ -42,7 +53,7 @@ export function headers(endpoint: any, auth?: string, extra?: Record<string, str
  * once and every driver that asks for it gets the same result, so a path fetched for one backend (for example `/v1/models`) is
  * not fetched again for the next. Never rejects; treat the result as read-only.
  *
- * Without `driver` the request carries the upstream's bearer key. A driver whose `info()` says `auth: "x-api-key"` or carries
+ * Without `driver` the request carries the upstream's bearer key. A driver whose `info()` says `auth: "x-api-key"` or `"api-key"`, or carries
  * `headers` passes its `info()` so the probe is sent the way the driver talks to its own backend; that request is a different
  * request from the bearer one, so it is cached under its own key.
  * @param {any} context - `{ endpoint, transport, signal, timeout, probes? }`.

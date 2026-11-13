@@ -210,7 +210,7 @@ async function prepare(c, body, options, picked) {
 			log: options.log
 		});
 	}
-	const path = endpoint.protocol === "openai.chat" ? driver.info.paths.chat : driver.info.paths.messages;
+	const path = await http.pathOf(driver, endpoint.protocol === "openai.chat" ? "chat" : "messages", endpoint, model);
 	return {
 		upstream: endpoint.name,
 		pool: pool.map((entry) => entry.name),
