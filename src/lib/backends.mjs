@@ -69,3 +69,19 @@ export function isLmstudioModels(body) {
 			LMSTUDIO_TYPES.includes(entry.type)
 	);
 }
+
+/**
+ * Does a `GET /info` reply come from Hugging Face Text Generation Inference? The match is strict so no other server binds: the router
+ * names itself `text-generation-router` (Text Embeddings Inference answers `/info` too, as `text-embeddings-router`), and the reply
+ * carries a string `model_id` and `version` and a numeric `max_total_tokens` (older releases lack `max_input_tokens`, so it is not required).
+ * @param {Record<string, any>} body - Reply object (see `objectOf`).
+ * @returns {boolean} True for TGI's `/info`.
+ */
+export function isTgiInfo(body) {
+	return (
+		body.router === "text-generation-router" &&
+		typeof body.model_id === "string" &&
+		typeof body.version === "string" &&
+		typeof body.max_total_tokens === "number"
+	);
+}
