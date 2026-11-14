@@ -19,6 +19,7 @@
  */
 import { TranslatorError } from "./errors.mjs";
 import { order } from "./pool.mjs";
+import { baseModels } from "./models.mjs";
 
 /**
  * Does the endpoint serve the model?
@@ -42,7 +43,7 @@ export function serves(endpoint, model) {
  * @param {boolean} [advance] - Move the round robin cursor (false to only look).
  * @returns {{endpoint: any, model: string | undefined, unserved: boolean, pool: any[], pin: {effort?: string, thinking?: boolean} | undefined}} Chosen endpoint, the model name to send upstream, whether
  * no endpoint serves the model and the endpoints to try in order (the chosen one first). When nothing serves it and the fallback endpoint knows
- * exactly one model, that model is sent instead.
+ * exactly one base model (adapters aside), that model is sent instead.
  */
 export function pick(config, endpoints, model, state, advance = false) {
 	const aliased = Object.hasOwn(config.aliases, model);
@@ -54,7 +55,8 @@ export function pick(config, endpoints, model, state, advance = false) {
 		const pool = order(config, state, matches, target, advance);
 		return { endpoint: pool[0], model: target, unserved: false, pool, pin };
 	}
-	const known = fallback.models ?? fallback.facts?.models ?? [];
+	// LoRA adapters do not count: a server with one base model and some adapters still has exactly one model to fall back to.
+	const known = baseModels(fallback);
 	if (known.length === 1) return { endpoint: fallback, model: known[0], unserved: false, pool: [fallback], pin };
 	return { endpoint: fallback, model: target, unserved: true, pool: [fallback], pin };
 }

@@ -17,13 +17,20 @@
  * @fileoverview vLLM driver: model listing.
  * @module @cldmv/llm-translator/driver/vllm
  */
-import { fetchModels } from "../../../../lib/models.mjs";
+import { adaptersOf, fetchModels } from "../../../../lib/models.mjs";
 
 /**
- * List the models the vLLM server serves (including `max_model_len`).
+ * List the models the vLLM server serves (including `max_model_len`, and `parent` on a LoRA adapter). What the server answers is also what the
+ * upstream serves from now on: adapters loaded at runtime (`/v1/load_lora_adapter`) become routable, and unloaded ones stop being. An upstream
+ * with a configured `models` list keeps that list.
  * @param {any} context - `{ endpoint, transport, signal, timeout }`.
  * @returns {Promise<any[] | null>} Models, or null when unreachable.
  */
-export function list(context) {
-	return fetchModels({ ...context, auth: "bearer" });
+export async function list(context) {
+	const models = await fetchModels({ ...context, auth: "bearer" });
+	const { endpoint } = context;
+	if (models !== null && endpoint.facts) {
+		endpoint.facts = { ...endpoint.facts, models: models.map((entry) => entry.id), adapters: adaptersOf(models) };
+	}
+	return models;
 }

@@ -21,7 +21,7 @@
 import { VLLM_FIELDS } from "../../../lib/passthrough.mjs";
 
 /**
- * Describe the vLLM driver.
+ * Describe the vLLM driver. `paths.health` (`GET /health`: 200 when the engine is up, 503 once it is dead; outside the API-key guard) is what `lib/health` probes before routing a request to a pool.
  * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
@@ -32,6 +32,13 @@ export function info() {
 		auth: "bearer",
 		strict: true,
 		fields: VLLM_FIELDS,
-		paths: { chat: "/v1/chat/completions", messages: "/v1/messages", models: "/v1/models", tokenize: "/tokenize", version: "/version" }
+		paths: {
+			chat: "/v1/chat/completions",
+			messages: "/v1/messages",
+			models: "/v1/models",
+			tokenize: "/tokenize",
+			version: "/version",
+			health: "/health"
+		}
 	};
 }

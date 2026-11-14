@@ -22,7 +22,7 @@ import path from "node:path";
 
 /**
  * @typedef {object} TranslatorEvent
- * @property {string} type Specific event name (`fallback`, `failover`, `effort`, `dropped`, `detect`, `usage`, `warning`, `error` or `log`).
+ * @property {string} type Specific event name (`fallback`, `failover`, `health`, `effort`, `dropped`, `detect`, `usage`, `warning`, `error` or `log`).
  * @property {string} [kind] Sub-kind within the type (for example `json_object` for a `fallback`).
  * @property {"debug" | "info" | "warn" | "error"} level Severity.
  * @property {string} message Human readable text.

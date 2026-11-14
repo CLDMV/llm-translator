@@ -93,6 +93,7 @@ describe("vllm.detect / probe / count over a fake transport", () => {
 		expect(await api.driver.vllm.detect({ endpoint, transport, timeout: 1000, signal: new AbortController().signal })).toEqual({
 			version: "0.20.1",
 			models: ["m"],
+			adapters: [],
 			maxModelLen: undefined
 		});
 	});

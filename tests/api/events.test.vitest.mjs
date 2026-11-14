@@ -505,7 +505,8 @@ describe("event sources", () => {
 		const api = await make({
 			upstreams: ["a", "b", "c"].map((name) => ({ name, url: `http://${name}.test`, backend: "vllm", models: ["m"] })),
 			transport: fakeTransport((url, init) => handlers[new URL(url).hostname.replace(".test", "")](init)),
-			detect: false
+			detect: false,
+			pool: { healthInterval: 0 }
 		});
 		const seen = watch(api);
 		const reply = await api.send(hello);
