@@ -84,7 +84,7 @@ export async function send(body, options = {}) {
 	}
 	await refresh(c, body, options.signal);
 	const picked = resolve(c, body, { advance: true });
-	const members = picked.pool.filter((endpoint) => endpoint.protocol === "openai.chat");
+	const members = picked.pool.filter((endpoint) => endpoint.protocol !== "anthropic.messages");
 	if (members.length === 0) {
 		return fail(400, `The model "${body.model}" is served by an Anthropic-protocol upstream, which has no embeddings API.`, {
 			code: "embeddings_unsupported",

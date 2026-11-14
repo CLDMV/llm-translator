@@ -47,6 +47,7 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 - Structured output is limited to `response_format` JSON Schema. Native grammar, regex and choice constraints of individual servers are not exposed. Tracked in [#14](https://github.com/CLDMV/llm-translator/issues/14).
 - The response `model` echoes the model the client asked for, not the one the upstream reports.
 - `anthropic-version` and `anthropic-beta` are ignored.
+- Ollama's native `/api/chat` mode (`api: "native"`) cannot force a tool call (`tool_choice` other than `auto` is dropped), has no `n` above 1, `logit_bias` or `logprobs`, and takes images as base64 only. The `efforts` levels, the image and tool retries and `passthroughFilter` do not apply to it, and streamed thinking and tool calls follow Ollama's documented line shape without having been run against a real server ([#70](https://github.com/CLDMV/llm-translator/issues/70)).
 
 ## Streaming
 
