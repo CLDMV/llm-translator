@@ -17,18 +17,20 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.9.0 (November 2026)
+### Latest: v0.10.0 (November 2026)
 
-- **Azure OpenAI and OpenRouter drivers** — Azure gets `api-key` auth and either the v1 API or the classic deployment URLs (set `apiVersion`, and `deployment` if it isn't the model name), with filtered categories named on content-filter errors. OpenRouter keeps `reasoning_details` round-tripping in order, turns errors returned inside a 200 into real errors, and maps effort and thinking budgets to its `reasoning` object.
-- **Hugging Face TGI and LocalAI drivers** — both are detected by probe. TGI's old reply quirks (a lone `tool_calls` object, numeric ids, object arguments, `eos_token`) are normalised and structured output goes out as its grammar. LocalAI's reasoning is read, and `disable_parallel_tool_use` is honoured even though LocalAI sets parallel calls per model.
-- [View full v0.9.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.9.0.md)
+- **Native `/v1/messages` for vLLM** — set `nativeMessages` (`true` or `"auto"`) and Anthropic requests go to vLLM's own endpoint with only normalisation. Prefills, document blocks and deferred tools are still converted, and an upstream without the route falls back to conversion.
+- **Readiness probes and LoRA adapters** — pools check vLLM's `/health` and try ready upstreams first (`pool.healthInterval`, `pool.healthTimeout`, a `health` event, `health.check()`). Adapters are routable and carry `parent` in model lists.
+- **Hosted provider drivers** — Groq, Together, Fireworks, xAI and Gemini are bound by host name, with their token fields, reasoning fields and rejected request fields handled from one table.
+- **Ollama's native `/api/chat`** — set `api: "native"` on an Ollama upstream to use `think`, `options` and `format`, with NDJSON streaming converted for both fronts.
+- [View full v0.10.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.10.0.md)
 
 ### Recent Releases
 
+- **v0.9.0** (November 2026) — Azure OpenAI, OpenRouter, Hugging Face TGI and LocalAI drivers, with Azure's `apiVersion` and `deployment` upstream fields and more startup probes ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.9.0.md))
 - **v0.8.0** (November 2026) — Mistral and LM Studio drivers, an OpenAI client's `n` above 1 answered by parallel requests to Anthropic-protocol upstreams, and `stop_details.category` from content-filter results ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.8.0.md))
 - **v0.7.0** (November 2026) — Anthropic-protocol servers detected by probe on any host, tool-call ids rewritten for strict upstream formats, embeddings usage through `onUsage`, and capture records for every failed-over attempt ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.7.0.md))
 - **v0.6.0** (November 2026) — `POST /v1/embeddings` pass-through, sampling extensions per upstream and per request, `strict` tool use end to end with a schema check, and the `capture` option for debugging ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.6.0.md))
-- **v0.5.0** (November 2026) — everything the library logs is available as events, logging is opt-in through `logs`, `json_object` reaches Anthropic upstreams as a schema with a fallback, and refusals carry `stop_details` ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.5.0.md))
 
 📚 **For complete version history and detailed release notes, see the [docs/changelog/](https://github.com/CLDMV/llm-translator/tree/master/docs/changelog/) folder.**
 
