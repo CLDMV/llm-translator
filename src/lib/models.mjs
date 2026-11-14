@@ -31,11 +31,11 @@ export function modelsOf(result) {
 
 /**
  * Fetch and normalize the models an upstream reports.
- * @param {any} context - `{ endpoint, transport, signal, timeout, auth, extraHeaders }`.
+ * @param {any} context - `{ endpoint, transport, signal, timeout, auth, extraHeaders, path }`. `path` replaces `/v1/models`.
  * @returns {Promise<{id: string, created?: number, owned_by?: string, max_model_len?: number}[] | null>} Models, or null when the upstream did not answer with a model list.
  */
-export async function fetchModels({ endpoint, transport, signal, timeout, auth, extraHeaders }) {
-	const result = await http.json(transport, http.join(endpoint.url, "/v1/models"), {
+export async function fetchModels({ endpoint, transport, signal, timeout, auth, extraHeaders, path = "/v1/models" }) {
+	const result = await http.json(transport, http.join(endpoint.url, path), {
 		method: "GET",
 		headers: http.headers(endpoint, auth, extraHeaders),
 		signal,

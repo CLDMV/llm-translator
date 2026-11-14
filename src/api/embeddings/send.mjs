@@ -27,8 +27,6 @@ import { meter as createMeter } from "../../lib/usage.mjs";
 import { warn } from "../../lib/warn.mjs";
 import { start as record } from "../../lib/record.mjs";
 
-const PATH = "/v1/embeddings";
-
 /**
  * Forward `POST /v1/embeddings` to an OpenAI-protocol upstream that lists the model. The body and the reply pass through unchanged
  * apart from `model`, which is the upstream's name for it (after `aliases`). The model is routed like a chat model: aliases, then the
@@ -102,7 +100,7 @@ export async function send(body, options = {}) {
 		const driver = c.driver(endpoint);
 		endpoint.health.inflight++;
 		endpoint.health.requests++;
-		const url = http.join(endpoint.url, PATH);
+		const url = http.join(endpoint.url, await http.pathOf(driver, "embeddings", endpoint, picked.model));
 		const headers = {
 			"content-type": "application/json",
 			accept: "application/json",

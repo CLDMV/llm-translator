@@ -87,14 +87,18 @@ test("a translator composed from dist/api converts, streams and serves", async (
 	try {
 		assert.deepEqual(Object.keys(api.driver).sort(), [
 			"anthropic",
+			"azure",
 			"compatible",
 			"deepseek",
 			"llamacpp",
 			"lmstudio",
+			"localai",
 			"mistral",
 			"ollama",
 			"openai",
+			"openrouter",
 			"sglang",
+			"tgi",
 			"vllm"
 		]);
 		assert.equal(api.status().upstreams[0].driver, "vllm");

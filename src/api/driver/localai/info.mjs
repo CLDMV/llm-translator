@@ -1,0 +1,37 @@
+/**
+ *
+ *	@Project: @cldmv/llm-translator
+ *	@Filename: /src/api/driver/localai/info.mjs
+ *	@Date: 2026-11-13T09:00:00-08:00 (1794589200)
+ *	@Author: Nate Corcoran <CLDMV>
+ *	@Email: <Shinrai@users.noreply.github.com>
+ *	-----
+ *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
+ *	@Last modified time: 2026-11-13T09:00:00-08:00 (1794589200)
+ *	-----
+ *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
+ *
+ */
+
+/**
+ * @fileoverview LocalAI driver: static facts about the LocalAI server.
+ * @module @cldmv/llm-translator/driver/localai
+ */
+
+/**
+ * Describe the LocalAI driver. It is found through `GET /version` (`{ version: "v3.1.0 (<commit>)" }`) or LocalAI's discovery document at
+ * `GET /.well-known/localai.json`. The extra fields are the ones LocalAI's request schema accepts beyond the OpenAI set.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
+ */
+export function info() {
+	return {
+		name: "localai",
+		protocol: "openai.chat",
+		order: 52,
+		auth: "bearer",
+		strict: false,
+		probes: ["/version", "/.well-known/localai.json"],
+		fields: ["top_k", "min_p", "repeat_penalty", "repeat_last_n", "ignore_eos", "typical_p", "chat_template_kwargs", "grammar"],
+		paths: { chat: "/v1/chat/completions", models: "/v1/models", version: "/version", discovery: "/.well-known/localai.json" }
+	};
+}

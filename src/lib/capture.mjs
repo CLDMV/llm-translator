@@ -37,6 +37,7 @@ export function collect(driverApi) {
 			detect: driver.detect,
 			settings: driver.settings,
 			probe: driver.probe,
+			path: driver.path,
 			request: driver.request,
 			response: driver.response,
 			chunk: driver.chunk,
