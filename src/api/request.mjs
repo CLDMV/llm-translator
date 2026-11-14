@@ -31,6 +31,7 @@ import { emit } from "../lib/events.mjs";
 import { fit, pinBody } from "../lib/effort.mjs";
 import { relax, strictTools } from "../lib/strict.mjs";
 import { TranslatorError } from "../lib/errors.mjs";
+import * as vllm from "../lib/vllm.mjs";
 
 /**
  * Who produced reasoning data signed for this endpoint: driver, protocol and host, so two upstreams on the generic driver stay apart.
@@ -130,6 +131,10 @@ async function prepare(c, body, options, picked) {
 		...(pin?.effort === undefined ? {} : { effort: true })
 	};
 	const stream = body.stream === true;
+	// The protocol of the call: what the upstream speaks, or the front's own when the request goes through unconverted (which includes
+	// an Anthropic-front request to vLLM's native `/v1/messages`).
+	const protocol = convert === null ? (c.front === "anthropic" ? "anthropic.messages" : "openai.chat") : endpoint.protocol;
+	const viaMessages = protocol === "anthropic.messages" && endpoint.protocol === "openai.chat";
 	let upstream;
 	let converted;
 	if (convert) {
@@ -147,6 +152,8 @@ async function prepare(c, body, options, picked) {
 				{ kind: "toolsearch", endpoint: endpoint.name, log: options.log }
 			);
 		}
+	} else if (viaMessages) {
+		upstream = vllm.request(body, settings);
 	} else {
 		upstream =
 			c.front === "openai" && (options.filter ?? settings.passthroughFilter === true)
@@ -156,7 +163,7 @@ async function prepare(c, body, options, picked) {
 	// Sampling extensions: the upstream's `sampling` setting and an Anthropic request's `metadata.sampling` (which is not a real metadata key,
 	// so it never travels upstream as such).
 	const asked = c.front === "anthropic" ? body.metadata?.sampling : undefined;
-	if (endpoint.protocol === "openai.chat") {
+	if (protocol === "openai.chat") {
 		const dropped = [];
 		upstream = addSampling(upstream, asked, settings, driver.info.fields, dropped);
 		if (converted) converted.dropped.push(...dropped.filter((name) => !converted.dropped.includes(name)));
@@ -178,7 +185,7 @@ async function prepare(c, body, options, picked) {
 	upstream.model = model;
 	upstream = checkStrict(c, upstream, endpoint, driver, settings, options);
 	// A model with a configured level list gets an effort it supports (and the default one when the request names none).
-	if (levels && endpoint.protocol === "openai.chat")
+	if (levels && protocol === "openai.chat")
 		fit(upstream, levels, model, (message, details) =>
 			warn(c.config, c.state, message, { type: "effort", endpoint: endpoint.name, model, ...details, log: options.log })
 		);
@@ -190,7 +197,8 @@ async function prepare(c, body, options, picked) {
 			{ kind: "reasoning", endpoint: endpoint.name, log: options.log }
 		);
 	}
-	if (driver.request)
+	// The driver's request leaf shapes a Chat Completions body, which a native `/v1/messages` body is not.
+	if (driver.request && !viaMessages)
 		upstream = await driver.request(upstream, {
 			endpoint,
 			settings,
@@ -210,7 +218,7 @@ async function prepare(c, body, options, picked) {
 			log: options.log
 		});
 	}
-	const path = await http.pathOf(driver, endpoint.protocol === "openai.chat" ? "chat" : "messages", endpoint, model);
+	const path = await http.pathOf(driver, protocol === "openai.chat" ? "chat" : "messages", endpoint, model);
 	return {
 		upstream: endpoint.name,
 		pool: pool.map((entry) => entry.name),
@@ -230,17 +238,18 @@ async function prepare(c, body, options, picked) {
 			upstream: endpoint.name,
 			front: c.front,
 			native: convert === null,
+			messages: viaMessages,
 			model: body.model,
 			stream,
 			unserved,
 			convert: converted
 		},
-		images: { sent: images.carries(upstream), retry: settings.imageFallback && endpoint.protocol === "openai.chat", key },
-		tools: { sent: tools.carries(upstream), retry: settings.toolFallback && endpoint.protocol === "openai.chat" },
+		images: { sent: images.carries(upstream), retry: settings.imageFallback && protocol === "openai.chat", key },
+		tools: { sent: tools.carries(upstream), retry: settings.toolFallback && protocol === "openai.chat" },
 		// Only an Anthropic-protocol upstream gets the emulated schema, so this never overlaps with the image and tool retries above.
 		json: {
 			sent: converted?.jsonSchemaEmulated === true,
-			retry: settings.jsonObjectFallback && endpoint.protocol === "anthropic.messages",
+			retry: settings.jsonObjectFallback && protocol === "anthropic.messages",
 			key
 		}
 	};

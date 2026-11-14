@@ -32,6 +32,6 @@ export function info() {
 		auth: "bearer",
 		strict: true,
 		fields: VLLM_FIELDS,
-		paths: { chat: "/v1/chat/completions", models: "/v1/models", tokenize: "/tokenize", version: "/version" }
+		paths: { chat: "/v1/chat/completions", messages: "/v1/messages", models: "/v1/models", tokenize: "/tokenize", version: "/version" }
 	};
 }

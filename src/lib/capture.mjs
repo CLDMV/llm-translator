@@ -20,6 +20,7 @@
  * @module @cldmv/llm-translator/lib/capture
  */
 import { resolve } from "./settings.mjs";
+import * as vllm from "./vllm.mjs";
 
 /**
  * Collect the mounted drivers, sorted by `info().order`.
@@ -92,10 +93,20 @@ export function capture(self, context, frontOverride) {
 		 */
 		settings: (endpoint) => resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings),
 		/**
-		 * Converters for an endpoint, or null when the front and the upstream speak the same protocol.
+		 * Converters for an endpoint, or null when the request goes to it without conversion: the front and the upstream speak the same
+		 * protocol, or (given the request `body`) an Anthropic-front request goes to a vLLM upstream's native `/v1/messages` (the
+		 * `nativeMessages` setting, unless the upstream answered 404 to it before or the body is one the endpoint cannot take).
 		 * @param {any} endpoint - Runtime endpoint.
+		 * @param {any} [body] - Client request body; without it vLLM's native endpoint is never chosen.
 		 * @returns {{request: Function, response: Function, stream: Function} | null} Converters or null.
 		 */
-		converters: (endpoint) => (endpoint.protocol === nativeProtocol ? null : convert)
+		converters: (endpoint, body) => {
+			if (endpoint.protocol === nativeProtocol) return null;
+			if (front === "anthropic" && body !== undefined && endpoint.driver === "vllm" && !state.noMessages.has(endpoint.name)) {
+				const settings = resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings);
+				if (vllm.wants(endpoint, settings) && vllm.unsuited(body, settings) === null) return null;
+			}
+			return convert;
+		}
 	};
 }
