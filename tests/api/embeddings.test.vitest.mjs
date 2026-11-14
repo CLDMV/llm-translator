@@ -50,7 +50,9 @@ async function farm(handlers, upstreams = {}, config = {}) {
 		transport,
 		detect: false,
 		front: "openai",
-		...config
+		...config,
+		// These tests count the calls an endpoint gets, so the readiness probes are off.
+		pool: { healthInterval: 0, ...config.pool }
 	});
 	return { api, transport };
 }

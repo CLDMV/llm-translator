@@ -32,6 +32,7 @@ import { emit } from "../lib/events.mjs";
 import * as pool from "../lib/pool.mjs";
 import { createBudget } from "../lib/thinking.mjs";
 import * as fanout from "../lib/fanout.mjs";
+import { refresh } from "../lib/health.mjs";
 
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
 
@@ -304,6 +305,8 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		}
 		return { upstream: sent, result };
 	};
+	// Endpoints that name a health path are asked whether they are ready before the pool is ordered (only for a model with more than one endpoint).
+	await refresh(captured, body, options.signal);
 	// `send` takes the in-flight slot when the endpoint is picked (see `request`), so concurrent requests see each other.
 	let upstream = await request(body, { ...ask, hold: true });
 	const names = upstream.pool;

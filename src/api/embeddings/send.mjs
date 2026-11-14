@@ -23,6 +23,7 @@ import { resolve, serves } from "../../lib/route.mjs";
 import * as http from "../../lib/http.mjs";
 import * as pool from "../../lib/pool.mjs";
 import { emit } from "../../lib/events.mjs";
+import { refresh } from "../../lib/health.mjs";
 import { meter as createMeter } from "../../lib/usage.mjs";
 import { warn } from "../../lib/warn.mjs";
 import { start as record } from "../../lib/record.mjs";
@@ -81,6 +82,7 @@ export async function send(body, options = {}) {
 	if (!c.state.endpoints.some((endpoint) => serves(endpoint, target))) {
 		return fail(404, `The model "${body.model}" is not served by any configured upstream.`, { code: "model_not_found", param: "model" });
 	}
+	await refresh(c, body, options.signal);
 	const picked = resolve(c, body, { advance: true });
 	const members = picked.pool.filter((endpoint) => endpoint.protocol === "openai.chat");
 	if (members.length === 0) {

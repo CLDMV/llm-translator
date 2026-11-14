@@ -218,6 +218,12 @@ Some requests cannot go to the native endpoint and are converted as before: a re
 
 An upstream that answers 404 to `/v1/messages` with a body that is not an Anthropic error (the route is missing) is converted for that request and for every later one, until the next `detect()`; a `fallback` event of kind `messages` is emitted once. A 404 in Anthropic error shape (an unknown model) is returned as an error and does not change the mode.
 
+### Readiness and LoRA adapters for vLLM
+
+When a model is served by more than one vLLM endpoint, `send` asks each of them `GET /health` before it orders the pool, and skips the ones that say they are not ready while another serves the model. The mechanism is the shared pool health (`pool.healthInterval`, `pool.healthTimeout`, see [server.md](server.md#endpoint-pools-failover-and-load-balancing)); the vLLM driver switches it on by naming `/health` in `info().paths.health`, and other drivers can do the same. vLLM's `/load` is not used: it reports a server-side request counter (`server_load`) and answers 200 whatever the engine's state, so it says nothing about readiness.
+
+vLLM lists each LoRA adapter (`--lora-modules`, or `/v1/load_lora_adapter` when `VLLM_ALLOW_RUNTIME_LORA_UPDATING` is on) in `/v1/models` as a model whose `parent` is the base model. Detection keeps them apart in the facts (`facts.adapters`, as `{ id, parent }`, next to `facts.models`, which lists both), so an adapter is routable like any model, and an upstream with one base model and some adapters is still the single model that unknown names fall back to. `model.list()` and `GET /v1/models` carry the `parent` field on an adapter's entry, on the Anthropic and the OpenAI front alike, and on an alias of an adapter. A list that is fetched live also updates what the upstream serves, so adapters loaded or unloaded at runtime start or stop being routable as soon as a client lists the models (or `detect()` runs); an upstream with a configured `models` list keeps that list.
+
 ## Precedence
 
 For every setting the winner is, from highest to lowest: the upstream's own `settings`, the translator's global `settings`, probed values, driver settings, library defaults. The `inlineSystem` probe only runs when nothing above it set the value.

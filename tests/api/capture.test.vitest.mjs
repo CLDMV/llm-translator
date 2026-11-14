@@ -53,7 +53,9 @@ const vllm = (handler, config = {}, endpoint = {}) =>
 		upstreams: [{ name: "a", url: "http://a.test", backend: "vllm", apiKey: "sk-secret", settings: { topK: false }, ...endpoint }],
 		transport: fakeTransport(handler),
 		detect: false,
-		...config
+		...config,
+		// The readiness probes would add calls to the records.
+		pool: { healthInterval: 0, ...config.pool }
 	});
 
 const sseReply = (text) => ({ body: text, headers: { "content-type": "text/event-stream", "set-cookie": "a=b" } });
@@ -245,7 +247,8 @@ const pool = (handlers, config = {}) =>
 		transport: fakeTransport((url, init) => handlers[new URL(url).hostname.replace(".test", "")](init)),
 		detect: false,
 		front: "openai",
-		...config
+		...config,
+		pool: { healthInterval: 0, ...config.pool }
 	});
 const down = () => {
 	throw new TypeError("fetch failed");

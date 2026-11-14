@@ -20,6 +20,7 @@
 import { context, self } from "../../lib/runtime.mjs";
 import { capture } from "../../lib/capture.mjs";
 import { defaultOf, nearest } from "../../lib/effort.mjs";
+import { knownModels } from "../../lib/models.mjs";
 
 /**
  * List the models the upstreams serve (live when the driver can, else detection/config data), plus the configured aliases,
@@ -36,7 +37,7 @@ export async function list(options = {}) {
 			const live = driver.list
 				? await driver.list({ endpoint, transport: c.state.transport, signal: options.signal, timeout: c.config.detectTimeout })
 				: null;
-			const entries = live ?? (endpoint.models ?? endpoint.facts?.models ?? []).map((id) => ({ id }));
+			const entries = live ?? knownModels(endpoint);
 			for (const entry of entries) found.set(entry.id, { ...entry, upstream: endpoint.name });
 		})
 	);
@@ -95,13 +96,14 @@ function levelsOf(config, entry) {
 }
 
 /**
- * Translator fields of a list entry in the client shape: `efforts` and `default_effort` for a model with configured levels, and for an alias
+ * Translator fields of a list entry in the client shape: `parent` (the base model) for a LoRA adapter, `efforts` and `default_effort` for a model with configured levels, and for an alias
  * `alias_of` plus the `effort` and `thinking` it pins.
  * @param {any} entry - List entry.
  * @returns {object} Fields to merge into the model object.
  */
 function extras(entry) {
 	return {
+		...(typeof entry.parent === "string" && entry.parent !== "" ? { parent: entry.parent } : {}),
 		...(entry.alias_of === undefined ? {} : { alias_of: entry.alias_of }),
 		...(entry.levels === undefined ? {} : { efforts: entry.levels, default_effort: entry.default_effort }),
 		...(entry.effort === undefined ? {} : { effort: entry.effort }),

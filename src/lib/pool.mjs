@@ -28,6 +28,9 @@ export const BACKOFF = Object.freeze({ base: 1000, max: 60000 });
 /** Default timeouts in ms for a request to an endpoint that has pool mates (0 disables). Connect is short because a dead host is the common failure; headers is off because a server may legitimately take minutes to prefill a long prompt before it sends any header. */
 export const TIMEOUTS = Object.freeze({ connect: 10000, headers: 0 });
 
+/** Default readiness probing: how long a result is trusted (ms, 0 turns probing off) and how long a probe may take (ms). */
+export const PROBES = Object.freeze({ interval: 10000, timeout: 2000 });
+
 /**
  * Pool config as the translator accepts it.
  * @typedef {object} PoolConfig
@@ -35,21 +38,38 @@ export const TIMEOUTS = Object.freeze({ connect: 10000, headers: 0 });
  * @property {{base?: number, max?: number}} [backoff] Backoff in ms for a failing endpoint (defaults `1000` and `60000`).
  * @property {number} [connectTimeout] Milliseconds to wait for the TCP connection of a request to an endpoint with pool mates (default `10000`, `0` disables). Needs the default transport.
  * @property {number} [headersTimeout] Milliseconds to wait for the response headers of such a request (default `0`, off). Once the headers have arrived nothing caps the body.
+ * @property {number} [healthInterval] Milliseconds a readiness probe result (see `lib/health`) is trusted before the next request that has pool mates probes again (default `10000`, `0` turns probing off). Only drivers that name a health path (vLLM: `/health`) are probed.
+ * @property {number} [healthTimeout] Milliseconds a readiness probe may take before the endpoint counts as not ready (default `2000`).
  * @property {Record<string, "failover" | "round_robin" | "least_busy">} [models] Strategy per model, keyed by the model name after aliases.
  */
 
 /**
  * Fresh health record for an endpoint.
- * @returns {{failures: number, until: number, inflight: number, requests: number, errors: number, lastError: string | null, lastFailure: number | null, lastSuccess: number | null}} Record.
+ * `ready` is the result of the last readiness probe: `true`, `false`, or `null` when none has run (or the server has no health path); `checkedAt` is when it ran, `unsupported` is set once the server answered the probe with a 4xx (no such path), and `checking` holds a probe in flight so concurrent requests share it.
+ * @returns {{failures: number, until: number, inflight: number, requests: number, errors: number, lastError: string | null, lastFailure: number | null, lastSuccess: number | null, ready: boolean | null, checkedAt: number | null, readyReason: string | null, unsupported: boolean, checking: Promise<void> | null}} Record.
  */
 export function health() {
-	return { failures: 0, until: 0, inflight: 0, requests: 0, errors: 0, lastError: null, lastFailure: null, lastSuccess: null };
+	return {
+		failures: 0,
+		until: 0,
+		inflight: 0,
+		requests: 0,
+		errors: 0,
+		lastError: null,
+		lastFailure: null,
+		lastSuccess: null,
+		ready: null,
+		checkedAt: null,
+		readyReason: null,
+		unsupported: false,
+		checking: null
+	};
 }
 
 /**
  * Validate and normalize the `pool` config.
  * @param {PoolConfig | undefined} raw - Raw config.
- * @returns {{strategy: string, backoff: {base: number, max: number}, connectTimeout: number, headersTimeout: number, models: Record<string, string>}} Normalized config.
+ * @returns {{strategy: string, backoff: {base: number, max: number}, connectTimeout: number, headersTimeout: number, healthInterval: number, healthTimeout: number, models: Record<string, string>}} Normalized config.
  * @throws {TranslatorError} `INVALID_CONFIG` for an unknown strategy, a bad backoff or a bad timeout.
  */
 export function normalize(raw = {}) {
@@ -67,18 +87,31 @@ export function normalize(raw = {}) {
 	}
 	const connectTimeout = raw.connectTimeout ?? TIMEOUTS.connect;
 	const headersTimeout = raw.headersTimeout ?? TIMEOUTS.headers;
-	for (const name of ["connectTimeout", "headersTimeout"]) {
-		const value = name === "connectTimeout" ? connectTimeout : headersTimeout;
+	const healthInterval = raw.healthInterval ?? PROBES.interval;
+	const healthTimeout = raw.healthTimeout ?? PROBES.timeout;
+	const timeouts = { connectTimeout, headersTimeout, healthInterval, healthTimeout };
+	for (const name of Object.keys(timeouts)) {
+		const value = timeouts[name];
 		if (typeof value !== "number" || !(Number.isFinite(value) && value >= 0)) {
 			throw bad(`${name} must be a number of ms, 0 or more (got ${JSON.stringify(value)})`);
 		}
 	}
-	return { strategy, backoff: { base, max }, connectTimeout, headersTimeout, models };
+	return { strategy, backoff: { base, max }, connectTimeout, headersTimeout, healthInterval, healthTimeout, models };
+}
+
+/**
+ * Is the endpoint to be tried now: not backing off after a failure, and not reported not ready by its last readiness probe.
+ * @param {any} endpoint - Runtime endpoint.
+ * @param {number} now - Current time in ms.
+ * @returns {boolean} True when it is healthy.
+ */
+function available(endpoint, now) {
+	return endpoint.health.until <= now && endpoint.health.ready !== false;
 }
 
 /**
  * Order the endpoints that serve a model into the sequence in which they are tried: healthy endpoints first, arranged by the model's
- * strategy, then the unhealthy ones, soonest to recover first. Every endpoint is included, so an all-unhealthy pool is still tried.
+ * strategy, then the unhealthy ones (backing off after a failure, or not ready), soonest to recover first. Every endpoint is included, so an all-unhealthy pool is still tried.
  * @param {any} config - Normalized config (`pool`).
  * @param {any} state - Translator state (`cursors`).
  * @param {any[]} list - Endpoints serving the model, in configuration order.
@@ -89,8 +122,8 @@ export function normalize(raw = {}) {
  */
 export function order(config, state, list, model, advance, now = Date.now()) {
 	const strategy = config.pool.models[model] ?? config.pool.strategy;
-	const up = list.filter((entry) => entry.health.until <= now);
-	const down = list.filter((entry) => entry.health.until > now).sort((left, right) => left.health.until - right.health.until);
+	const up = list.filter((entry) => available(entry, now));
+	const down = list.filter((entry) => !available(entry, now)).sort((left, right) => left.health.until - right.health.until);
 	let first = up;
 	if (strategy === "least_busy") {
 		first = [...up].sort((left, right) => left.health.inflight - right.health.inflight);
@@ -132,20 +165,25 @@ export function succeeded(endpoint, now = Date.now()) {
 	record.failures = 0;
 	record.until = 0;
 	record.lastSuccess = now;
+	// A request that was answered shows the server is up, whatever the last probe said.
+	if (record.ready === false) record.ready = true;
 }
 
 /**
  * Health of an endpoint as status output shows it.
  * @param {any} endpoint - Runtime endpoint.
  * @param {number} [now] - Current time in ms.
- * @returns {{healthy: boolean, failures: number, retryAt: string | null, inflight: number, requests: number, errors: number, lastError: string | null, lastFailure: string | null, lastSuccess: string | null}} Health report (times are ISO strings).
+ * @returns {{healthy: boolean, ready: boolean | null, readyReason: string | null, checkedAt: string | null, failures: number, retryAt: string | null, inflight: number, requests: number, errors: number, lastError: string | null, lastFailure: string | null, lastSuccess: string | null}} Health report (times are ISO strings). `healthy` is false while the endpoint backs off after a failure or its last readiness probe said it is not ready; `ready` is that probe's verdict (null when none ran), `readyReason` why it failed.
  */
 export function describe(endpoint, now = Date.now()) {
 	const record = endpoint.health;
 	const iso = (time) => (time === null ? null : new Date(time).toISOString());
 	const down = record.until > now;
 	return {
-		healthy: !down,
+		healthy: !down && record.ready !== false,
+		ready: record.ready,
+		readyReason: record.ready === false ? record.readyReason : null,
+		checkedAt: iso(record.checkedAt),
 		failures: record.failures,
 		retryAt: down ? iso(record.until) : null,
 		inflight: record.inflight,

@@ -54,7 +54,7 @@ Every converter accepts an optional `settings` argument (partial objects are fin
 
 ## Pool config (not a converter setting)
 
-Failover and load balancing between upstreams that serve the same model are configured with the translator's `pool` key, not with `settings`: `strategy` (`failover`, `round_robin`, `least_busy`), `models` (strategy per model after aliases) and `backoff` (`base` and `max` in ms), `connectTimeout` and `headersTimeout` (ms). It is described in [server.md](server.md#endpoint-pools-failover-and-load-balancing). An invalid value throws a `TranslatorError` with the code `INVALID_CONFIG` when the translator is created.
+Failover and load balancing between upstreams that serve the same model are configured with the translator's `pool` key, not with `settings`: `strategy` (`failover`, `round_robin`, `least_busy`), `models` (strategy per model after aliases) and `backoff` (`base` and `max` in ms), `connectTimeout` and `headersTimeout` (ms), `healthInterval` and `healthTimeout` (ms, readiness probes). It is described in [server.md](server.md#endpoint-pools-failover-and-load-balancing). An invalid value throws a `TranslatorError` with the code `INVALID_CONFIG` when the translator is created.
 
 ## Effort levels and pinned aliases (not converter settings)
 
