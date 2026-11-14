@@ -40,7 +40,10 @@ export function join(base, path) {
  */
 export async function pathOf(driver, kind, endpoint, model) {
 	if (driver.path) return driver.path(kind, { endpoint, model });
-	return driver.info.paths[kind] ?? DEFAULT_PATHS[kind];
+	// A driver with a native mode (`info().native`) names the paths of that mode, which replace the default ones for an endpoint using it.
+	const native =
+		driver.info.native !== undefined && endpoint.protocol === driver.info.native.protocol ? driver.info.native.paths : undefined;
+	return native?.[kind] ?? driver.info.paths[kind] ?? DEFAULT_PATHS[kind];
 }
 
 /** Standard OpenAI paths for the calls a driver does not name in `info().paths`. */

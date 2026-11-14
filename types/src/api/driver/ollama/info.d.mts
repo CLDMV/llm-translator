@@ -17,8 +17,9 @@
  * @module @cldmv/llm-translator/driver/ollama
  */
 /**
- * Describe the Ollama driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], paths: Record<string,string>}} Driver facts.
+ * Describe the Ollama driver. `protocol` is the OpenAI-compatible `/v1` API; `native` is the mode an upstream selects with `api: "native"`, Ollama's own
+ * `/api/chat` (the `ollama.chat` protocol; the model list and embeddings stay on `/v1`).
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], paths: Record<string,string>, native: {protocol: string, paths: Record<string,string>}}} Driver facts.
  */
 export function info(): {
     name: string;
@@ -28,4 +29,8 @@ export function info(): {
     strict: boolean;
     probes: string[];
     paths: Record<string, string>;
+    native: {
+        protocol: string;
+        paths: Record<string, string>;
+    };
 };
