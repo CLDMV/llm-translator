@@ -37,6 +37,10 @@ export type UpstreamConfig = {
      */
     deployment?: string;
     /**
+     * Which API of the server to use: `"openai"` (default) is the OpenAI-compatible one, `"native"` the server's own chat API, for a driver that has one (Ollama's `/api/chat`).
+     */
+    api?: "openai" | "native";
+    /**
      * Driver name, or `"auto"` (default) to detect.
      */
     backend?: string;

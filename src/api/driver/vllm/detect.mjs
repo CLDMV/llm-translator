@@ -18,6 +18,7 @@
  * @module @cldmv/llm-translator/driver/vllm
  */
 import * as http from "../../../lib/http.mjs";
+import { adaptersOf } from "../../../lib/models.mjs";
 import { isLlamacppProps, isLocalaiVersion, isSglangInfo, isTgiInfo, objectOf } from "../../../lib/backends.mjs";
 
 /** `owned_by` values of other backends that also answer `/version`. */
@@ -26,7 +27,7 @@ const OTHERS = new Set(["sglang", "llamacpp"]);
 /**
  * Probe an endpoint for vLLM.
  * @param {any} context - `{ endpoint, transport, signal, timeout, probes }`.
- * @returns {Promise<any | null>} Facts `{ version, models, maxModelLen }`, or null when the endpoint is not vLLM (or is LocalAI, SGLang, llama.cpp or TGI, which can also answer `/version`).
+ * @returns {Promise<any | null>} Facts `{ version, models, adapters, maxModelLen }` (`models` lists the base models and the LoRA adapters, `adapters` the adapters alone as `{ id, parent }`, taken from the entries whose `parent` names the base model), or null when the endpoint is not vLLM (or is LocalAI, SGLang, llama.cpp or TGI, which can also answer `/version`).
  */
 export async function detect({ endpoint, transport, signal, timeout, probes }) {
 	const context = { endpoint, transport, signal, timeout, probes };
@@ -52,6 +53,7 @@ export async function detect({ endpoint, transport, signal, timeout, probes }) {
 	return {
 		version,
 		models: models.map((entry) => entry.id),
+		adapters: adaptersOf(models),
 		maxModelLen: models.find((entry) => typeof entry.max_model_len === "number")?.max_model_len
 	};
 }

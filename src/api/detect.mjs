@@ -102,8 +102,23 @@ async function bind(c, endpoint, network, probe) {
 		driver = c.drivers.find((entry) => entry.name === "compatible");
 		facts = { reachable: null, models: [] };
 	}
+	// A fresh detection forgets that the upstream once answered 404 to vLLM's native `/v1/messages`...
+	c.state.noMessages.delete(endpoint.name);
+	// ...and the readiness it was probed with.
+	Object.assign(endpoint.health, { ready: null, readyReason: null, checkedAt: null, unsupported: false });
 	endpoint.driver = driver.name;
 	endpoint.protocol = driver.info.protocol;
+	if (endpoint.api === "native") {
+		// The server's own chat API instead of its OpenAI-compatible one, for a driver that declares it in `info().native`.
+		if (!driver.info.native) {
+			const named = c.drivers.filter((entry) => entry.info.native).map((entry) => entry.name);
+			throw new TranslatorError(
+				`Upstream ${endpoint.name}: api "native" needs a driver with a native API (${named.join(", ")}), but the upstream is bound to ${driver.name}; set backend to one of them`,
+				{ code: "unsupported_api", status: 500 }
+			);
+		}
+		endpoint.protocol = driver.info.native.protocol;
+	}
 	endpoint.facts = facts;
 	endpoint.driverSettings = (await driver.settings?.(facts)) ?? {};
 	endpoint.probed = {};

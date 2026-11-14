@@ -20,6 +20,7 @@
 import { context, self } from "../lib/runtime.mjs";
 import { capture } from "../lib/capture.mjs";
 import { messages } from "../lib/sse.mjs";
+import * as vllm from "../lib/vllm.mjs";
 
 /**
  * Rewrite the model name carried by a client event back to the name the client asked for.
@@ -59,7 +60,7 @@ export function stream(source, state) {
 	const endpoint = c.endpoint(state.upstream);
 	const driver = c.driver(endpoint);
 	const settings = c.settings(endpoint);
-	const convert = c.converters(endpoint);
+	const convert = state.native ? null : c.converters(endpoint);
 	const normalize = driver.chunk;
 	const ctx = { endpoint, settings, state };
 	/**
@@ -85,7 +86,7 @@ export function stream(source, state) {
 	// A driver that can hold text back (it has `flush`) may still release some after the finish and usage chunks, so those two are kept
 	// back until the stream ends and go out after the released text: the answer is complete before it is finished.
 	const holding = Boolean(normalize && driver.flush);
-	return (async function* () {
+	const native = (async function* () {
 		const tail = [];
 		let closed = false;
 		for await (const message of messages(source)) {
@@ -107,4 +108,5 @@ export function stream(source, state) {
 			yield* tail;
 		}
 	})();
+	return state.messages ? vllm.stream(native) : native;
 }

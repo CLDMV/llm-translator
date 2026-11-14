@@ -20,6 +20,8 @@
  * @module @cldmv/llm-translator/lib/capture
  */
 import { resolve } from "./settings.mjs";
+import * as vllm from "./vllm.mjs";
+import { PROTOCOL } from "./ollama.mjs";
 
 /**
  * Collect the mounted drivers, sorted by `info().order`.
@@ -61,6 +63,8 @@ export function capture(self, context, frontOverride) {
 	const { config, state } = context;
 	const toOpenai = self.convert.anthropic.messages.to.openai.chat;
 	const toAnthropic = self.convert.openai.chat.to.anthropic.messages;
+	const toOllama = { anthropic: self.convert.anthropic.messages.to.ollama.chat, openai: self.convert.openai.chat.to.ollama.chat };
+	const fromOllama = { anthropic: self.convert.ollama.chat.to.anthropic.messages, openai: self.convert.ollama.chat.to.openai.chat };
 	const front = frontOverride ?? config.front;
 	const drivers = collect(self.driver);
 	const nativeProtocol = front === "anthropic" ? "anthropic.messages" : "openai.chat";
@@ -68,6 +72,8 @@ export function capture(self, context, frontOverride) {
 		front === "anthropic"
 			? { request: toOpenai.request, response: toAnthropic.response, stream: toAnthropic.stream }
 			: { request: toAnthropic.request, response: toOpenai.response, stream: toOpenai.stream };
+	// An endpoint on Ollama's native chat API: the request is converted to Ollama's body, the reply (a JSON object or NDJSON lines) from it.
+	const ollama = { request: toOllama[front].request, response: fromOllama[front].response, stream: fromOllama[front].stream };
 	return {
 		config,
 		state,
@@ -92,10 +98,21 @@ export function capture(self, context, frontOverride) {
 		 */
 		settings: (endpoint) => resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings),
 		/**
-		 * Converters for an endpoint, or null when the front and the upstream speak the same protocol.
+		 * Converters for an endpoint, or null when the request goes to it without conversion: the front and the upstream speak the same
+		 * protocol, or (given the request `body`) an Anthropic-front request goes to a vLLM upstream's native `/v1/messages` (the
+		 * `nativeMessages` setting, unless the upstream answered 404 to it before or the body is one the endpoint cannot take).
 		 * @param {any} endpoint - Runtime endpoint.
+		 * @param {any} [body] - Client request body; without it vLLM's native endpoint is never chosen.
 		 * @returns {{request: Function, response: Function, stream: Function} | null} Converters or null.
 		 */
-		converters: (endpoint) => (endpoint.protocol === nativeProtocol ? null : convert)
+		converters: (endpoint, body) => {
+			if (endpoint.protocol === PROTOCOL) return ollama;
+			if (endpoint.protocol === nativeProtocol) return null;
+			if (front === "anthropic" && body !== undefined && endpoint.driver === "vllm" && !state.noMessages.has(endpoint.name)) {
+				const settings = resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings);
+				if (vllm.wants(endpoint, settings) && vllm.unsuited(body, settings) === null) return null;
+			}
+			return convert;
+		}
 	};
 }

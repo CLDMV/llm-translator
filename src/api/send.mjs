@@ -32,6 +32,7 @@ import { emit } from "../lib/events.mjs";
 import * as pool from "../lib/pool.mjs";
 import { createBudget } from "../lib/thinking.mjs";
 import * as fanout from "../lib/fanout.mjs";
+import { refresh } from "../lib/health.mjs";
 
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
 
@@ -221,6 +222,27 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		let sent = first;
 		let result = await call(transport, sent, options.signal, limitsNow());
 		const status = result.status;
+		if (status === 404 && sent.state.messages) {
+			// vLLM's native `/v1/messages` answers an Anthropic-shaped error for an unknown model but FastAPI's `{"detail":"Not Found"}` when the
+			// route is missing (a vLLM older than 0.11.1): only the second means the endpoint is not there, so only then is the request converted.
+			const failure = await parse(result);
+			if (failure?.type === "error") return { upstream: sent, result, failure };
+			captured.state.noMessages.add(sent.upstream);
+			announce({
+				type: "fallback",
+				kind: "messages",
+				level: "warn",
+				message: `Upstream ${sent.upstream}: /v1/messages answered 404; sent the request converted to Chat Completions, and will do so for this upstream until the next detection. Set nativeMessages: false on this upstream to skip the first attempt.`,
+				endpoint: sent.upstream,
+				model: sent.body.model,
+				status,
+				reason: String(parseError(failure, status).message).trim().slice(0, 500),
+				action: "conversion"
+			});
+			sent = await request(body, { ...ask, endpoint: sent.upstream, retry: true });
+			note(sent);
+			return { upstream: sent, result: await call(transport, sent, options.signal, limitsNow()) };
+		}
 		const others = status === 400 && [sent.images, sent.tools].some((part) => part.sent && part.retry);
 		// The schema that stands in for `json_object` is retried on a 400 or 422 whatever the message says: servers word it differently.
 		const schema = (status === 400 || status === 422) && sent.json.sent && sent.json.retry;
@@ -283,6 +305,8 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		}
 		return { upstream: sent, result };
 	};
+	// Endpoints that name a health path are asked whether they are ready before the pool is ordered (only for a model with more than one endpoint).
+	await refresh(captured, body, options.signal);
 	// `send` takes the in-flight slot when the endpoint is picked (see `request`), so concurrent requests see each other.
 	let upstream = await request(body, { ...ask, hold: true });
 	const names = upstream.pool;

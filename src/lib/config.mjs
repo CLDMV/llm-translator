@@ -30,6 +30,7 @@ import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
  * @property {Record<string,string>} [headers] Extra headers sent to the upstream.
  * @property {string} [apiVersion] Azure OpenAI `api-version`. Set, it selects the classic per-deployment URLs; unset, the v1 API is used.
  * @property {string} [deployment] Azure OpenAI deployment name for the classic URLs. Defaults to the request's model.
+ * @property {"openai" | "native"} [api] Which API of the server to use: `"openai"` (default) is the OpenAI-compatible one, `"native"` the server's own chat API, for a driver that has one (Ollama's `/api/chat`).
  * @property {string} [backend] Driver name, or `"auto"` (default) to detect.
  * @property {string[]} [models] Models this upstream serves (routing).
  * @property {boolean} [default] Marks the fallback upstream.
@@ -66,6 +67,12 @@ export function endpoint(entry, index) {
 			throw new TranslatorError(`upstreams[${index}].${key} must be a non-empty string`, { code: "INVALID_CONFIG", status: 500 });
 		}
 	}
+	if (raw.api !== undefined && raw.api !== "openai" && raw.api !== "native") {
+		throw new TranslatorError(`upstreams[${index}].api must be "openai" or "native" (got ${JSON.stringify(raw.api)})`, {
+			code: "INVALID_CONFIG",
+			status: 500
+		});
+	}
 	return {
 		name: raw.name ?? `upstream-${index}`,
 		url: baseUrl(raw.url),
@@ -73,6 +80,7 @@ export function endpoint(entry, index) {
 		headers: { ...raw.headers },
 		apiVersion: raw.apiVersion,
 		deployment: raw.deployment,
+		api: raw.api ?? "openai",
 		backend: raw.backend ?? "auto",
 		models: Array.isArray(raw.models) ? [...raw.models] : undefined,
 		default: raw.default === true,

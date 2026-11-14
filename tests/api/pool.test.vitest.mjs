@@ -42,7 +42,12 @@ async function farm(handlers, config = {}, models = ["m"]) {
 		upstreams: Object.keys(handlers).map((name) => ({ name, url: `http://${name}.test`, backend: "vllm", models })),
 		transport,
 		detect: false,
-		...config
+		...config,
+		// These tests count the calls an endpoint gets, so the readiness probes are off (see vllm-health-lora.test.vitest.mjs).
+		pool:
+			config.pool === undefined || (config.pool !== null && typeof config.pool === "object")
+				? { healthInterval: 0, ...config.pool }
+				: config.pool
 	});
 	const calls = (name) => transport.calls.filter((entry) => host(entry.url) === name).length;
 	return { api, transport, calls };
@@ -169,7 +174,8 @@ describe("ordered failover", () => {
 				{ name: "c", url: "http://c.test", backend: "vllm", models: ["m"] }
 			],
 			transport,
-			detect: false
+			detect: false,
+			pool: { healthInterval: 0 }
 		});
 		expect(text(await api.send(hello))).toBe("c");
 		expect(transport.calls.map((entry) => host(entry.url))).toEqual(["a", "c"]);
@@ -300,7 +306,8 @@ describe("usage reporting across endpoints", () => {
 				{ name: "b", url: "http://b.test", backend: "anthropic", models: ["m"] }
 			],
 			transport,
-			detect: false
+			detect: false,
+			pool: { healthInterval: 0 }
 		});
 		const reply = await api.send(hello);
 		expect(text(reply)).toBe("native");
@@ -566,7 +573,8 @@ describe("server", () => {
 					{ name: "dead", url: "http://127.0.0.1:1", backend: "vllm", models: ["qwen3-coder"] },
 					{ name: "b", url: good.url, models: ["qwen3-coder"], settings: { images: true } }
 				],
-				detect: false
+				detect: false,
+				pool: { healthInterval: 0 }
 			});
 			const reply = await api.send({ model: "qwen3-coder", max_tokens: 8, messages: [{ role: "user", content: "hi" }] });
 			expect(reply.status).toBe(200);
@@ -856,7 +864,8 @@ describe("review fixes", () => {
 					{ name: "b", url: "http://b.test", backend: "vllm", models: ["m"], settings: { unknownFields: "error" } }
 				],
 				transport,
-				detect: false
+				detect: false,
+				pool: { healthInterval: 0 }
 			});
 			const reply = await api.send({ ...hello, mystery_field: 1 });
 			expect(reply.status).toBe(400);
@@ -896,6 +905,7 @@ describe("pools across drivers with different passthrough fields and stream flus
 			],
 			transport,
 			detect: false,
+			pool: { healthInterval: 0 },
 			settings: { passthroughFilter: true }
 		});
 		const reply = await api.send(chat);
@@ -917,7 +927,8 @@ describe("pools across drivers with different passthrough fields and stream flus
 				{ name: "b", url: "http://b.test", backend: "llamacpp", models: ["m"] }
 			],
 			transport,
-			detect: false
+			detect: false,
+			pool: { healthInterval: 0 }
 		});
 		const reply = await api.send({ ...chat, stream: true });
 		const events = await collect(reply.stream);

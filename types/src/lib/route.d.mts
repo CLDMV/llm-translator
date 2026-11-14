@@ -15,7 +15,7 @@ export function serves(endpoint: any, model: string): boolean;
  * @param {boolean} [advance] - Move the round robin cursor (false to only look).
  * @returns {{endpoint: any, model: string | undefined, unserved: boolean, pool: any[], pin: {effort?: string, thinking?: boolean} | undefined}} Chosen endpoint, the model name to send upstream, whether
  * no endpoint serves the model and the endpoints to try in order (the chosen one first). When nothing serves it and the fallback endpoint knows
- * exactly one model, that model is sent instead.
+ * exactly one base model (adapters aside), that model is sent instead.
  */
 export function pick(config: any, endpoints: any[], model: string | undefined, state: any, advance?: boolean): {
     endpoint: any;

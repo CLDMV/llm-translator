@@ -90,6 +90,9 @@ test("a translator composed from dist/api converts, streams and serves", async (
 			"azure",
 			"compatible",
 			"deepseek",
+			"fireworks",
+			"gemini",
+			"groq",
 			"llamacpp",
 			"lmstudio",
 			"localai",
@@ -99,7 +102,9 @@ test("a translator composed from dist/api converts, streams and serves", async (
 			"openrouter",
 			"sglang",
 			"tgi",
-			"vllm"
+			"together",
+			"vllm",
+			"xai"
 		]);
 		assert.equal(api.status().upstreams[0].driver, "vllm");
 
