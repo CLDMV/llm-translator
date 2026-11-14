@@ -17,18 +17,18 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.8.0 (November 2026)
+### Latest: v0.9.0 (November 2026)
 
-- **Mistral and LM Studio drivers** — api.mistral.ai is matched by host and gets 9-character tool-call ids, `random_seed`, `tool_choice: "any"` and flattened reasoning chunks. LM Studio is recognised from its own `/api/v0/models` listing, and its Anthropic-compatible endpoint is one `backend: "anthropic"` away.
-- **`n` above 1 and refusal categories** — an OpenAI client's `n` above 1 sent to an Anthropic-protocol upstream is answered by `n` parallel requests, combined into one reply or stream with summed usage. A refusal gets `stop_details.category: "general_harms"` when an Azure-style content filter flags hate, sexual, violence or self-harm.
-- [View full v0.8.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.8.0.md)
+- **Azure OpenAI and OpenRouter drivers** — Azure gets `api-key` auth and either the v1 API or the classic deployment URLs (set `apiVersion`, and `deployment` if it isn't the model name), with filtered categories named on content-filter errors. OpenRouter keeps `reasoning_details` round-tripping in order, turns errors returned inside a 200 into real errors, and maps effort and thinking budgets to its `reasoning` object.
+- **Hugging Face TGI and LocalAI drivers** — both are detected by probe. TGI's old reply quirks (a lone `tool_calls` object, numeric ids, object arguments, `eos_token`) are normalised and structured output goes out as its grammar. LocalAI's reasoning is read, and `disable_parallel_tool_use` is honoured even though LocalAI sets parallel calls per model.
+- [View full v0.9.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.9.0.md)
 
 ### Recent Releases
 
+- **v0.8.0** (November 2026) — Mistral and LM Studio drivers, an OpenAI client's `n` above 1 answered by parallel requests to Anthropic-protocol upstreams, and `stop_details.category` from content-filter results ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.8.0.md))
 - **v0.7.0** (November 2026) — Anthropic-protocol servers detected by probe on any host, tool-call ids rewritten for strict upstream formats, embeddings usage through `onUsage`, and capture records for every failed-over attempt ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.7.0.md))
 - **v0.6.0** (November 2026) — `POST /v1/embeddings` pass-through, sampling extensions per upstream and per request, `strict` tool use end to end with a schema check, and the `capture` option for debugging ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.6.0.md))
 - **v0.5.0** (November 2026) — everything the library logs is available as events, logging is opt-in through `logs`, `json_object` reaches Anthropic upstreams as a schema with a fallback, and refusals carry `stop_details` ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.5.0.md))
-- **v0.4.0** (November 2026) — per-model effort levels and aliases that pin effort and thinking, non-standard finish reasons, a configurable tool-error marker, per-upstream `pingInterval` and a Node.js 22.15 floor ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.4.0.md))
 
 📚 **For complete version history and detailed release notes, see the [docs/changelog/](https://github.com/CLDMV/llm-translator/tree/master/docs/changelog/) folder.**
 
