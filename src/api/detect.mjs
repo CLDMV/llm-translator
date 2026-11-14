@@ -102,6 +102,8 @@ async function bind(c, endpoint, network, probe) {
 		driver = c.drivers.find((entry) => entry.name === "compatible");
 		facts = { reachable: null, models: [] };
 	}
+	// A fresh detection forgets that the upstream once answered 404 to vLLM's native `/v1/messages`.
+	c.state.noMessages.delete(endpoint.name);
 	endpoint.driver = driver.name;
 	endpoint.protocol = driver.info.protocol;
 	endpoint.facts = facts;

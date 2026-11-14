@@ -58,6 +58,7 @@ import { TranslatorError } from "./errors.mjs";
  * @property {"buffer"|"stream"} toolStreaming - OpenAI to Anthropic streams: `buffer` holds each tool call until its arguments are complete and emits one whole `tool_use` block (text and thinking keep streaming and appear before the block); `stream` forwards argument fragments incrementally and holds text that arrives meanwhile until the tool blocks are done.
  * @property {boolean} effortPassthrough - vLLM driver: send `xhigh` and `max` reasoning effort unchanged instead of clamping them to `high`.
  * @property {boolean} passthroughFilter - Restrict bodies forwarded from the OpenAI front to an OpenAI-protocol upstream to standard Chat Completions fields plus documented vLLM extensions. Off in the library; the server turns it on unless set to false.
+ * @property {boolean | "auto"} nativeMessages - vLLM driver: send an Anthropic-front request to vLLM's own `/v1/messages` (vLLM 0.11.1 and later) with only normalisation, instead of converting it to Chat Completions. `false` (default) always converts, `true` always uses the native endpoint, `"auto"` uses it when the detected or configured version is 0.11.1 or later. A request the endpoint cannot take (a trailing assistant message, `document` blocks, deferred tools unless `toolSearch` is `native`) is converted, and so is every request once the server answers 404 to `/v1/messages`. The OpenAI front is never affected.
  * @property {number} contextWindow - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
  * @property {number} defaultMaxTokens - `max_tokens` used when an OpenAI request has none (Anthropic requires one).
  */
@@ -100,6 +101,7 @@ export const DEFAULTS = Object.freeze({
 	toolStreaming: "buffer",
 	effortPassthrough: false,
 	passthroughFilter: false,
+	nativeMessages: false,
 	contextWindow: 0,
 	defaultMaxTokens: 8192
 });
@@ -165,6 +167,13 @@ export function resolve(...layers) {
 				details: { key }
 			});
 		}
+	}
+	if (out.nativeMessages !== true && out.nativeMessages !== false && out.nativeMessages !== "auto") {
+		throw new TranslatorError(`Invalid setting nativeMessages: ${JSON.stringify(out.nativeMessages)} (expected true, false or "auto")`, {
+			code: "invalid_setting",
+			status: 500,
+			details: { key: "nativeMessages" }
+		});
 	}
 	if (typeof out.toolErrorMarker !== "string" || out.toolErrorMarker.trim() === "") {
 		throw new TranslatorError(`Invalid setting toolErrorMarker: ${JSON.stringify(out.toolErrorMarker)} (expected a non-empty string)`, {

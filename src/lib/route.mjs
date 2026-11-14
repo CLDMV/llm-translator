@@ -87,7 +87,7 @@ export function resolve(c, body, options = {}) {
 			requested: body.model,
 			unserved: picked.unserved,
 			pin: picked.pin,
-			convert: c.converters(forced),
+			convert: c.converters(forced, body),
 			pool: [forced]
 		};
 	}
@@ -98,7 +98,7 @@ export function resolve(c, body, options = {}) {
 		requested: body.model,
 		unserved: picked.unserved,
 		pin: picked.pin,
-		convert: c.converters(endpoint),
+		convert: c.converters(endpoint, body),
 		pool
 	};
 }

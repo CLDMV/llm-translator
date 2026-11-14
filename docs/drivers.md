@@ -202,6 +202,22 @@ The vLLM driver turns the detected version into settings. An unknown or missing 
 
 Reading is never version dependent: the converters accept `reasoning`, `reasoning_content` and `<think>` tags in content.
 
+### Native `/v1/messages` for vLLM
+
+vLLM 0.11.1 and later serve the Anthropic Messages API themselves. With `nativeMessages` set on an upstream's `settings` (or globally), an Anthropic-front request is sent to `POST /v1/messages` as it is, instead of being converted to Chat Completions and back. `false` (the default) always converts, `true` always uses the native endpoint, and `"auto"` uses it when the detected `/version` (or the upstream's `version`) is 0.11.1 or later; an unknown version stays on conversion. The OpenAI front is not affected, and neither is any other driver. `status()` reports the state per upstream as `messages`.
+
+vLLM's endpoint is itself a converter to Chat Completions inside the server, with gaps the translator fills:
+
+- The system prompt arrives as one string, with the text blocks joined by a blank line and the billing header block removed (vLLM joins blocks with nothing between them).
+- vLLM sends no `ping` event. A `ping` follows `message_start`, and the SSE writer still sends keep-alives while the stream is silent.
+- vLLM before 0.17 sends thinking blocks without a `signature`. Such blocks get the translator's own marker signature (the same `llmt:` one the conversion makes); a signature vLLM made up is left alone.
+- vLLM reads `tool_result.is_error` but ignores it. With `toolErrors` on, the marker text goes in front of the result, as it does in a conversion.
+- The upstream is called with `Authorization: Bearer`, the only scheme vLLM checks. The client's `x-api-key` and `anthropic-beta` headers are not forwarded.
+
+Some requests cannot go to the native endpoint and are converted as before: a request whose last message is from the assistant (the endpoint finishes that turn instead of continuing it), a request with `document` blocks (the endpoint rejects the block type; the conversion extracts the text and page images), and a request with deferred tools or `tool_reference` blocks unless `toolSearch` is `native`. The `metadata.sampling` extension is dropped, and a model's `efforts` list is not applied.
+
+An upstream that answers 404 to `/v1/messages` with a body that is not an Anthropic error (the route is missing) is converted for that request and for every later one, until the next `detect()`; a `fallback` event of kind `messages` is emitted once. A 404 in Anthropic error shape (an unknown model) is returned as an error and does not change the mode.
+
 ## Precedence
 
 For every setting the winner is, from highest to lowest: the upstream's own `settings`, the translator's global `settings`, probed values, driver settings, library defaults. The `inlineSystem` probe only runs when nothing above it set the value.
