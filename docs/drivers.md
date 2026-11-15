@@ -269,6 +269,36 @@ When a model is served by more than one vLLM endpoint, `send` asks each of them 
 
 vLLM lists each LoRA adapter (`--lora-modules`, or `/v1/load_lora_adapter` when `VLLM_ALLOW_RUNTIME_LORA_UPDATING` is on) in `/v1/models` as a model whose `parent` is the base model. Detection keeps them apart in the facts (`facts.adapters`, as `{ id, parent }`, next to `facts.models`, which lists both), so an adapter is routable like any model, and an upstream with one base model and some adapters is still the single model that unknown names fall back to. `model.list()` and `GET /v1/models` carry the `parent` field on an adapter's entry, on the Anthropic and the OpenAI front alike, and on an alias of an adapter. A list that is fetched live also updates what the upstream serves, so adapters loaded or unloaded at runtime start or stop being routable as soon as a client lists the models (or `detect()` runs); an upstream with a configured `models` list keeps that list.
 
+## Constrained decoding (grammar, regex, choice, JSON Schema)
+
+`output_config.format` and `response_format` only ever carry a JSON Schema. Backends that decode under a constraint also take a regular expression, a fixed list of choices or a grammar, each in a field of its own. A neutral `constraint` object describes one of them, and the driver of the upstream turns it into the backend's native field. It follows the same pattern as the `sampling` extension fields: set it per upstream (or globally) in the `constraint` setting, and a client can override it per request.
+
+```json
+{ "json": { "type": "object", "properties": { "ok": { "type": "boolean" } } } }
+{ "regex": "[A-Z]{3}-[0-9]{4}" }
+{ "choice": ["positive", "negative", "neutral"] }
+{ "grammar": "root ::= \"yes\" | \"no\"" }
+```
+
+Exactly one of `json` (a JSON Schema object), `regex`, `choice` (a non-empty list of strings) and `grammar` is allowed. A client sends it as `constraint` on the OpenAI front or as `metadata.constraint` on the Anthropic front; either replaces the upstream's `constraint` setting, and neither is ever forwarded under that name. A malformed value in the request is a 400 `invalid_request`; in the setting it is `invalid_setting`. A body that already carries the backend's native field (`structured_outputs`, `regex`, `grammar`, `response_format` and so on) keeps it.
+
+| Backend                                              | `json`                                     | `regex`                                     | `choice`                                 | `grammar`                         |
+| ---------------------------------------------------- | ------------------------------------------ | ------------------------------------------- | ---------------------------------------- | --------------------------------- |
+| vLLM 0.11.0 and later, unknown version, `compatible` | `structured_outputs: { json }`             | `structured_outputs: { regex }`             | `structured_outputs: { choice }`         | `structured_outputs: { grammar }` |
+| vLLM before 0.11.0                                   | `guided_json`                              | `guided_regex`                              | `guided_choice`                          | `guided_grammar`                  |
+| SGLang                                               | `response_format` `json_schema`            | `regex`                                     | `regex`, the choices escaped and joined  | `ebnf`                            |
+| llama.cpp                                            | `json_schema`                              | not supported                               | `grammar`, a GBNF rule listing them      | `grammar` (GBNF)                  |
+| TGI                                                  | `response_format: { type: "json", value }` | `response_format: { type: "regex", value }` | `response_format` `regex`, as for SGLang | not supported                     |
+| any other OpenAI-protocol upstream                   | `response_format` `json_schema`            | not supported                               | not supported                            | not supported                     |
+
+A kind the backend cannot enforce is dropped and recorded in `state.dropped` as `constraint.<kind>` (`unknownFields: "drop"`, the default), or rejected with `unsupported_field` (`"error"`), the same as an unaccepted sampling field. On an Anthropic-protocol or Ollama upstream, and on vLLM's native `/v1/messages`, a constraint has nothing to map to and is recorded as `constraint`. The drop is recorded in `state.dropped` only for requests that are converted; an OpenAI request forwarded as it is has no state to record it in.
+
+`structured_outputs` replaced the `guided_*` request fields in vLLM; 0.11.0 is the boundary the driver uses, and an unknown version is treated as the newest. The OpenAI front's `passthroughFilter` lets vLLM's `structured_outputs` and `guided_*` fields through for `vllm` and `compatible` upstreams, and llama.cpp's `grammar` and `json_schema`, so a client that already speaks a backend's native fields keeps working.
+
+**vLLM and tools.** vLLM applies a structured-outputs constraint to the whole generation, so a model constrained to a regex or a schema cannot also emit a tool call, and vLLM refuses a constraint together with a forced tool (`tool_choice` naming a function, or `required`); `tool_choice: "auto"` with a constraint does not give tool calls either. When the request offers tools (and `tool_choice` is not `none`), the translator therefore sends the tools and drops the constraint, recording `constraint.<kind>` in `state.dropped`. Send `tool_choice: "none"` to keep the constraint, or leave the tools out. The existing `output_config.format` / `response_format` path is unchanged. This is the translator's reading of vLLM's documented behaviour and has not been run against a real server (FI-138).
+
+Nothing here has been run against a real backend: the field names come from each backend's documentation.
+
 ## Precedence
 
 For every setting the winner is, from highest to lowest: the upstream's own `settings`, the translator's global `settings`, probed values, driver settings, library defaults. The `inlineSystem` probe only runs when nothing above it set the value.

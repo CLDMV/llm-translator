@@ -30,7 +30,7 @@ export function info() {
 		auth: "bearer",
 		strict: false,
 		probes: ["/props"],
-		fields: ["top_k", "min_p", "chat_template_kwargs", "repetition_penalty", "repeat_penalty", "grammar"],
+		fields: ["top_k", "min_p", "chat_template_kwargs", "repetition_penalty", "repeat_penalty", "grammar", "json_schema"],
 		paths: { chat: "/v1/chat/completions", models: "/v1/models", props: "/props" }
 	};
 }
