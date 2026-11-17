@@ -17,20 +17,19 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.10.0 (November 2026)
+### Latest: v0.11.0 (November 2026)
 
-- **Native `/v1/messages` for vLLM** — set `nativeMessages` (`true` or `"auto"`) and Anthropic requests go to vLLM's own endpoint with only normalisation. Prefills, document blocks and deferred tools are still converted, and an upstream without the route falls back to conversion.
-- **Readiness probes and LoRA adapters** — pools check vLLM's `/health` and try ready upstreams first (`pool.healthInterval`, `pool.healthTimeout`, a `health` event, `health.check()`). Adapters are routable and carry `parent` in model lists.
-- **Hosted provider drivers** — Groq, Together, Fireworks, xAI and Gemini are bound by host name, with their token fields, reasoning fields and rejected request fields handled from one table.
-- **Ollama's native `/api/chat`** — set `api: "native"` on an Ollama upstream to use `think`, `options` and `format`, with NDJSON streaming converted for both fronts.
-- [View full v0.10.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.10.0.md)
+- **Constrained decoding** — a neutral `constraint` (JSON Schema, regex, choice list or grammar) is turned into each backend's native field: vLLM `structured_outputs` (or `guided_*` before 0.11.0), SGLang `regex` and `ebnf`, llama.cpp `grammar` and `json_schema`, and TGI's grammar. A kind a backend can't enforce is dropped and recorded, or rejected.
+- **`clear_tool_uses` context edits** — `context_management` edits are applied locally before an OpenAI-protocol upstream sees the conversation, and the reply reports them in `applied_edits`.
+- **Prompt-cache hints** — `cache_salt` (set by the server, vLLM only) and `prompt_cache_key` (OpenAI only) are mapped, with docs on what is and isn't cached. Hosted APIs such as `api.openai.com` now bind by host name before any driver probes them.
+- [View full v0.11.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.11.0.md)
 
 ### Recent Releases
 
+- **v0.10.0** (November 2026) — native `/v1/messages` for vLLM, readiness probes and LoRA adapters, Groq, Together, Fireworks, xAI and Gemini drivers, and Ollama's native `/api/chat` ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.10.0.md))
 - **v0.9.0** (November 2026) — Azure OpenAI, OpenRouter, Hugging Face TGI and LocalAI drivers, with Azure's `apiVersion` and `deployment` upstream fields and more startup probes ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.9.0.md))
 - **v0.8.0** (November 2026) — Mistral and LM Studio drivers, an OpenAI client's `n` above 1 answered by parallel requests to Anthropic-protocol upstreams, and `stop_details.category` from content-filter results ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.8.0.md))
 - **v0.7.0** (November 2026) — Anthropic-protocol servers detected by probe on any host, tool-call ids rewritten for strict upstream formats, embeddings usage through `onUsage`, and capture records for every failed-over attempt ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.7.0.md))
-- **v0.6.0** (November 2026) — `POST /v1/embeddings` pass-through, sampling extensions per upstream and per request, `strict` tool use end to end with a schema check, and the `capture` option for debugging ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.6.0.md))
 
 📚 **For complete version history and detailed release notes, see the [docs/changelog/](https://github.com/CLDMV/llm-translator/tree/master/docs/changelog/) folder.**
 
