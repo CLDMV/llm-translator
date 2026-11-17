@@ -34,6 +34,7 @@ Options:
   --port <port>                Listen port (default 8787)
   --api-key <key>              Key clients must send (x-api-key or Authorization: Bearer)
   --allow-unauthenticated      Allow a non-loopback --host without --api-key
+  --metrics                    Serve Prometheus metrics at GET /metrics (same authentication as the other routes)
   --config <file>              JSON config file (translator config plus a "server" object)
   --logs [path]                Log warnings and errors to the console (default), or append every event as a JSON line to <path>
   --silent                     Same as logs: false (no console output, no file)
@@ -42,7 +43,7 @@ Options:
   --help                       Print this help
 
 Environment: LLM_TRANSLATOR_FRONT, LLM_TRANSLATOR_UPSTREAM, LLM_TRANSLATOR_UPSTREAM_KEY, LLM_TRANSLATOR_BACKEND,
-LLM_TRANSLATOR_HOST, LLM_TRANSLATOR_PORT, LLM_TRANSLATOR_API_KEY, LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED (1), LLM_TRANSLATOR_CONFIG. Flags win over the
+LLM_TRANSLATOR_HOST, LLM_TRANSLATOR_PORT, LLM_TRANSLATOR_API_KEY, LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED (1), LLM_TRANSLATOR_METRICS (1), LLM_TRANSLATOR_CONFIG. Flags win over the
 environment, which wins over the config file.
 `;
 
@@ -67,6 +68,7 @@ export function parse(argv) {
 			port: { type: "string" },
 			"api-key": { type: "string" },
 			"allow-unauthenticated": { type: "boolean" },
+			metrics: { type: "boolean" },
 			config: { type: "string" },
 			logs: { type: "string" },
 			silent: { type: "boolean" },
@@ -115,7 +117,8 @@ export function merge(values, env, file) {
 		...((values.host ?? env.LLM_TRANSLATOR_HOST) ? { host: values.host ?? env.LLM_TRANSLATOR_HOST } : {}),
 		...(port ? { port: Number(port) } : {}),
 		...((values["api-key"] ?? env.LLM_TRANSLATOR_API_KEY) ? { apiKey: values["api-key"] ?? env.LLM_TRANSLATOR_API_KEY } : {}),
-		...(values["allow-unauthenticated"] || env.LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED === "1" ? { allowUnauthenticated: true } : {})
+		...(values["allow-unauthenticated"] || env.LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED === "1" ? { allowUnauthenticated: true } : {}),
+		...(values.metrics || env.LLM_TRANSLATOR_METRICS === "1" ? { metrics: true } : {})
 	};
 	return { translator, server };
 }

@@ -21,6 +21,7 @@ import { timingSafeEqual } from "node:crypto";
 import { TranslatorError } from "./errors.mjs";
 import { messageId } from "./ids.mjs";
 import { sign } from "./thinking.mjs";
+import { CONTENT_TYPE, recorder } from "./metrics.mjs";
 
 const BODY_LIMIT = 64 * 1024 * 1024;
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
@@ -244,7 +245,7 @@ function verdictOf(value) {
 /**
  * Register the routes for one front on a Fastify instance.
  * @param {any} fastify - Fastify instance (usually an encapsulated plugin scope).
- * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage }`.
+ * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage, metrics }`.
  * @param {any} captured - Captured translator parts `{ front, interval(body), filter, send, route, count, list, get, build, encode, write }`; `front` applies to this instance only.
  * @returns {void}
  */
@@ -269,6 +270,9 @@ export function register(fastify, options, captured) {
 	// The `cacheSalt` an allowing hook returned (vLLM prefix-cache isolation per key), per request.
 	const salts = new WeakMap();
 
+	// `GET /metrics` and the request recorder exist only when the server was started with `metrics`; otherwise `/metrics` is an unknown route.
+	const metrics = options.metrics === true ? recorder({ front, endpoints: captured.endpoints }) : null;
+
 	const reject = (reply, reply_) => reply.code(reply_.status).headers(reply_.headers).send(reply_.body);
 
 	fastify.setErrorHandler((error, request, reply) => {
@@ -281,6 +285,9 @@ export function register(fastify, options, captured) {
 		api.emit({ type: "error", kind: "route", level: "error", message: String(error.message), status, log: false });
 		return reject(reply, api.build(status, "Internal server error"));
 	});
+
+	// Registered before the key check so refused requests are counted too.
+	if (metrics) fastify.addHook("onRequest", metrics.hook);
 
 	fastify.addHook("onRequest", async (request, reply) => {
 		if (keys.length === 0 || request.routeOptions.config?.public) return;
@@ -337,6 +344,13 @@ export function register(fastify, options, captured) {
 		config: { public: true },
 		handler: async (_request, reply) => reply.send({ ok: true })
 	});
+	// Not `public`: the key check and the `authorize` hook apply like for every other route.
+	// `config.metrics` keeps the scrape out of the request counters whatever prefix the plugin is mounted under.
+	if (metrics) {
+		fastify.get("/metrics", { config: { metrics: true } }, async (_request, reply) =>
+			reply.header("content-type", CONTENT_TYPE).send(metrics.render())
+		);
+	}
 	fastify.get("/v1/models", async (_request, reply) => {
 		const controller = new AbortController();
 		reply.raw.on("close", () => controller.abort());
@@ -369,6 +383,7 @@ export function register(fastify, options, captured) {
 			log: request.log
 		});
 		sending.catch(() => {});
+		metrics?.attach(request, sending);
 		const gone = new Promise((resolve) => controller.signal.addEventListener("abort", () => resolve(GONE), { once: true }));
 		const result = await settle(Promise.race([sending, gone]), request.body?.stream === true ? interval : 0);
 		if (result === GONE) {
@@ -393,7 +408,9 @@ export function register(fastify, options, captured) {
 			});
 			// An abort answers 499 into a reply nobody reads.
 			const onUsage = typeof options.onUsage === "function" ? (report) => options.onUsage(report, contexts.get(request)) : undefined;
-			return reject(reply, await api.embed(request.body, { signal: controller.signal, onUsage, log: request.log }));
+			const sending = api.embed(request.body, { signal: controller.signal, onUsage, log: request.log });
+			metrics?.attach(request, sending);
+			return reject(reply, await sending);
 		});
 	}
 

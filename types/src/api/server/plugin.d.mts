@@ -5,7 +5,7 @@
  * `app.register(api.server.plugin, { apiKey })`. `authorize(request)` (sync or async) runs after `apiKey` and the body parse and decides
  * with `true` / `{ ok: true, context }` or `false` / `{ ok: false, status, message }`; `onUsage(report, context)` receives each request's usage report. When the Fastify `logger` is enabled, events also go to it as structured lines (`{ event }` plus the message), through the request's logger for events of a request.
  * @param {any} fastify - Fastify instance.
- * @param {any} [options] - `{ front, apiKey, bodyLimit, authorize, onUsage }`. `authorize(request)` and `onUsage(report, context)` are described above. `front` sets the protocol this plugin instance serves (default: the translator's front, other plugin instances and `api.send` are unaffected); `apiKey` (string or array) is required from clients. Forwarded OpenAI bodies are restricted to known fields unless the `passthroughFilter` setting is `false`.
+ * @param {any} [options] - `{ front, apiKey, bodyLimit, authorize, onUsage, metrics }`. `metrics: true` adds `GET /metrics` (Prometheus text format, behind the same authentication as every other route; off by default, then an unknown route). `authorize(request)` and `onUsage(report, context)` are described above. `front` sets the protocol this plugin instance serves (default: the translator's front, other plugin instances and `api.send` are unaffected); `apiKey` (string or array) is required from clients. Forwarded OpenAI bodies are restricted to known fields unless the `passthroughFilter` setting is `false`.
  * @returns {Promise<void>} Resolves once the routes are registered.
  */
 export function plugin(fastify: any, options?: any): Promise<void>;
