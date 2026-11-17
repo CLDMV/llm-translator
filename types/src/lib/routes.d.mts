@@ -10,7 +10,7 @@ export function late(sending: Promise<any>, api: any, model?: string): AsyncGene
 /**
  * Register the routes for one front on a Fastify instance.
  * @param {any} fastify - Fastify instance (usually an encapsulated plugin scope).
- * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage, metrics }`.
+ * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage, metrics, cors, rateLimit }`.
  * @param {any} captured - Captured translator parts `{ front, interval(body), filter, send, route, count, list, get, build, encode, write }`; `front` applies to this instance only.
  * @returns {void}
  */
