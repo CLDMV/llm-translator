@@ -1,7 +1,7 @@
 /**
  * The driver facts of a preset.
  * @param {string} name - Preset name.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, fields?: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hosts: string[], fields?: string[], paths: Record<string,string>}} Driver facts.
  */
 export function describe(name: string): {
     name: string;
@@ -9,6 +9,7 @@ export function describe(name: string): {
     order: number;
     auth: string;
     strict: boolean;
+    hosts: string[];
     fields?: string[];
     paths: Record<string, string>;
 };

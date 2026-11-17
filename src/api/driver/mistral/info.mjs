@@ -20,7 +20,7 @@
 
 /**
  * Describe the Mistral driver. Mistral accepts only 9-character alphanumeric tool-call ids, so the translator rewrites the client's ids.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, toolCallIds: {alphabet: string, min: number, max: number}, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hosts: string[], toolCallIds: {alphabet: string, min: number, max: number}, paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
@@ -29,6 +29,7 @@ export function info() {
 		order: 36,
 		auth: "bearer",
 		strict: false,
+		hosts: ["api.mistral.ai"],
 		toolCallIds: { alphabet: "a-zA-Z0-9", min: 9, max: 9 },
 		paths: { chat: "/v1/chat/completions", models: "/v1/models" }
 	};

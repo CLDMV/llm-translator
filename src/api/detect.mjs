@@ -26,7 +26,7 @@ import * as http from "../lib/http.mjs";
 import { validToolIdPolicy } from "../lib/ids.mjs";
 
 /**
- * Bind every endpoint to a driver. `backend: "auto"` endpoints are probed (drivers tried in `info().order`, the generic
+ * Bind every endpoint to a driver. `backend: "auto"` endpoints are probed (drivers tried in `info().order` after any driver whose `info().hosts` names the endpoint host, the generic
  * driver matches last); endpoints with an explicit `backend` skip detection. Call it again to re-probe.
  * @param {any} [options] - `{ network, signal }`. `network: false` skips all probing (auto endpoints fall back to the generic driver).
  * @returns {Promise<any>} The `status()` result.
@@ -85,8 +85,18 @@ async function bind(c, endpoint, network, probe) {
 		// A driver that lists `hosts` and matches this endpoint's host is answered without a request, so it does not start the batch.
 		const host = URL.canParse(endpoint.url) ? new URL(endpoint.url).hostname : "";
 		const context = { endpoint, ...probe, probes: new Map() };
+		// A driver that declares the endpoint's host (`info().hosts`, `info().hostSuffixes`) is tried before any driver that probes, so a
+		// hosted upstream such as api.groq.com or api.openai.com is bound without a single request, whatever the driver order says.
+		const named = c.drivers.filter((candidate) => matchesHost(candidate.info, host));
+		for (const candidate of named) {
+			facts = await detectWith(candidate, context);
+			if (facts) {
+				driver = candidate;
+				break;
+			}
+		}
 		let fetched = false;
-		for (const [index, candidate] of c.drivers.entries()) {
+		for (const [index, candidate] of driver ? [] : c.drivers.entries()) {
 			if (!fetched && candidate.info.probes?.length > 0 && !candidate.info.hosts?.includes(host)) {
 				fetched = true;
 				for (const later of c.drivers.slice(index)) for (const path of later.info.probes ?? []) http.probe(context, path, later.info);
@@ -149,6 +159,16 @@ async function bind(c, endpoint, network, probe) {
 			}
 		);
 	}
+}
+
+/**
+ * Whether a driver's `info()` declares a host name: an exact one in `hosts`, or a suffix in `hostSuffixes`.
+ * @param {any} info - Driver facts.
+ * @param {string} host - The endpoint's host name (empty when the URL does not parse).
+ * @returns {boolean} True when the driver names the host.
+ */
+function matchesHost(info, host) {
+	return host !== "" && (info.hosts?.includes(host) === true || info.hostSuffixes?.some((suffix) => host.endsWith(suffix)) === true);
 }
 
 /**
