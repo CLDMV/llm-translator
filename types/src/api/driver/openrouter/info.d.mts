@@ -18,7 +18,7 @@
  */
 /**
  * Describe the OpenRouter driver. The API lives under `/api`; the `path` leaf adds it, so `paths` holds the usual `/v1/...` ones.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hosts: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info(): {
     name: string;
@@ -26,5 +26,6 @@ export function info(): {
     order: number;
     auth: string;
     strict: boolean;
+    hosts: string[];
     paths: Record<string, string>;
 };

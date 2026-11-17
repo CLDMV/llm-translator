@@ -18,8 +18,7 @@
  * @module @cldmv/llm-translator/driver/azure
  */
 
-/** Host name suffixes of Azure OpenAI resources: classic OpenAI resources, multi-service AI Services resources and Foundry resources. */
-const SUFFIXES = [".openai.azure.com", ".cognitiveservices.azure.com", ".services.ai.azure.com"];
+import { info } from "./info.mjs";
 
 /**
  * Match by host name, no network access.
@@ -28,5 +27,5 @@ const SUFFIXES = [".openai.azure.com", ".cognitiveservices.azure.com", ".service
  */
 export function detect({ endpoint }) {
 	const host = URL.canParse(endpoint.url) ? new URL(endpoint.url).hostname : "";
-	return SUFFIXES.some((suffix) => host.endsWith(suffix)) ? { host } : null;
+	return info().hostSuffixes.some((suffix) => host.endsWith(suffix)) ? { host } : null;
 }
