@@ -40,6 +40,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {boolean} parallelToolCalls - Map `disable_parallel_tool_use` to `parallel_tool_calls: false`.
  * @property {"drop"|"error"} unknownFields - Unknown request fields are dropped (and listed in `state.dropped`) or rejected.
  * @property {Record<string, any>} sampling - Sampling extension fields (`min_p`, `repetition_penalty`, `seed`, ...) added to requests for an OpenAI-protocol upstream when the request does not carry them, merged key by key. A request may set them itself (OpenAI front, or `metadata.sampling` on the Anthropic front). A field the upstream's driver does not accept follows `unknownFields`.
+ * @property {{ json?: object, regex?: string, choice?: string[], grammar?: string } | null} constraint - Neutral constrained-decoding description sent with every request to an OpenAI-protocol upstream that does not carry its own: exactly one of `json` (a JSON Schema), `regex`, `choice` (a list of strings) or `grammar` (GBNF for llama.cpp, EBNF for SGLang, a vLLM grammar). Each driver turns it into its backend's native field. Replaced whole, not merged. A request overrides it (`constraint` on the OpenAI front, `metadata.constraint` on the Anthropic front).
  * @property {number} pingInterval - Milliseconds of upstream silence before the SSE writer emits a `ping` (0 disables).
  * @property {"buffer"|"stream"} toolStreaming - OpenAI to Anthropic streams: `buffer` holds each tool call until its arguments are complete and emits one whole `tool_use` block (text and thinking keep streaming and appear before the block); `stream` forwards argument fragments incrementally and holds text that arrives meanwhile until the tool blocks are done.
  * @property {boolean} effortPassthrough - vLLM driver: send `xhigh` and `max` reasoning effort unchanged instead of clamping them to `high`.
@@ -188,6 +189,15 @@ export type Settings = {
      * - Sampling extension fields (`min_p`, `repetition_penalty`, `seed`, ...) added to requests for an OpenAI-protocol upstream when the request does not carry them, merged key by key. A request may set them itself (OpenAI front, or `metadata.sampling` on the Anthropic front). A field the upstream's driver does not accept follows `unknownFields`.
      */
     sampling: Record<string, any>;
+    /**
+     * - Neutral constrained-decoding description sent with every request to an OpenAI-protocol upstream that does not carry its own: exactly one of `json` (a JSON Schema), `regex`, `choice` (a list of strings) or `grammar` (GBNF for llama.cpp, EBNF for SGLang, a vLLM grammar). Each driver turns it into its backend's native field. Replaced whole, not merged. A request overrides it (`constraint` on the OpenAI front, `metadata.constraint` on the Anthropic front).
+     */
+    constraint: {
+        json?: object;
+        regex?: string;
+        choice?: string[];
+        grammar?: string;
+    } | null;
     /**
      * - Milliseconds of upstream silence before the SSE writer emits a `ping` (0 disables).
      */

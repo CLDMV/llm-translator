@@ -23,6 +23,7 @@ import { resolve } from "../lib/route.mjs";
 import * as http from "../lib/http.mjs";
 import { filterChatBody } from "../lib/passthrough.mjs";
 import { addSampling } from "../lib/sampling.mjs";
+import { addConstraint } from "../lib/constraint.mjs";
 import * as images from "../lib/images.mjs";
 import * as tools from "../lib/tools.mjs";
 import { LIMITS } from "../lib/toolsearch.mjs";
@@ -119,6 +120,10 @@ async function prepare(c, body, options, picked) {
 	// An alias that pins settings overrides what the request asked for, before conversion; a pinned effort is always mapped.
 	if (pin) body = pinBody(body, pin, c.front);
 	const driver = c.driver(endpoint);
+	// A constraint (constrained decoding) rides in `constraint` on the OpenAI front and in `metadata.constraint` on the Anthropic front; it is never
+	// a field of the converted body, so it is taken out of the OpenAI body before conversion.
+	let constraint = c.front === "anthropic" ? body.metadata?.constraint : undefined;
+	if (c.front === "openai" && body.constraint !== undefined) ({ constraint, ...body } = body);
 	const key = `${endpoint.name}\n${model}`;
 	// A refusal remembered earlier in this process, or an explicit `images: false`, sends the request without images.
 	const text = options.images === false || (c.state.textOnly.has(key) && c.settings(endpoint).imageFallback);
@@ -170,6 +175,20 @@ async function prepare(c, body, options, picked) {
 	} else if (!convert && asked !== undefined && upstream.metadata?.sampling !== undefined) {
 		const { sampling: _, ...rest } = upstream.metadata;
 		upstream = { ...upstream, metadata: rest };
+	}
+	if (protocol === "openai.chat") {
+		const dropped = [];
+		const target = { name: driver.info.name, version: endpoint.facts?.version ?? endpoint.version };
+		upstream = addConstraint(upstream, constraint, settings, target, dropped);
+		if (converted) converted.dropped.push(...dropped.filter((name) => !converted.dropped.includes(name)));
+	} else {
+		// No native constrained decoding to map to: a conversion records the drop; a forwarded Anthropic body must not carry the extension.
+		if (converted && (constraint ?? settings.constraint) != null && !converted.dropped.includes("constraint"))
+			converted.dropped.push("constraint");
+		if (!convert && upstream.metadata?.constraint !== undefined) {
+			const { constraint: _, ...rest } = upstream.metadata;
+			upstream = { ...upstream, metadata: rest };
+		}
 	}
 	if (options.usage === true && stream && c.front === "openai") {
 		// Internal (used by `send`): always ask for the final usage chunk so usage can be metered; `send` hides it from clients that did not ask.
