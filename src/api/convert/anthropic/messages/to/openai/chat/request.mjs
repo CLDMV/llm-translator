@@ -24,6 +24,7 @@ import { sanitize } from "../../../../../../../lib/schema.mjs";
 import { NOTE } from "../../../../../../../lib/images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
 import { createBudget, unsign } from "../../../../../../../lib/thinking.mjs";
+import { clearToolUses, valid as validEdit } from "../../../../../../../lib/context.mjs";
 import { plan, scan } from "../../../../../../../lib/toolsearch.mjs";
 
 const HANDLED = new Set([
@@ -99,7 +100,7 @@ export async function request(body, settings, context) {
 		} else drop(state, key);
 	}
 
-	const out = { model: body.model };
+	const out = /** @type {any} */ ({ model: body.model });
 	const system = textOf(body.system, s);
 	const conversation = await convertMessages(
 		body.messages,
@@ -141,6 +142,7 @@ export async function request(body, settings, context) {
 		if (body.tool_choice?.disable_parallel_tool_use === true && s.parallelToolCalls) out.parallel_tool_calls = false;
 	}
 
+	applyContextEdits(body.context_management, out, state);
 	applyThinking(body, s, out, context?.listed === true);
 	applyOutputConfig(body, s, state, out);
 	return { body: out, state };
@@ -371,9 +373,39 @@ function thinkingTurnsToKeep(contextManagement, state) {
 		if (typeof edit.type === "string" && edit.type.startsWith("clear_thinking")) {
 			if (edit.keep === "all") keep = Infinity;
 			else keep = edit.keep?.value ?? 1;
-		} else drop(state, `context_management.${edit.type}`);
+		} else if (!isClearToolUses(edit)) drop(state, `context_management.${edit.type}`);
 	}
 	return keep;
+}
+
+/**
+ * Whether a `context_management` edit is a `clear_tool_uses` one (any dated version).
+ * @param {any} edit - The edit.
+ * @returns {boolean} True for `clear_tool_uses_*`.
+ */
+function isClearToolUses(edit) {
+	return typeof edit.type === "string" && edit.type.startsWith("clear_tool_uses");
+}
+
+/**
+ * Apply `context_management` `clear_tool_uses` edits to the converted conversation, in request order. An edit with parameters that cannot be
+ * honoured is dropped. The edits that cleared something are recorded in `state.appliedEdits` (an empty list when none did), which the
+ * response converters report as `context_management.applied_edits`.
+ * @param {any|undefined} contextManagement - Anthropic `context_management`.
+ * @param {{ messages: any[], tools?: any[] }} out - Converted OpenAI body (its messages are edited).
+ * @param {any} state - Conversion state.
+ */
+function applyContextEdits(contextManagement, out, state) {
+	for (const edit of contextManagement?.edits ?? []) {
+		if (!isClearToolUses(edit)) continue;
+		if (!validEdit(edit)) {
+			drop(state, `context_management.${edit.type}`);
+			continue;
+		}
+		state.appliedEdits ??= [];
+		const applied = clearToolUses(edit, out, state.toolNames);
+		if (applied) state.appliedEdits.push(applied);
+	}
 }
 
 /**

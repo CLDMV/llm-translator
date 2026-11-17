@@ -289,6 +289,8 @@ export async function* stream(source, state, settings) {
 		yield* close();
 	}
 	const stop = toAnthropicStop(finish, { hasToolCalls: tools.size > 0, matchedStop, argumentsComplete, refusal, category });
-	yield event("message_delta", { delta: stop, usage: toAnthropicUsage(usage) });
+	// The edits are known before the first token, but Anthropic reports them in the final `message_delta`.
+	const edits = state?.appliedEdits ? { context_management: { applied_edits: state.appliedEdits } } : {};
+	yield event("message_delta", { delta: stop, usage: toAnthropicUsage(usage), ...edits });
 	yield event("message_stop", {});
 }
