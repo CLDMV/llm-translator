@@ -18,7 +18,7 @@
  */
 /**
  * Describe the OpenAI driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hosts: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hosts: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info(): {
     name: string;
@@ -27,5 +27,6 @@ export function info(): {
     auth: string;
     strict: boolean;
     hosts: string[];
+    fields: string[];
     paths: Record<string, string>;
 };

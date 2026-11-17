@@ -63,7 +63,7 @@ const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache
  * a stream has started, an error chunk and `[DONE]`. Aborting the caller's signal aborts every branch. An OpenAI-protocol upstream
  * receives `n` unchanged and answers it itself.
  * @param {any} body - Client request body (per `front`).
- * @param {any} [options] - `{ signal, front, headers, clientHeaders, filter, onUsage, log }`: abort signal for the upstream call, per-call front, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply) and the logger this request's events also go to (used by the server).
+ * @param {any} [options] - `{ signal, front, headers, clientHeaders, filter, cacheSalt, onUsage, log }`: abort signal for the upstream call, per-call front, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply) and the logger this request's events also go to (used by the server).
  * @returns {Promise<{status: number, headers: Record<string,string>, body: any, usage: Promise<any>} | {status: number, headers: Record<string,string>, stream: AsyncIterable<{event?: string, data: *}>, usage: Promise<any>}>} A JSON reply, or a stream reply when the client asked for streaming and the upstream accepted.
  */
 export async function send(body, options = {}) {
@@ -123,6 +123,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		headers: options.headers,
 		clientHeaders: options.clientHeaders,
 		filter: options.filter,
+		cacheSalt: options.cacheSalt,
 		usage: true,
 		budget: createBudget(),
 		log: options.log

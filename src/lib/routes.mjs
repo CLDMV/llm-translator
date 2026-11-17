@@ -227,12 +227,12 @@ function forwardable(headers) {
 
 /**
  * Normalize what an `authorize` hook returned.
- * @param {any} value - Hook result: `true`, `{ ok: true, context? }`, `false`, `{ ok: false, status?, message? }`.
- * @returns {{ok: true, context: any} | {ok: false, status: number, message: string}} Verdict; anything unrecognised is a refusal.
+ * @param {any} value - Hook result: `true`, `{ ok: true, context?, cacheSalt? }`, `false`, `{ ok: false, status?, message? }`.
+ * @returns {{ok: true, context: any, cacheSalt?: any} | {ok: false, status: number, message: string}} Verdict; anything unrecognised is a refusal.
  */
 function verdictOf(value) {
 	if (value === true) return { ok: true, context: undefined };
-	if (value && typeof value === "object" && value.ok === true) return { ok: true, context: value.context };
+	if (value && typeof value === "object" && value.ok === true) return { ok: true, context: value.context, cacheSalt: value.cacheSalt };
 	const refusal = value && typeof value === "object" && value.ok === false ? value : {};
 	return {
 		ok: false,
@@ -266,6 +266,8 @@ export function register(fastify, options, captured) {
 
 	// What an allowing `authorize` hook returned as `context`, per request.
 	const contexts = new WeakMap();
+	// The `cacheSalt` an allowing hook returned (vLLM prefix-cache isolation per key), per request.
+	const salts = new WeakMap();
 
 	const reject = (reply, reply_) => reply.code(reply_.status).headers(reply_.headers).send(reply_.body);
 
@@ -299,7 +301,7 @@ export function register(fastify, options, captured) {
 					// An invalid body is refused by the normal handler with its own 400.
 				}
 			}
-			/** @type {{ ok: boolean, status?: number, message?: string, context?: any }} */
+			/** @type {{ ok: boolean, status?: number, message?: string, context?: any, cacheSalt?: any }} */
 			let verdict;
 			try {
 				verdict = verdictOf(
@@ -319,6 +321,7 @@ export function register(fastify, options, captured) {
 			}
 			if (!verdict.ok) return reject(reply, api.build(verdict.status, verdict.message));
 			contexts.set(request, verdict.context);
+			if (typeof verdict.cacheSalt === "string" && verdict.cacheSalt !== "") salts.set(request, verdict.cacheSalt);
 		});
 	}
 
@@ -361,6 +364,7 @@ export function register(fastify, options, captured) {
 		const sending = api.send(request.body, {
 			signal: controller.signal,
 			clientHeaders: forwardable(request.headers),
+			cacheSalt: salts.get(request),
 			onUsage,
 			log: request.log
 		});
