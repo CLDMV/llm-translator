@@ -256,7 +256,7 @@ vLLM's endpoint is itself a converter to Chat Completions inside the server, wit
 - The system prompt arrives as one string, with the text blocks joined by a blank line and the billing header block removed (vLLM joins blocks with nothing between them).
 - vLLM sends no `ping` event. A `ping` follows `message_start`, and the SSE writer still sends keep-alives while the stream is silent.
 - vLLM before 0.17 sends thinking blocks without a `signature`. Such blocks get the translator's own marker signature (the same `llmt:` one the conversion makes); a signature vLLM made up is left alone.
-- vLLM reads `tool_result.is_error` but ignores it. With `toolErrors` on, the marker text goes in front of the result, as it does in a conversion.
+- vLLM reads `tool_result.is_error` but ignores it. The marker text goes in front of the result (`toolErrors`, on by default), as it does in a conversion.
 - The upstream is called with `Authorization: Bearer`, the only scheme vLLM checks. The client's `x-api-key` and `anthropic-beta` headers are not forwarded.
 
 Some requests cannot go to the native endpoint and are converted as before: a request whose last message is from the assistant (the endpoint finishes that turn instead of continuing it), a request with `document` blocks (the endpoint rejects the block type; the conversion extracts the text and page images), and a request with deferred tools or `tool_reference` blocks unless `toolSearch` is `native`. The `metadata.sampling` extension is dropped, and a model's `efforts` list is not applied.

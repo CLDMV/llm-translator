@@ -28,9 +28,9 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
  * @property {"schema"|"instruction"|"drop"} jsonObject - OpenAI to Anthropic: how `response_format: json_object` is sent. `schema` sends `output_config.format` with the permissive schema `{ "type": "object" }`, `instruction` appends a short system instruction asking for one JSON object, `drop` omits it and records the drop.
  * @property {boolean} jsonObjectFallback - Retry a request once with `jsonObject: "instruction"` when an Anthropic-protocol upstream answers 400 or 422 to the schema `jsonObject: "schema"` sent. The endpoint and model are remembered until the process ends only when the retry succeeds.
- * @property {boolean} toolErrors - Prefix `is_error` tool results with `toolErrorMarker`. Off by default for every driver.
+ * @property {boolean} toolErrors - Prefix `is_error` tool results with `toolErrorMarker` when converting to Chat Completions (which has no error flag) and on vLLM native passthrough. On by default for every driver; set false to send the text unchanged. Upstreams with a native error flag (Anthropic-protocol) never go through this.
  * @property {string} toolErrorMarker - Text that marks a failed tool result when `toolErrors` is on, and the text `toolErrorInference` looks for. Must contain a non-whitespace character.
- * @property {boolean} toolErrorInference - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text.
+ * @property {boolean} toolErrorInference - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text. Off by default: a tool that merely prints the marker would be taken for a failure.
  * @property {"max_completion_tokens"|"max_tokens"} maxTokensField - Field used for the output cap.
  * @property {boolean} streamUsage - Request `stream_options.include_usage` on streamed requests.
  * @property {boolean} continuousUsage - Also request `stream_options.continuous_usage_stats` (vLLM extension; real OpenAI may reject it).
@@ -144,7 +144,7 @@ export type Settings = {
      */
     jsonObjectFallback: boolean;
     /**
-     * - Prefix `is_error` tool results with `toolErrorMarker`. Off by default for every driver.
+     * - Prefix `is_error` tool results with `toolErrorMarker` when converting to Chat Completions (which has no error flag) and on vLLM native passthrough. On by default for every driver; set false to send the text unchanged. Upstreams with a native error flag (Anthropic-protocol) never go through this.
      */
     toolErrors: boolean;
     /**
@@ -152,7 +152,7 @@ export type Settings = {
      */
     toolErrorMarker: string;
     /**
-     * - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text.
+     * - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text. Off by default: a tool that merely prints the marker would be taken for a failure.
      */
     toolErrorInference: boolean;
     /**

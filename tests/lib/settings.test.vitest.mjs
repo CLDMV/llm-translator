@@ -46,7 +46,7 @@ describe("settings", () => {
 			toolSchema: "pass",
 			deferredTools: "forward",
 			jsonObject: "schema",
-			toolErrors: false,
+			toolErrors: true,
 			toolErrorMarker: "[error] ",
 			toolErrorInference: false,
 			maxTokensField: "max_completion_tokens",

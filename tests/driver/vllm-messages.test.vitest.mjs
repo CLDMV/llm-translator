@@ -136,7 +136,7 @@ describe("vllm.request", () => {
 		expect("system" in vllm.request({ model: "m" }, settings())).toBe(false);
 		expect(vllm.request({ system: null }, settings()).system).toBeNull();
 	});
-	it("marks failed tool results only with toolErrors on", () => {
+	it("marks failed tool results unless toolErrors is turned off", () => {
 		const messages = [
 			{ role: "user", content: "text" },
 			{
@@ -150,8 +150,8 @@ describe("vllm.request", () => {
 				]
 			}
 		];
-		expect(vllm.request({ messages }, settings()).messages).toBe(messages);
-		const out = vllm.request({ messages }, settings({ toolErrors: true })).messages;
+		expect(vllm.request({ messages }, settings({ toolErrors: false })).messages).toBe(messages);
+		const out = vllm.request({ messages }, settings()).messages;
 		expect(out[0]).toBe(messages[0]);
 		expect(out[1].content).toEqual([
 			{ type: "tool_result", tool_use_id: "a", is_error: true, content: "[error] boom" },
