@@ -99,6 +99,8 @@ export function response(completion, state, settings) {
 		model: state?.model ?? completion.model,
 		content,
 		...stop,
-		usage: toAnthropicUsage(completion.usage)
+		usage: toAnthropicUsage(completion.usage),
+		// Reported like Anthropic does once the request asked for `clear_tool_uses`: the edits that cleared something, possibly none.
+		...(state?.appliedEdits ? { context_management: { applied_edits: state.appliedEdits } } : {})
 	};
 }

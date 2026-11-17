@@ -567,8 +567,8 @@ describe("assistant content", () => {
 		expect(reasoningOf(await convert(history(keepTwo)))).toEqual(["t1", undefined, "t3"]);
 		const keepZero = { context_management: { edits: [{ type: "clear_thinking_20251015", keep: { type: "thinking_turns", value: 0 } }] } };
 		expect(reasoningOf(await convert(history(keepZero)))).toEqual([undefined, undefined, undefined]);
-		const other = await request(history({ context_management: { edits: [{ type: "clear_tool_uses_20250919" }] } }));
-		expect(other.state.dropped).toEqual(["context_management.clear_tool_uses_20250919"]);
+		const other = await request(history({ context_management: { edits: [{ type: "compact_20260112" }] } }));
+		expect(other.state.dropped).toEqual(["context_management.compact_20260112"]);
 	});
 });
 

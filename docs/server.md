@@ -117,14 +117,38 @@ const server = await api.server.start({
 
 `request` is `{ method, url, headers, body, front, route }`. `body` is the parsed body (`undefined` for `GET`). `route` is the result of `api.route(body)` (see below) for every object body, with or without a `model` (a body without one is routed like `request` routes it, which may substitute the only model an upstream serves). `route` is `null` only for a body that is not an object or cannot be routed; the normal handler then answers it with a 400. A hook that enforces a model allow-list should therefore refuse a `POST` whose `request.route` is `null`, as the example above does.
 
-| Return value                                | Result                                                      |
-| ------------------------------------------- | ----------------------------------------------------------- |
-| `true`, `{ ok: true, context? }`            | The request proceeds; `context` is kept for `onUsage`.      |
-| `false`, `{ ok: false, status?, message? }` | Refused; defaults are status `401`, message `unauthorized`. |
-| anything else                               | Refused with `401`.                                         |
-| a thrown or rejected hook                   | Refused with `401`; the error goes to the request logger.   |
+| Return value                                 | Result                                                                                                                                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `true`, `{ ok: true, context?, cacheSalt? }` | The request proceeds; `context` is kept for `onUsage`, and `cacheSalt` (a non-empty string) is sent to a vLLM upstream as `cache_salt`, see [prompt caching](#prompt-caching). |
+| `false`, `{ ok: false, status?, message? }`  | Refused; defaults are status `401`, message `unauthorized`.                                                                                                                    |
+| anything else                                | Refused with `401`.                                                                                                                                                            |
+| a thrown or rejected hook                    | Refused with `401`; the error goes to the request logger.                                                                                                                      |
 
 A refusal is delivered through `api.error.build`, so each front gets its own error format (Anthropic `{"type":"error",…}`, OpenAI `{"error":{…}}`). `onUsage(report, context)` is called once per request with the usage report described under [usage reporting](#usage-reporting-and-model-allow-lists) and the `context` the hook returned (`undefined` without a hook); it also works without `authorize`. With `authorize` set, a non-loopback bind no longer needs an `apiKey`.
+
+## Prompt caching
+
+The translator does not cache anything itself. What is cached, and how it is reported, depends on the upstream server, and the translator's part is limited to a few hints and to reading usage.
+
+**What is not mapped.** Anthropic's `cache_control` markers (and their TTLs) have no equivalent on an OpenAI-protocol server and are dropped. `cache_creation_input_tokens` is always 0 in converted replies, because Chat Completions servers do not report cache writes. Cache reads are reported only when the server exposes `usage.prompt_tokens_details.cached_tokens` (vLLM needs `--enable-prompt-tokens-details`): they become `cache_read_input_tokens` and are subtracted from `input_tokens`.
+
+**What the servers cache.** vLLM caches prompt prefixes automatically when prefix caching is on, with no request field needed; any request that begins with the same tokens as an earlier one can reuse its blocks. OpenAI caches long prompt prefixes automatically too. The hints below only steer or isolate that cache.
+
+**`cache_salt` (vLLM).** vLLM mixes the salt into the hash of the first cache block, so requests with different salts never share cached prefixes. This isolates tenants from each other (a cache hit can otherwise be observed as a latency difference). The salt is a server-side control and is never read from a client: the OpenAI front's `passthroughFilter` strips a `cache_salt` field and the Anthropic front has no such field. It comes from, in order of precedence:
+
+1. the `cacheSalt` option of `request` / `send` (programmatic callers), which the server fills from the `cacheSalt` an `authorize` hook returns with `{ ok: true }`;
+2. the upstream's `cacheSalt` setting (or the global one).
+
+The server has no per-API-key configuration (`apiKey` is a plain list of accepted keys), so per-key salts go through the `authorize` hook: map the key to a salt there and return it. A salt always replaces a `cache_salt` the body carries. An upstream whose driver is not `vllm` drops it and records `cache_salt` in `state.dropped` (or rejects it with `unsupported_field` under `unknownFields: "error"`); a vLLM upstream reached through its native `/v1/messages` (`nativeMessages`) does not get it either.
+
+**`prompt_cache_key` (OpenAI).** OpenAI uses the key to route requests with a common prefix to the same cache. It is sent only to the `openai` driver: an OpenAI client's own `prompt_cache_key` is kept, an Anthropic client sets it as `metadata.prompt_cache_key`, and the upstream's `promptCacheKey` setting is the default for requests that carry none. Other drivers drop it and record `prompt_cache_key`. `prompt_cache_retention` is not mapped. No other provider's support for the field is claimed, because none of the driver documentation here cites it.
+
+**Keeping prefixes stable.** A cache can only reuse a prefix that is byte-for-byte the same, so clients should keep what comes first constant:
+
+- Put the system prompt, tool definitions and long reference documents first, in a fixed order, and the changing part (the user's latest turn, timestamps, request ids) last.
+- Do not edit earlier turns of a conversation (rewriting history, reordering tools or changing their schemas invalidates everything after the change). Claude Code's tool search has the same effect: see [decision D-47](decisions.md).
+- Keep per-request values out of the system prompt. The translator already removes the `x-anthropic-billing-header` block (`stripBillingHeader`), which changes on every request and would otherwise defeat prefix caching.
+- Use one `cache_salt` per tenant, not per request: a per-request salt turns caching off.
 
 ## Endpoint pools: failover and load balancing
 

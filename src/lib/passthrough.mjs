@@ -72,7 +72,11 @@ export const VLLM_FIELDS = [
 	"chat_template_kwargs",
 	"thinking_token_budget",
 	"include_reasoning",
-	"structured_outputs"
+	"structured_outputs",
+	"guided_json",
+	"guided_regex",
+	"guided_choice",
+	"guided_grammar"
 ];
 
 const ALLOWED = new Set(STANDARD);
