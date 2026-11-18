@@ -30,6 +30,7 @@ import { valid } from "./cache.mjs";
  * @property {boolean} thinkTags - Parse a leading `<think>...</think>` in content as reasoning.
  * @property {boolean} thinkOpen - With `thinkTags`: the output starts inside a thought because the chat template opens `<think>` in the generation prompt, so reasoning runs up to the first `</think>`. Without a `</think>` the content is plain text.
  * @property {boolean} reasoningRoundTrip - Carry reasoning the upstream needs back across turns. OpenAI-protocol upstream: the provider's reasoning fields (`reasoning_content`, `reasoning`, `reasoning_details`) travel in the thinking block's `llmt:` signature and are restored on the next request. Anthropic-protocol upstream with an OpenAI client: thinking blocks and their signatures travel as `reasoning_details` items the client replays. Off by default; the DeepSeek driver turns it on.
+ * @property {"auto"|"concise"|"detailed"|"none"} reasoningSummary - Responses-protocol upstream: the `reasoning.summary` asked for whenever the request sets a reasoning effort, so the model's reasoning summary comes back as thinking text. `none` does not ask for one.
  * @property {"chat_template_kwargs"|"reasoning_effort"|"none"} thinking - How Anthropic `thinking` is requested from the server.
  * @property {boolean} thinkingBudget - Send `thinking_token_budget` for `thinking.type = "enabled"`.
  * @property {boolean} effort - Map `output_config.effort` to `reasoning_effort`.
@@ -76,6 +77,7 @@ export const DEFAULTS = Object.freeze({
 	thinkTags: true,
 	thinkOpen: false,
 	reasoningRoundTrip: false,
+	reasoningSummary: "auto",
 	thinking: "chat_template_kwargs",
 	thinkingBudget: false,
 	effort: false,
@@ -117,6 +119,7 @@ export const DEFAULTS = Object.freeze({
 const ENUMS = {
 	inlineSystem: ["auto", "keep", "hoist", "user", "drop"],
 	reasoningField: ["reasoning", "reasoning_content"],
+	reasoningSummary: ["auto", "concise", "detailed", "none"],
 	thinking: ["chat_template_kwargs", "reasoning_effort", "none"],
 	documents: ["extract", "note", "error"],
 	toolSchema: ["pass", "sanitize"],

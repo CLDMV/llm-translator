@@ -24,6 +24,7 @@ import { warn } from "../lib/warn.mjs";
 import { emit } from "../lib/events.mjs";
 import * as http from "../lib/http.mjs";
 import { validToolIdPolicy } from "../lib/ids.mjs";
+import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
 
 /**
  * Bind every endpoint to a driver. `backend: "auto"` endpoints are probed (drivers tried in `info().order` after any driver whose `info().hosts` names the endpoint host, the generic
@@ -118,6 +119,16 @@ async function bind(c, endpoint, network, probe) {
 	Object.assign(endpoint.health, { ready: null, readyReason: null, checkedAt: null, unsupported: false });
 	endpoint.driver = driver.name;
 	endpoint.protocol = driver.info.protocol;
+	if (endpoint.api === "responses" && !driver.info.responses && driver.info.protocol !== RESPONSES) {
+		const named = c.drivers.filter((entry) => entry.info.responses).map((entry) => entry.name);
+		throw new TranslatorError(
+			`Upstream ${endpoint.name}: api "responses" needs a driver for a server that has the Responses API (${named.join(", ")}), but the upstream is bound to ${driver.name}; set backend to one of them`,
+			{ code: "unsupported_api", status: 500 }
+		);
+	}
+	// A driver that declares `info().responses: "prefer"` is a server whose Chat Completions API lacks something the Responses API has, so
+	// `api: "auto"` picks the Responses API for it; no bundled driver prefers it, and the default `api: "openai"` never does.
+	if (endpoint.api === "responses" || (endpoint.api === "auto" && driver.info.responses === "prefer")) endpoint.protocol = RESPONSES;
 	if (endpoint.api === "native") {
 		// The server's own chat API instead of its OpenAI-compatible one, for a driver that declares it in `info().native`.
 		if (!driver.info.native) {
@@ -131,6 +142,8 @@ async function bind(c, endpoint, network, probe) {
 	}
 	endpoint.facts = facts;
 	endpoint.driverSettings = (await driver.settings?.(facts)) ?? {};
+	// Reasoning models need their encrypted reasoning items back between turns on a stateless Responses call.
+	if (endpoint.protocol === RESPONSES) endpoint.driverSettings = { reasoningRoundTrip: true, ...endpoint.driverSettings };
 	endpoint.probed = {};
 	if (network && endpoint.backend === "auto" && driver.probe) {
 		// Only probe what the configuration leaves open: explicit settings always win.

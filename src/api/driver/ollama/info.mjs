@@ -21,12 +21,13 @@
 /**
  * Describe the Ollama driver. `protocol` is the OpenAI-compatible `/v1` API; `native` is the mode an upstream selects with `api: "native"`, Ollama's own
  * `/api/chat` (the `ollama.chat` protocol; the model list and embeddings stay on `/v1`).
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], paths: Record<string,string>, native: {protocol: string, paths: Record<string,string>}}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, responses: boolean, probes: string[], paths: Record<string,string>, native: {protocol: string, paths: Record<string,string>}}} Driver facts.
  */
 export function info() {
 	return {
 		name: "ollama",
 		protocol: "openai.chat",
+		responses: true,
 		order: 60,
 		auth: "bearer",
 		strict: false,

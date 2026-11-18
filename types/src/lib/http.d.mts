@@ -26,14 +26,14 @@ export function join(base: string, path: string): string;
 /**
  * The path (with any query) of a call on an upstream. A driver that has a `path(kind, { endpoint, model })` leaf builds it from the endpoint
  * and the model (Azure OpenAI puts the deployment and `api-version` there); otherwise `info().paths[kind]` is used, with the standard
- * OpenAI path for `embeddings` and `models` when the driver does not name one.
+ * OpenAI path for `responses`, `embeddings` and `models` when the driver does not name one.
  * @param {any} driver - Driver record (`info` and the optional `path` leaf).
- * @param {"chat" | "messages" | "embeddings" | "models"} kind - Which call.
+ * @param {"chat" | "messages" | "responses" | "embeddings" | "models"} kind - Which call.
  * @param {any} endpoint - Runtime endpoint.
  * @param {string} [model] - The upstream's model name for the request.
  * @returns {Promise<string>} Path starting with `/`.
  */
-export function pathOf(driver: any, kind: "chat" | "messages" | "embeddings" | "models", endpoint: any, model?: string): Promise<string>;
+export function pathOf(driver: any, kind: "chat" | "messages" | "responses" | "embeddings" | "models", endpoint: any, model?: string): Promise<string>;
 /**
  * Whether a listen address only accepts connections from this machine.
  * @param {string} host - Host or address.

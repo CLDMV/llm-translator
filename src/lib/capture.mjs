@@ -22,6 +22,7 @@
 import { resolve } from "./settings.mjs";
 import * as vllm from "./vllm.mjs";
 import { PROTOCOL } from "./ollama.mjs";
+import * as upstream from "./responses-upstream.mjs";
 
 /**
  * Collect the mounted drivers, sorted by `info().order`.
@@ -74,6 +75,15 @@ export function capture(self, context, frontOverride) {
 			: { request: toAnthropic.request, response: toOpenai.response, stream: toOpenai.stream };
 	// An endpoint on Ollama's native chat API: the request is converted to Ollama's body, the reply (a JSON object or NDJSON lines) from it.
 	const ollama = { request: toOllama[front].request, response: fromOllama[front].response, stream: fromOllama[front].stream };
+	// An endpoint on the Responses API: the request goes through the front's Responses request converter, the reply (a JSON object or SSE
+	// events) is read as Chat Completions first (and, for the Anthropic front, converted from there).
+	const fromResponses =
+		front === "anthropic" ? self.convert.openai.responses.to.anthropic.messages : self.convert.openai.responses.to.openai.chat;
+	const responses = {
+		request: (front === "anthropic" ? self.convert.anthropic.messages : self.convert.openai.chat).to.openai.responses.request,
+		response: fromResponses.response,
+		stream: fromResponses.stream
+	};
 	return {
 		config,
 		state,
@@ -98,7 +108,7 @@ export function capture(self, context, frontOverride) {
 		 */
 		settings: (endpoint) => resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings),
 		/**
-		 * Converters for an endpoint, or null when the request goes to it without conversion: the front and the upstream speak the same
+		 * Converters for an endpoint (the Responses API one included), or null when the request goes to it without conversion: the front and the upstream speak the same
 		 * protocol, or (given the request `body`) an Anthropic-front request goes to a vLLM upstream's native `/v1/messages` (the
 		 * `nativeMessages` setting, unless the upstream answered 404 to it before or the body is one the endpoint cannot take).
 		 * @param {any} endpoint - Runtime endpoint.
@@ -108,6 +118,7 @@ export function capture(self, context, frontOverride) {
 		converters: (endpoint, body) => {
 			if (endpoint.protocol === PROTOCOL) return ollama;
 			if (endpoint.protocol === nativeProtocol) return null;
+			if (endpoint.protocol === upstream.PROTOCOL) return responses;
 			if (front === "anthropic" && body !== undefined && endpoint.driver === "vllm" && !state.noMessages.has(endpoint.name)) {
 				const settings = resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings);
 				if (vllm.wants(endpoint, settings) && vllm.unsuited(body, settings) === null) return null;

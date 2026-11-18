@@ -20,6 +20,7 @@
 import { context, self } from "../lib/runtime.mjs";
 import { capture } from "../lib/capture.mjs";
 import * as vllm from "../lib/vllm.mjs";
+import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
 
 /**
  * Convert an upstream response body to the client protocol (a no-op apart from driver normalization and restoring the
@@ -33,7 +34,9 @@ export async function response(upstreamBody, state) {
 	const endpoint = c.endpoint(state.upstream);
 	const driver = c.driver(endpoint);
 	let body = upstreamBody;
-	if (driver.response) body = await driver.response(body, { endpoint, settings: c.settings(endpoint), state });
+	// A driver's normalizer reads Chat Completions replies, which a Responses one is not.
+	if (driver.response && endpoint.protocol !== RESPONSES)
+		body = await driver.response(body, { endpoint, settings: c.settings(endpoint), state });
 	if (state.messages) body = vllm.response(body);
 	if (state.native) return body.model === undefined ? body : { ...body, model: state.model ?? body.model };
 	return c.converters(endpoint).response(body, state.convert, c.settings(endpoint));

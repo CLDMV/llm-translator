@@ -29,11 +29,13 @@ export const CHARS_PER_TOKEN = 4;
 export const tokens = (characters) => Math.ceil(characters / CHARS_PER_TOKEN);
 
 /**
- * Rough prompt size: one token per four characters of the serialized system prompt, messages and tools.
+ * Rough prompt size: one token per four characters of the serialized system prompt, messages (or `input`) and tools.
  * @param {any} body - Upstream request body.
  * @returns {number} Estimated tokens.
  */
 export function estimate(body) {
+	// A Responses body keeps its conversation in `input` and its system text in `instructions`.
+	if (body.input !== undefined) return tokens(JSON.stringify([body.instructions, body.input, body.tools]).length);
 	return tokens(JSON.stringify([body.system, body.messages, body.tools]).length);
 }
 
