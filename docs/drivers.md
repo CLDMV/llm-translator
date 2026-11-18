@@ -264,7 +264,7 @@ What the conversion does:
 
 Falling back to Chat Completions: with `api: "auto"` the first request of an upstream goes to `/v1/responses`. If the server answers 404, 405 or 501 (no such route, or not implemented), the same request is sent again over Chat Completions, a `fallback` event with `kind: "responses"` is emitted, and the upstream stays on Chat Completions until the next detection, so later requests skip the first attempt. This works for streamed and non-streamed requests alike, and `status()` reports the protocol in use (`protocol` and `responses` on the upstream). Any other error, a 400 or a 5xx other than 501 for example, or a network failure, is returned as it is and is not a reason to fall back. `api: "responses"` and `api: "openai"` are explicit and never retry: an upstream set to `"responses"` that answers 404 returns that error to the client. A driver that only speaks the Responses API (`protocol: "openai.responses"`) has nothing to fall back to. A server that takes both can also serve both from the same configuration by listing it twice with different `models` and `api` values.
 
-See [protocol-support.md](protocol-support.md#8-responses-api-as-an-upstream) for the field table, and [known-limitations.md](known-limitations.md) for what is not covered. No bundled driver has been run against a real Responses server; the field and event names come from OpenAI's API reference.
+See [protocol-support.md](protocol-support.md#9-responses-api-as-an-upstream) for the field table, and [known-limitations.md](known-limitations.md) for what is not covered. No bundled driver has been run against a real Responses server; the field and event names come from OpenAI's API reference.
 
 ## Version-mapped settings for vLLM
 

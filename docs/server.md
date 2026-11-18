@@ -6,12 +6,24 @@ The translator can run as a standalone HTTP server, as a Fastify plugin inside a
 
 The server speaks one client protocol, the front, chosen with `front` (default `anthropic`).
 
-| Front       | Routes                                                                                                                                   |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` and `/api/hello` |
-| `openai`    | `POST /v1/chat/completions`, `POST /v1/embeddings`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/`                     |
+| Front       | Routes                                                                                                                                                                        |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` and `/api/hello`                                      |
+| `openai`    | `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/responses/input_tokens`, `POST /v1/embeddings`, `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` |
 
 Streaming replies use `content-type: text/event-stream`. Errors are always returned in the front's own error shape.
+
+### Responses
+
+`POST /v1/responses` (OpenAI front only) accepts an OpenAI Responses API request and answers with a Responses object, or with semantic stream events when `stream` is true. It is stateless: the request is converted to a Chat Completions body, sent through the normal path (any upstream protocol, pools, failover, `apiKey`, `authorize`, `onUsage`, metrics and capture all apply) and the reply is converted back, so the same upstreams that serve `/v1/chat/completions` serve it. `authorize` sees the Responses body as the client sent it, with the routed model.
+
+`POST /v1/responses/input_tokens` answers `{ "object": "response.input_tokens", "input_tokens": n }` for the same request shape, counted like `count_tokens`.
+
+Text and image input, `instructions`, function tools, `tool_choice`, `parallel_tool_calls`, `text.format` (`json_object`, `json_schema`), `reasoning.effort`, `max_output_tokens`, usage and `incomplete_details` are mapped. A request that needs state or hosted features is refused with a 400 in the OpenAI error shape (`error.code` `unsupported_field`, `unsupported_tool` or `unsupported_content`, and `error.param` naming the field): `previous_response_id`, `conversation`, `store: true`, `background: true`, stored prompts, hosted tools (web search, file search, code interpreter, computer use, MCP, image generation, shell, custom tools), `item_reference` and the hosted `*_call` input items. Fields with no mapping (`top_logprobs`, `max_tool_calls`, `truncation: "auto"`, unknown fields) are dropped and reported in a `dropped` event, or refused under `unknownFields: "error"`. Every mapped and unmapped parameter is listed in [protocol-support.md](protocol-support.md#8-responses-api-front).
+
+A stream starts with `response.created` and `response.in_progress` and ends with `response.completed`, `response.incomplete` or `response.failed`; there is no `[DONE]` line. Pings are SSE comments, and a request whose upstream is slow to answer is committed to a stream early (see [Pings and early commit](#pings-and-early-commit)); if the upstream then fails, the stream is one `error` event.
+
+Reasoning from the upstream is returned as a `reasoning` item with a summary part. With `reasoningRoundTrip` on, the item also carries `encrypted_content`, an opaque value the client sends back with the item so the upstream gets its reasoning on the next turn (needed for Anthropic upstreams with tools); without it, reasoning items in the input are dropped.
 
 ### Embeddings
 

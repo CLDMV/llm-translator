@@ -66,8 +66,17 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 - Pings are not produced by the pure stream converters; the SSE writer adds them while the upstream is silent.
 - Stream converters accept SSE text or bytes, iterables and parsed chunks, but a single malformed SSE data line ends the stream with an error event.
 
+## Responses front
+
+- The Responses API is served statelessly, on the OpenAI front only. `previous_response_id`, `conversation`, `store: true`, `background: true`, stored prompts and `item_reference` input items are refused ([#8](https://github.com/CLDMV/llm-translator/issues/8)); hosted tools and their `*_call` items are refused ([#9](https://github.com/CLDMV/llm-translator/issues/9)). There are no `GET`, `DELETE` or cancel routes for responses.
+- Only function tools, text and image (`image_url`) input are mapped. `input_file`, `input_audio`, file ids and custom tools are refused.
+- Reasoning is returned as a summary part, never as raw `reasoning_text`. A reasoning item is replayed to the upstream only with `reasoningRoundTrip`; otherwise it is dropped.
+- A `<think>` block in the content of an OpenAI-protocol upstream is not split into a reasoning item (the Anthropic-front conversions do that, a pass-through chat reply does not).
+- `top_logprobs`, `max_tool_calls`, `truncation: "auto"` and `context_management` are dropped; `annotations` and `logprobs` on output text are always empty.
+- Upstream-protocol use of the Responses API (calling `/v1/responses` on a backend) is separate work ([#7](https://github.com/CLDMV/llm-translator/issues/7)).
+
 ## Out of scope
 
-- Message Batches, Files, Skills, Responses, Conversations, Realtime, audio, image and moderation endpoints are not provided. Embeddings are forwarded to OpenAI-protocol upstreams only. Batches: [#25](https://github.com/CLDMV/llm-translator/issues/25), [#29](https://github.com/CLDMV/llm-translator/issues/29); Responses: [#4](https://github.com/CLDMV/llm-translator/issues/4).
+- Message Batches, Files, Skills, Conversations, Realtime, audio, image and moderation endpoints are not provided. Embeddings are forwarded to OpenAI-protocol upstreams only. Batches: [#25](https://github.com/CLDMV/llm-translator/issues/25), [#29](https://github.com/CLDMV/llm-translator/issues/29); Responses: [#4](https://github.com/CLDMV/llm-translator/issues/4).
 - Server-side features of the Anthropic platform (MCP connector, container, fast mode, service tiers, task budgets, server-side fallback) have no equivalent on local servers.
 - Backend-specific behaviour beyond what the vLLM, llama.cpp, SGLang, Ollama, LM Studio, TGI, LocalAI, OpenAI, Azure OpenAI, DeepSeek, Mistral, OpenRouter, Groq, Together, Fireworks, xAI, Gemini's OpenAI-compatible endpoint, Anthropic and generic OpenAI-compatible drivers implement (other hosted providers) is not special-cased yet. Driver issues start at [#33](https://github.com/CLDMV/llm-translator/issues/33).
