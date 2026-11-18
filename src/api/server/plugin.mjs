@@ -32,7 +32,7 @@ import { emit } from "../../lib/events.mjs";
  * `app.register(api.server.plugin, { apiKey })`. `authorize(request)` (sync or async) runs after `apiKey` and the body parse and decides
  * with `true` / `{ ok: true, context }` or `false` / `{ ok: false, status, message }`; `onUsage(report, context)` receives each request's usage report. When the Fastify `logger` is enabled, events also go to it as structured lines (`{ event }` plus the message), through the request's logger for events of a request.
  * @param {any} fastify - Fastify instance.
- * @param {any} [options] - `{ front, apiKey, bodyLimit, authorize, onUsage }`. `authorize(request)` and `onUsage(report, context)` are described above. `front` sets the protocol this plugin instance serves (default: the translator's front, other plugin instances and `api.send` are unaffected); `apiKey` (string or array) is required from clients. Forwarded OpenAI bodies are restricted to known fields unless the `passthroughFilter` setting is `false`.
+ * @param {any} [options] - `{ front, apiKey, bodyLimit, authorize, onUsage, metrics, cors, rateLimit }`. `cors` (a list of origins, `"*"` for any) and `rateLimit` (`{ requests, windowMs }`) are described in docs/server.md and are off unless set. `metrics: true` adds `GET /metrics` (Prometheus text format, behind the same authentication as every other route; off by default, then an unknown route). `authorize(request)` and `onUsage(report, context)` are described above. `front` sets the protocol this plugin instance serves (default: the translator's front, other plugin instances and `api.send` are unaffected); `apiKey` (string or array) is required from clients. Forwarded OpenAI bodies are restricted to known fields unless the `passthroughFilter` setting is `false`.
  * @returns {Promise<void>} Resolves once the routes are registered.
  */
 export async function plugin(fastify, options = {}) {
@@ -49,6 +49,9 @@ export async function plugin(fastify, options = {}) {
 		if (options[name] !== undefined && typeof options[name] !== "function") {
 			throw new TranslatorError(`${name} must be a function`, { code: "invalid_config", status: 500 });
 		}
+	}
+	if (options.metrics !== undefined && typeof options.metrics !== "boolean") {
+		throw new TranslatorError("metrics must be true or false", { code: "invalid_config", status: 500 });
 	}
 	const { send, route, token, model, error, sse, embeddings } = self;
 	const front = options.front ?? config.front;
@@ -80,6 +83,7 @@ export async function plugin(fastify, options = {}) {
 		get: model.get,
 		// `context` is only valid inside a call into the api, and routes run later, so the parts are captured now.
 		emit: (spec) => emit({ config, state }, spec),
+		endpoints: () => state.endpoints,
 		build: error.build,
 		encode: sse.encode,
 		write: sse.write

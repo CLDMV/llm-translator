@@ -117,15 +117,12 @@ export function request(body, settings) {
 		if (text === "") delete out.system;
 		else out.system = text;
 	}
-	if (settings.toolErrors && Array.isArray(out.messages)) {
+	const failed = (block) => block?.type === "tool_result" && block.is_error === true;
+	// Messages are copied only when a failed result has to be marked, so an ordinary request keeps its own message objects.
+	if (settings.toolErrors && Array.isArray(out.messages) && out.messages.some((m) => Array.isArray(m?.content) && m.content.some(failed))) {
 		out.messages = out.messages.map((message) =>
-			Array.isArray(message?.content)
-				? {
-						...message,
-						content: message.content.map((block) =>
-							block?.type === "tool_result" && block.is_error === true ? marked(block, settings) : block
-						)
-					}
+			Array.isArray(message?.content) && message.content.some(failed)
+				? { ...message, content: message.content.map((block) => (failed(block) ? marked(block, settings) : block)) }
 				: message
 		);
 	}

@@ -378,8 +378,16 @@ describe("tool results", () => {
 			["tool", ""],
 			["user", "after"]
 		]);
-		const quiet = await convert(base({ messages: turn([{ type: "tool_result", tool_use_id: "t1", content: "boom", is_error: true }]) }));
+		const quiet = await convert(base({ messages: turn([{ type: "tool_result", tool_use_id: "t1", content: "boom", is_error: true }]) }), {
+			toolErrors: false
+		});
 		expect(quiet.messages[2].content).toBe("boom");
+		const byDefault = await convert(
+			base({ messages: turn([{ type: "tool_result", tool_use_id: "t1", content: "boom", is_error: true }]) })
+		);
+		expect(byDefault.messages[2].content).toBe("[error] boom");
+		const ok = await convert(base({ messages: turn([{ type: "tool_result", tool_use_id: "t1", content: "fine" }]) }));
+		expect(ok.messages[2].content).toBe("fine");
 	});
 
 	test("toolErrorMarker changes the text that marks a failed tool result", async () => {

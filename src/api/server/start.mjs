@@ -20,10 +20,11 @@
 import { context, self } from "../../lib/runtime.mjs";
 import { TranslatorError } from "../../lib/errors.mjs";
 import { isLoopback } from "../../lib/http.mjs";
+import { tlsOptions } from "../../lib/guard.mjs";
 
 /**
  * Start an HTTP server in front of the translator. Fastify is an optional peer dependency and is imported here.
- * @param {any} [options] - `{ host = "127.0.0.1", port = 8787, front, apiKey, bodyLimit, logger, allowUnauthenticated, authorize, onUsage }`. `authorize(request)` and `onUsage(report, context)` are described at `server.plugin`. Listening on a non-loopback address without an `apiKey` or an `authorize` hook is refused unless `allowUnauthenticated` is true.
+ * @param {any} [options] - `{ host = "127.0.0.1", port = 8787, front, apiKey, bodyLimit, logger, allowUnauthenticated, authorize, onUsage, metrics, tls, cors, rateLimit }`. `authorize(request)` and `onUsage(report, context)` are described at `server.plugin`. `tls` is `{ key, cert, ca, passphrase }` (file paths; `key` and `cert` together) and serves HTTPS; `cors` is a list of allowed origins (`"*"` for any); `rateLimit` is `{ requests, windowMs = 60000 }` per API key (remote address without one). Each is off unless set; see docs/server.md. Listening on a non-loopback address without an `apiKey` or an `authorize` hook is refused unless `allowUnauthenticated` is true.
  * @returns {Promise<{url: string, host: string, port: number, app: any, close: () => Promise<void>}>} Running server handle.
  */
 export async function start(options = {}) {
@@ -40,6 +41,7 @@ export async function start(options = {}) {
 			details: { cause }
 		});
 	}
+	const https = await tlsOptions(options.tls);
 	const host = options.host ?? "127.0.0.1";
 	if (
 		!isLoopback(host) &&
@@ -54,7 +56,7 @@ export async function start(options = {}) {
 	}
 	// forceCloseConnections: stopping the server must not wait for clients that keep a connection open (an SSE stream, or a
 	// keep-alive socket left behind by a client that aborted), otherwise shutdown can hang indefinitely.
-	const app = fastify({ logger: options.logger ?? false, forceCloseConnections: true });
+	const app = fastify({ logger: options.logger ?? false, forceCloseConnections: true, ...(https ? { https } : {}) });
 	app.setNotFoundHandler((request, reply) => {
 		const { status, headers, body } = build(404, `Not found: ${request.method} ${request.url}`);
 		return reply.code(status).headers(headers).send(body);
@@ -64,12 +66,15 @@ export async function start(options = {}) {
 		apiKey: options.apiKey,
 		bodyLimit: options.bodyLimit,
 		authorize: options.authorize,
-		onUsage: options.onUsage
+		onUsage: options.onUsage,
+		metrics: options.metrics,
+		cors: options.cors,
+		rateLimit: options.rateLimit
 	});
 	await app.listen({ host, port: options.port ?? 8787 });
 	const port = /** @type {import("node:net").AddressInfo} */ (app.server.address()).port;
 	const handle = {
-		url: `http://${host.includes(":") ? `[${host}]` : host}:${port}`,
+		url: `${https ? "https" : "http"}://${host.includes(":") ? `[${host}]` : host}:${port}`,
 		host,
 		port,
 		app,
