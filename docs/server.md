@@ -33,21 +33,22 @@ Anthropic-protocol endpoints in a pool are skipped. Embeddings are not streamed.
 llm-translator --front anthropic --upstream http://gpu-box:8000 --port 8787
 ```
 
-| Flag                                | Environment variable                        | Meaning                                                          |
-| ----------------------------------- | ------------------------------------------- | ---------------------------------------------------------------- |
-| `--front`                           | `LLM_TRANSLATOR_FRONT`                      | `anthropic` (default) or `openai`                                |
-| `--upstream <url>` (repeatable)     | `LLM_TRANSLATOR_UPSTREAM` (comma separated) | upstream base URL                                                |
-| `--upstream-key`                    | `LLM_TRANSLATOR_UPSTREAM_KEY`               | key sent to the upstream                                         |
-| `--backend`                         | `LLM_TRANSLATOR_BACKEND`                    | driver name instead of auto-detection                            |
-| `--model alias=target` (repeatable) |                                             | model alias                                                      |
-| `--host`                            | `LLM_TRANSLATOR_HOST`                       | listen address, default `127.0.0.1`                              |
-| `--port`                            | `LLM_TRANSLATOR_PORT`                       | listen port, default `8787`                                      |
-| `--api-key`                         | `LLM_TRANSLATOR_API_KEY`                    | key clients must send                                            |
-| `--config <file>`                   | `LLM_TRANSLATOR_CONFIG`                     | JSON config file                                                 |
-| `--allow-unauthenticated`           | `LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED=1`    | allow a non-loopback `--host` without `--api-key`                |
-| `--logs [path]`                     |                                             | log to the console (the default), or append JSON lines to `path` |
-| `--silent`                          |                                             | same as `logs: false`: no console output, no file                |
-| `--no-detect`                       |                                             | skip detection                                                   |
+| Flag                                | Environment variable                        | Meaning                                                                        |
+| ----------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
+| `--front`                           | `LLM_TRANSLATOR_FRONT`                      | `anthropic` (default) or `openai`                                              |
+| `--upstream <url>` (repeatable)     | `LLM_TRANSLATOR_UPSTREAM` (comma separated) | upstream base URL                                                              |
+| `--upstream-key`                    | `LLM_TRANSLATOR_UPSTREAM_KEY`               | key sent to the upstream                                                       |
+| `--backend`                         | `LLM_TRANSLATOR_BACKEND`                    | driver name instead of auto-detection                                          |
+| `--model alias=target` (repeatable) |                                             | model alias                                                                    |
+| `--host`                            | `LLM_TRANSLATOR_HOST`                       | listen address, default `127.0.0.1`                                            |
+| `--port`                            | `LLM_TRANSLATOR_PORT`                       | listen port, default `8787`                                                    |
+| `--api-key`                         | `LLM_TRANSLATOR_API_KEY`                    | key clients must send                                                          |
+| `--config <file>`                   | `LLM_TRANSLATOR_CONFIG`                     | JSON config file                                                               |
+| `--allow-unauthenticated`           | `LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED=1`    | allow a non-loopback `--host` without `--api-key`                              |
+| `--metrics`                         | `LLM_TRANSLATOR_METRICS=1`                  | serve Prometheus metrics at `GET /metrics`, see [metrics](#prometheus-metrics) |
+| `--logs [path]`                     |                                             | log to the console (the default), or append JSON lines to `path`               |
+| `--silent`                          |                                             | same as `logs: false`: no console output, no file                              |
+| `--no-detect`                       |                                             | skip detection                                                                 |
 
 The CLI logs warnings and errors to the console by default (`logs: true`); `--logs path` writes every event to a file instead and `--silent` turns logging off. A config file can set `logs` (or the deprecated `silent`). See [events.md](events.md).
 
@@ -125,6 +126,22 @@ const server = await api.server.start({
 | a thrown or rejected hook                    | Refused with `401`; the error goes to the request logger.                                                                                                                      |
 
 A refusal is delivered through `api.error.build`, so each front gets its own error format (Anthropic `{"type":"error",…}`, OpenAI `{"error":{…}}`). `onUsage(report, context)` is called once per request with the usage report described under [usage reporting](#usage-reporting-and-model-allow-lists) and the `context` the hook returned (`undefined` without a hook); it also works without `authorize`. With `authorize` set, a non-loopback bind no longer needs an `apiKey`.
+
+## Prometheus metrics
+
+`GET /metrics` serves Prometheus metrics in the text exposition format (version 0.0.4, `content-type: text/plain; version=0.0.4; charset=utf-8`). It is off by default and then an unknown route (404 like any other). Turn it on with `--metrics`, `LLM_TRANSLATOR_METRICS=1`, `"server": { "metrics": true }` in the config file, or the `metrics: true` option of `server.start` and `server.plugin`. There is no dependency: the registry is built in.
+
+`/metrics` follows the server's authentication like every other route except `/` and `/api/hello`: with an `apiKey` the scraper must send it (`x-api-key`, or `authorization: Bearer <key>`, which Prometheus supports through `authorization.credentials`), and an `authorize` hook runs for it too (`request.url` is `/metrics`, `request.body` is undefined). With neither, the endpoint is open, which is only possible on a loopback address or with `allowUnauthenticated`. The counters live in memory per server and reset when the process restarts.
+
+| Metric                                    | Type      | Labels                             | Meaning                                                                                                                                                                                                                                      |
+| ----------------------------------------- | --------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `llm_translator_requests_total`           | counter   | `front`, `route`, `driver`, `code` | Requests handled, counted when the response ends                                                                                                                                                                                             |
+| `llm_translator_request_duration_seconds` | histogram | `front`, `route`, `driver`, `code` | Seconds from the request arriving to the end of the response, streams included. Buckets 5 ms to 300 s                                                                                                                                        |
+| `llm_translator_tokens_total`             | counter   | `driver`, `type`                   | Tokens the upstream reported: `type` is `input`, `output`, `cache_read` or `cache_creation` (from the normalised usage report)                                                                                                               |
+| `llm_translator_errors_total`             | counter   | `kind`                             | Failed requests: `upstream` (the upstream answered with an error or was unreachable), `translator` (an internal failure, a 5xx of our own, or an error event inside a stream) and `client` (a refused request: bad body, key, unknown model) |
+| `llm_translator_upstream_up`              | gauge     | `upstream`, `driver`               | `1` while the upstream is healthy (not backing off after a failure and not reported not ready by its probe), else `0`                                                                                                                        |
+
+Labels are bounded. `front` is `anthropic` or `openai`, `route` is the route pattern (`/v1/messages`, `/v1/models/*`, with the plugin prefix when there is one) and never the URL, `driver` is the driver of the upstream that answered (`vllm`, `openai`, ...) or `none` when no upstream was reached, `upstream` is the configured upstream name, and `code` is the HTTP status. The model a client asked for, request ids and API keys are never labels. A client that left before the response finished is counted with `code="499"` and is not an error. A stream that fails after it started has `code="200"` (the status was already sent) and counts in `llm_translator_errors_total`. Requests to paths that match no route are not counted, and neither are the scrapes themselves.
 
 ## Prompt caching
 
@@ -246,7 +263,7 @@ await server.close(); // one server
 await api.server.stop(); // every server started through this translator; open connections are closed, not waited for
 ```
 
-`start` options are `host`, `port`, `front`, `apiKey`, `bodyLimit` (default 64 MiB, large enough for images and PDFs), `logger`, `allowUnauthenticated`, `authorize` and `onUsage`. `front` applies to that server only, so one translator can serve an Anthropic port and an OpenAI port at the same time; `api.status().front` keeps reporting the configured front.
+`start` options are `host`, `port`, `front`, `apiKey`, `bodyLimit` (default 64 MiB, large enough for images and PDFs), `logger`, `allowUnauthenticated`, `authorize`, `onUsage` and `metrics`. `front` applies to that server only, so one translator can serve an Anthropic port and an OpenAI port at the same time; `api.status().front` keeps reporting the configured front.
 
 ## Fastify plugin
 
@@ -260,7 +277,7 @@ await app.register(api.server.plugin, { prefix: "/llm", apiKey: "change-me" });
 await app.listen({ port: 3000 }); // POST /llm/v1/messages
 ```
 
-The plugin is encapsulated: its error handler and auth hook apply only to its own routes. Options are `front`, `apiKey`, `bodyLimit`, `authorize` and `onUsage`.
+The plugin is encapsulated: its error handler and auth hook apply only to its own routes. Options are `front`, `apiKey`, `bodyLimit`, `authorize`, `onUsage` and `metrics`.
 
 ## Your own server with the helper leaves
 

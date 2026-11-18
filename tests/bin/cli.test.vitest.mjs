@@ -115,6 +115,15 @@ describe("parse / merge", () => {
 		expect(fromFlags.server).toEqual({ host: "flag-host", port: 3, apiKey: "flag-key" });
 	});
 
+	it("turns on /metrics with --metrics or LLM_TRANSLATOR_METRICS=1, and leaves it off otherwise", () => {
+		expect(merge({}, {}, {}).server).toEqual({});
+		expect(merge({ metrics: true }, {}, {}).server).toEqual({ metrics: true });
+		expect(merge({}, { LLM_TRANSLATOR_METRICS: "1" }, {}).server).toEqual({ metrics: true });
+		expect(merge({}, { LLM_TRANSLATOR_METRICS: "0" }, {}).server).toEqual({});
+		expect(merge({}, {}, { server: { metrics: true } }).server).toEqual({ metrics: true });
+		expect(parse(["--upstream", "http://x", "--metrics"]).metrics).toBe(true);
+	});
+
 	it("logs to the console by default and maps --logs, --silent and the file's logs or silent", () => {
 		expect(merge({}, {}, {}).translator.logs).toBe(true);
 		expect(merge({ logs: "" }, {}, {}).translator.logs).toBe(true);

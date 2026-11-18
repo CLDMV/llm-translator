@@ -23,7 +23,7 @@ import { isLoopback } from "../../lib/http.mjs";
 
 /**
  * Start an HTTP server in front of the translator. Fastify is an optional peer dependency and is imported here.
- * @param {any} [options] - `{ host = "127.0.0.1", port = 8787, front, apiKey, bodyLimit, logger, allowUnauthenticated, authorize, onUsage }`. `authorize(request)` and `onUsage(report, context)` are described at `server.plugin`. Listening on a non-loopback address without an `apiKey` or an `authorize` hook is refused unless `allowUnauthenticated` is true.
+ * @param {any} [options] - `{ host = "127.0.0.1", port = 8787, front, apiKey, bodyLimit, logger, allowUnauthenticated, authorize, onUsage, metrics }`. `authorize(request)` and `onUsage(report, context)` are described at `server.plugin`. Listening on a non-loopback address without an `apiKey` or an `authorize` hook is refused unless `allowUnauthenticated` is true.
  * @returns {Promise<{url: string, host: string, port: number, app: any, close: () => Promise<void>}>} Running server handle.
  */
 export async function start(options = {}) {
@@ -64,7 +64,8 @@ export async function start(options = {}) {
 		apiKey: options.apiKey,
 		bodyLimit: options.bodyLimit,
 		authorize: options.authorize,
-		onUsage: options.onUsage
+		onUsage: options.onUsage,
+		metrics: options.metrics
 	});
 	await app.listen({ host, port: options.port ?? 8787 });
 	const port = /** @type {import("node:net").AddressInfo} */ (app.server.address()).port;
