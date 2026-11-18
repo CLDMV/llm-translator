@@ -142,8 +142,9 @@ async function prepare(c, body, options, picked) {
 	const stream = body.stream === true;
 	// The protocol of the call: what the upstream speaks, or the front's own when the request goes through unconverted (which includes
 	// an Anthropic-front request to vLLM's native `/v1/messages`).
-	const protocol = convert === null ? (c.front === "anthropic" ? "anthropic.messages" : "openai.chat") : endpoint.protocol;
-	const viaMessages = protocol === "anthropic.messages" && endpoint.protocol === "openai.chat";
+	const current = c.protocol(endpoint);
+	const protocol = convert === null ? (c.front === "anthropic" ? "anthropic.messages" : "openai.chat") : current;
+	const viaMessages = protocol === "anthropic.messages" && current === "openai.chat";
 	let upstream;
 	let converted;
 	if (convert) {

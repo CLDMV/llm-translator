@@ -35,9 +35,9 @@ export async function response(upstreamBody, state) {
 	const driver = c.driver(endpoint);
 	let body = upstreamBody;
 	// A driver's normalizer reads Chat Completions replies, which a Responses one is not.
-	if (driver.response && endpoint.protocol !== RESPONSES)
+	if (driver.response && c.protocol(endpoint, state) !== RESPONSES)
 		body = await driver.response(body, { endpoint, settings: c.settings(endpoint), state });
 	if (state.messages) body = vllm.response(body);
 	if (state.native) return body.model === undefined ? body : { ...body, model: state.model ?? body.model };
-	return c.converters(endpoint).response(body, state.convert, c.settings(endpoint));
+	return c.converters(endpoint, undefined, state).response(body, state.convert, c.settings(endpoint));
 }

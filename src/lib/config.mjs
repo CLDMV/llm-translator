@@ -30,7 +30,7 @@ import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
  * @property {Record<string,string>} [headers] Extra headers sent to the upstream.
  * @property {string} [apiVersion] Azure OpenAI `api-version`. Set, it selects the classic per-deployment URLs; unset, the v1 API is used.
  * @property {string} [deployment] Azure OpenAI deployment name for the classic URLs. Defaults to the request's model.
- * @property {"openai" | "responses" | "auto" | "native"} [api] Which API of the server to use: `"openai"` (default) is the OpenAI-compatible Chat Completions one, `"responses"` the Responses API (`/v1/responses`, for a driver that declares `info().responses`), `"auto"` the Responses API where the driver prefers it (`info().responses` is `"prefer"`) and Chat Completions otherwise, and `"native"` the server's own chat API, for a driver that has one (Ollama's `/api/chat`).
+ * @property {"openai" | "responses" | "auto" | "native"} [api] Which API of the server to use: `"openai"` (default) is the OpenAI-compatible Chat Completions one, `"responses"` the Responses API (`/v1/responses`, for a driver that declares `info().responses`), `"auto"` the Responses API first on a driver that declares it, falling back to Chat Completions when the server answers 404, 405 or 501 to it (and Chat Completions on a driver that does not), and `"native"` the server's own chat API, for a driver that has one (Ollama's `/api/chat`).
  * @property {string} [backend] Driver name, or `"auto"` (default) to detect.
  * @property {string[]} [models] Models this upstream serves (routing).
  * @property {boolean} [default] Marks the fallback upstream.

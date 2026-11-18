@@ -21,10 +21,11 @@ import { context } from "../lib/runtime.mjs";
 import { describe } from "../lib/pool.mjs";
 import { resolve } from "../lib/settings.mjs";
 import { wants } from "../lib/vllm.mjs";
+import { PROTOCOL, protocolOf } from "../lib/responses-upstream.mjs";
 
 /**
  * Describe the translator's upstreams. Secrets (API keys, headers) are never included.
- * @returns {{front: string, upstreams: any[]}} Front protocol and per-upstream detection results and health (see `endpoint.status`). `messages` is true while an Anthropic-front request to a vLLM upstream goes to its native `/v1/messages` (the `nativeMessages` setting; a request it cannot take is still converted), false when it is converted, and null for any other driver.
+ * @returns {{front: string, upstreams: any[]}} Front protocol and per-upstream detection results and health (see `endpoint.status`). `messages` is true while an Anthropic-front request to a vLLM upstream goes to its native `/v1/messages` (the `nativeMessages` setting; a request it cannot take is still converted), false when it is converted, and null for any other driver. `protocol` is the one the upstream is using now, and `responses` is true while requests go to its Responses API (an `api: "auto"` upstream that answered 404, 405 or 501 to it has dropped to Chat Completions, until the next detection).
  */
 export function status() {
 	const { config, state } = context;
@@ -35,12 +36,13 @@ export function status() {
 			url: endpoint.url,
 			backend: endpoint.backend,
 			driver: endpoint.driver,
-			protocol: endpoint.protocol,
+			protocol: protocolOf(endpoint, state.noResponses),
 			version: endpoint.facts?.version ?? endpoint.version,
 			models: endpoint.models ?? endpoint.facts?.models ?? [],
 			default: endpoint.default,
 			facts: endpoint.facts,
 			probed: endpoint.probed,
+			responses: endpoint.chat === undefined ? endpoint.protocol === PROTOCOL : !state.noResponses.has(endpoint.name),
 			messages:
 				endpoint.driver === "vllm"
 					? wants(endpoint, resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings)) &&

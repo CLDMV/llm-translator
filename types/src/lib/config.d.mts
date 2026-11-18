@@ -37,7 +37,7 @@ export type UpstreamConfig = {
      */
     deployment?: string;
     /**
-     * Which API of the server to use: `"openai"` (default) is the OpenAI-compatible Chat Completions one, `"responses"` the Responses API (`/v1/responses`, for a driver that declares `info().responses`), `"auto"` the Responses API where the driver prefers it (`info().responses` is `"prefer"`) and Chat Completions otherwise, and `"native"` the server's own chat API, for a driver that has one (Ollama's `/api/chat`).
+     * Which API of the server to use: `"openai"` (default) is the OpenAI-compatible Chat Completions one, `"responses"` the Responses API (`/v1/responses`, for a driver that declares `info().responses`), `"auto"` the Responses API first on a driver that declares it, falling back to Chat Completions when the server answers 404, 405 or 501 to it (and Chat Completions on a driver that does not), and `"native"` the server's own chat API, for a driver that has one (Ollama's `/api/chat`).
      */
     api?: "openai" | "responses" | "auto" | "native";
     /**

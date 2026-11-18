@@ -61,9 +61,9 @@ export function stream(source, state) {
 	const endpoint = c.endpoint(state.upstream);
 	const driver = c.driver(endpoint);
 	const settings = c.settings(endpoint);
-	const convert = state.native ? null : c.converters(endpoint);
+	const convert = state.native ? null : c.converters(endpoint, undefined, state);
 	// A driver's chunk normalizer reads Chat Completions chunks, which Responses events are not.
-	const normalize = endpoint.protocol === RESPONSES ? undefined : driver.chunk;
+	const normalize = c.protocol(endpoint, state) === RESPONSES ? undefined : driver.chunk;
 	const ctx = { endpoint, settings, state };
 	/**
 	 * Chunks the driver's normalizer was still holding when the stream ended (`flush(ctx)`), as upstream messages.

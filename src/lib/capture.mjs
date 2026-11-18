@@ -96,6 +96,13 @@ export function capture(self, context, frontOverride) {
 		 */
 		endpoint: (name) => state.endpoints.find((entry) => entry.name === name),
 		/**
+		 * The protocol an endpoint is using now (an `api: "auto"` endpoint may have dropped from the Responses API to Chat Completions).
+		 * @param {any} endpoint - Runtime endpoint.
+		 * @param {any} [sent] - The `state` of a request already sent, whose own protocol wins.
+		 * @returns {string} Protocol name.
+		 */
+		protocol: (endpoint, sent) => upstream.protocolOf(endpoint, state.noResponses, sent?.responses),
+		/**
 		 * Find the driver record an endpoint uses.
 		 * @param {any} endpoint - Runtime endpoint.
 		 * @returns {any | undefined} Driver record.
@@ -113,12 +120,14 @@ export function capture(self, context, frontOverride) {
 		 * `nativeMessages` setting, unless the upstream answered 404 to it before or the body is one the endpoint cannot take).
 		 * @param {any} endpoint - Runtime endpoint.
 		 * @param {any} [body] - Client request body; without it vLLM's native endpoint is never chosen.
+		 * @param {any} [sent] - The `state` of a request already sent: its reply is read the way it was asked for, even if the upstream has dropped from the Responses API to Chat Completions since.
 		 * @returns {{request: Function, response: Function, stream: Function} | null} Converters or null.
 		 */
-		converters: (endpoint, body) => {
-			if (endpoint.protocol === PROTOCOL) return ollama;
-			if (endpoint.protocol === nativeProtocol) return null;
-			if (endpoint.protocol === upstream.PROTOCOL) return responses;
+		converters: (endpoint, body, sent) => {
+			const protocol = upstream.protocolOf(endpoint, state.noResponses, sent?.responses);
+			if (protocol === PROTOCOL) return ollama;
+			if (protocol === nativeProtocol) return null;
+			if (protocol === upstream.PROTOCOL) return responses;
 			if (front === "anthropic" && body !== undefined && endpoint.driver === "vllm" && !state.noMessages.has(endpoint.name)) {
 				const settings = resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings);
 				if (vllm.wants(endpoint, settings) && vllm.unsuited(body, settings) === null) return null;

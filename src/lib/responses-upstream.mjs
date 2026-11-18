@@ -27,6 +27,23 @@ import { messages } from "./sse.mjs";
 /** Protocol name of an upstream that speaks the Responses API. */
 export const PROTOCOL = "openai.responses";
 
+/** Statuses that mean the server has no Responses API: the route is missing (404, 405) or not implemented (501). */
+export const MISSING = [404, 405, 501];
+
+/**
+ * The protocol an upstream is using right now. An `api: "auto"` upstream on a driver that declares the Responses API starts on it
+ * (`endpoint.protocol`) and drops to its Chat Completions protocol (`endpoint.chat`) once the server answered 404, 405 or 501 to it.
+ * @param {any} endpoint - Runtime endpoint.
+ * @param {Set<string>} missing - Names of the upstreams that have no Responses API (`state.noResponses`).
+ * @param {boolean} [used] - Whether the request in hand went over the Responses API; decides for it when given, so a reply that was
+ * already on its way when the fallback happened is still read as the Responses reply it is.
+ * @returns {string} Protocol name.
+ */
+export function protocolOf(endpoint, missing, used) {
+	if (endpoint.chat === undefined) return endpoint.protocol;
+	return (used ?? !missing.has(endpoint.name)) ? PROTOCOL : endpoint.chat;
+}
+
 /** `format` of the `reasoning_details` items that carry a Responses reasoning item (the encrypted content and its summary). */
 export const FORMAT = "openai-responses-v1";
 

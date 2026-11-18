@@ -115,6 +115,8 @@ async function bind(c, endpoint, network, probe) {
 	}
 	// A fresh detection forgets that the upstream once answered 404 to vLLM's native `/v1/messages`...
 	c.state.noMessages.delete(endpoint.name);
+	// ...and answered 404, 405 or 501 to the Responses API.
+	c.state.noResponses.delete(endpoint.name);
 	// ...and the readiness it was probed with.
 	Object.assign(endpoint.health, { ready: null, readyReason: null, checkedAt: null, unsupported: false });
 	endpoint.driver = driver.name;
@@ -126,9 +128,11 @@ async function bind(c, endpoint, network, probe) {
 			{ code: "unsupported_api", status: 500 }
 		);
 	}
-	// A driver that declares `info().responses: "prefer"` is a server whose Chat Completions API lacks something the Responses API has, so
-	// `api: "auto"` picks the Responses API for it; no bundled driver prefers it, and the default `api: "openai"` never does.
-	if (endpoint.api === "responses" || (endpoint.api === "auto" && driver.info.responses === "prefer")) endpoint.protocol = RESPONSES;
+	// `api: "auto"` tries the Responses API first on a driver that declares it, and `send` falls back to the driver's own protocol (Chat
+	// Completions) when the server answers 404, 405 or 501 (remembered in `state.noResponses`); the default `api: "openai"` never tries it.
+	delete endpoint.chat;
+	if (endpoint.api === "auto" && driver.info.responses && driver.info.protocol !== RESPONSES) endpoint.chat = driver.info.protocol;
+	if (endpoint.api === "responses" || endpoint.chat !== undefined) endpoint.protocol = RESPONSES;
 	if (endpoint.api === "native") {
 		// The server's own chat API instead of its OpenAI-compatible one, for a driver that declares it in `info().native`.
 		if (!driver.info.native) {

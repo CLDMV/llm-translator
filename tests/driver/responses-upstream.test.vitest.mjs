@@ -123,16 +123,17 @@ describe("selecting the protocol", () => {
 		return api.status().upstreams.map((entry) => entry.protocol);
 	};
 
-	it("keeps Chat Completions as the default for every driver, and for api: openai and api: auto", async () => {
-		for (const extra of [{}, { api: "openai" }, { api: "auto" }]) {
+	it("keeps Chat Completions as the default for every driver, and for api: openai", async () => {
+		for (const extra of [{}, { api: "openai" }]) {
 			expect(await protocols(extra)).toEqual(backends.map(() => "openai.chat"));
 		}
 		const named = await make({ upstreams: [{ url, backend: "openai", api: "openai" }], detect: false });
 		expect((await named.request({ model: "m", max_tokens: 4, messages: user })).url).toBe("http://responses.test/v1/chat/completions");
 	});
 
-	it("opts in for each driver that declares it", async () => {
+	it("opts in for each driver that declares it, and api: auto starts on the Responses API for them", async () => {
 		expect(await protocols({ api: "responses" })).toEqual(backends.map(() => "openai.responses"));
+		expect(await protocols({ api: "auto" })).toEqual(backends.map(() => "openai.responses"));
 	});
 
 	it("rejects an api value it does not know, and a driver without the Responses API", async () => {
@@ -146,18 +147,17 @@ describe("selecting the protocol", () => {
 		});
 	});
 
-	it("a driver can declare the protocol itself, with its own path, and one that prefers it takes it for api: auto only", async () => {
+	it("a driver can declare the protocol itself, with its own path, and api: auto keeps a Responses-only driver as it is", async () => {
 		const api = await make({
 			upstreams: [
 				{ url: "http://declares.test", name: "own", models: ["m"] },
 				{ url: "http://declares.test", name: "explicit", api: "responses", models: ["e"] },
-				{ url: "http://prefers.test", name: "pref", api: "auto", models: ["p"] },
-				{ url: "http://prefers.test", name: "chat", models: ["c"] }
+				{ url: "http://declares.test", name: "auto", api: "auto", models: ["a"] }
 			],
 			detect: false,
 			transport: fakeTransport(() => ({ status: 404, body: {} }))
 		});
-		for (const name of ["declares-responses", "prefers-responses"]) {
+		for (const name of ["declares-responses"]) {
 			await api.slothlet.api.add(["driver", name], new URL(`../fixtures/driver/${name}`, import.meta.url).pathname);
 		}
 		await api.detect();
@@ -165,14 +165,12 @@ describe("selecting the protocol", () => {
 		expect(byName).toEqual({
 			own: ["declares-responses", "openai.responses"],
 			explicit: ["declares-responses", "openai.responses"],
-			pref: ["prefers-responses", "openai.responses"],
-			chat: ["prefers-responses", "openai.chat"]
+			auto: ["declares-responses", "openai.responses"]
 		});
 		const ask = async (model) => (await api.request({ model, max_tokens: 4, messages: user })).url;
 		expect(await ask("m")).toBe("http://declares.test/api/responses");
 		expect(await ask("e")).toBe("http://declares.test/api/responses");
-		expect(await ask("p")).toBe("http://prefers.test/v1/responses");
-		expect(await ask("c")).toBe("http://prefers.test/v1/chat/completions");
+		expect(await ask("a")).toBe("http://declares.test/api/responses");
 	});
 
 	it("turns reasoningRoundTrip on for the endpoint unless the settings say otherwise", async () => {
@@ -469,6 +467,13 @@ describe("OpenAI front", () => {
 			{ type: "function_call", call_id: "call_9", name: "Read", arguments: "{}" },
 			{ type: "function_call_output", call_id: "call_9", output: "result" }
 		]);
+	});
+
+	it("skips output items it has no Chat Completions counterpart for", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: reply([{ type: "web_search_call", id: "ws_1", status: "completed" }, message("found")]) }));
+		const result = await api.send({ model: "gpt-x", messages: user });
+		expect(result.body.choices[0].message.content).toBe("found");
 	});
 
 	it("fans n above 1 out to parallel single-choice requests", async () => {

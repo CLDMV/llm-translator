@@ -36,7 +36,7 @@ export function route(body, options = {}) {
 		upstream: endpoint.name,
 		model,
 		requested,
-		protocol: endpoint.protocol,
+		protocol: c.protocol(endpoint),
 		backend: endpoint.driver,
 		native: convert === null,
 		unserved,
