@@ -22,6 +22,7 @@ import { TranslatorError } from "./errors.mjs";
 import { messageId } from "./ids.mjs";
 import { sign } from "./thinking.mjs";
 import { CONTENT_TYPE, recorder } from "./metrics.mjs";
+import { cors as corsPolicy, rateLimit as limiter } from "./guard.mjs";
 
 const BODY_LIMIT = 64 * 1024 * 1024;
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
@@ -245,7 +246,7 @@ function verdictOf(value) {
 /**
  * Register the routes for one front on a Fastify instance.
  * @param {any} fastify - Fastify instance (usually an encapsulated plugin scope).
- * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage, metrics }`.
+ * @param {any} options - `{ apiKey, bodyLimit, authorize, onUsage, metrics, cors, rateLimit }`.
  * @param {any} captured - Captured translator parts `{ front, interval(body), filter, send, route, count, list, get, build, encode, write }`; `front` applies to this instance only.
  * @returns {void}
  */
@@ -286,8 +287,47 @@ export function register(fastify, options, captured) {
 		return reject(reply, api.build(status, "Internal server error"));
 	});
 
-	// Registered before the key check so refused requests are counted too.
+	// Optional hardening, in this order: CORS headers first, so every reply (a 401 or 429 included) carries what a browser needs to read it;
+	// then the metrics hook, so a request the rate limit refuses is counted (as a 429); then the rate limit, ahead of the key check so
+	// failed key attempts count against the caller's address; the key check follows below.
+	const policy = corsPolicy(options.cors);
+	const limit = limiter(options.rateLimit);
+	if (policy) {
+		fastify.addHook("onRequest", async (request, reply) => {
+			// Set on the raw response: it also reaches the hijacked SSE replies, which write their own head.
+			for (const [name, value] of Object.entries(policy.headers(request.headers.origin))) reply.raw.setHeader(name, value);
+		});
+	}
 	if (metrics) fastify.addHook("onRequest", metrics.hook);
+	if (limit) {
+		fastify.addHook("onRequest", async (request, reply) => {
+			if (request.routeOptions.config?.public || request.routeOptions.config?.metrics) return;
+			// Only a key the server knows names a bucket; any other value (or no key, or auth turned off) is counted by remote address, so
+			// a client cannot get fresh buckets by making up keys.
+			const given = keyOf(request.headers);
+			const wait = limit.take(given && keys.some((key) => same(given, key)) ? `key:${given}` : `ip:${request.ip}`);
+			if (wait === 0) return;
+			const refused = api.build(429, "rate limit exceeded", { type: "rate_limit_error" });
+			return reply
+				.code(429)
+				.headers({ ...refused.headers, "retry-after": String(wait) })
+				.send(refused.body);
+		});
+	}
+	if (policy) {
+		// Preflight is answered here, ahead of the key check and the rate limit: browsers send it without credentials. It is not a
+		// request to the API, so the metrics counters skip it.
+		fastify.route({
+			method: "OPTIONS",
+			url: "/*",
+			config: { public: true, metrics: true },
+			handler: (request, reply) => {
+				const headers = policy.preflight(request.headers.origin, request.headers["access-control-request-headers"]);
+				for (const [name, value] of Object.entries(headers)) reply.raw.setHeader(name, value);
+				return reply.code(204).send();
+			}
+		});
+	}
 
 	fastify.addHook("onRequest", async (request, reply) => {
 		if (keys.length === 0 || request.routeOptions.config?.public) return;

@@ -136,6 +136,59 @@ describe("parse / merge", () => {
 		expect(merge({ logs: "flag.log" }, {}, { logs: false }).translator.logs).toBe("flag.log");
 	});
 
+	it("maps the TLS, CORS and rate limit flags and variables to server options, flags over variables over the file", () => {
+		expect(merge({}, {}, {}).server).toEqual({});
+		const env = {
+			LLM_TRANSLATOR_TLS_KEY: "env.key",
+			LLM_TRANSLATOR_TLS_CERT: "env.crt",
+			LLM_TRANSLATOR_TLS_CA: "env-ca.crt",
+			LLM_TRANSLATOR_TLS_PASSPHRASE: "env-pass",
+			LLM_TRANSLATOR_CORS_ORIGINS: "https://a.example, https://b.example,",
+			LLM_TRANSLATOR_RATE_LIMIT: "30",
+			LLM_TRANSLATOR_RATE_LIMIT_WINDOW: "5000"
+		};
+		expect(merge({}, env, {}).server).toEqual({
+			tls: { key: "env.key", cert: "env.crt", ca: "env-ca.crt", passphrase: "env-pass" },
+			cors: ["https://a.example", "https://b.example"],
+			rateLimit: { requests: 30, windowMs: 5000 }
+		});
+		const flags = {
+			"tls-key": "f.key",
+			"tls-cert": "f.crt",
+			"cors-origin": ["*"],
+			"rate-limit": "10"
+		};
+		const file = { server: { tls: { key: "file.key", ca: "file-ca.crt" }, rateLimit: { windowMs: 1000 }, cors: ["https://file.example"] } };
+		expect(merge(flags, {}, file).server).toEqual({
+			tls: { key: "f.key", cert: "f.crt", ca: "file-ca.crt" },
+			cors: ["*"],
+			rateLimit: { requests: 10, windowMs: 1000 }
+		});
+		expect(merge({}, {}, file).server).toEqual(file.server);
+		expect(merge({ "rate-limit-window": "250" }, {}, {}).server).toEqual({ rateLimit: { windowMs: 250 } });
+		expect(
+			parse([
+				"--upstream",
+				"http://x",
+				"--tls-key",
+				"k",
+				"--tls-cert",
+				"c",
+				"--cors-origin",
+				"a",
+				"--cors-origin",
+				"b",
+				"--rate-limit",
+				"3"
+			])
+		).toMatchObject({
+			"tls-key": "k",
+			"tls-cert": "c",
+			"cors-origin": ["a", "b"],
+			"rate-limit": "3"
+		});
+	});
+
 	it("keeps the file's settings when nothing overrides them", () => {
 		const file = { upstreams: [{ url: "http://file" }], server: { port: 5 } };
 		const merged = merge({}, {}, file);

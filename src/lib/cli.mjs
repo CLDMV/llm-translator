@@ -35,6 +35,13 @@ Options:
   --api-key <key>              Key clients must send (x-api-key or Authorization: Bearer)
   --allow-unauthenticated      Allow a non-loopback --host without --api-key
   --metrics                    Serve Prometheus metrics at GET /metrics (same authentication as the other routes)
+  --tls-key <file>             TLS private key (PEM); with --tls-cert the server speaks HTTPS
+  --tls-cert <file>            TLS certificate (PEM)
+  --tls-ca <file>              Extra CA certificate (PEM)
+  --tls-passphrase <text>      Passphrase of the TLS key
+  --cors-origin <origin>       Origin browsers may call from (repeatable, * for any); CORS is off without it
+  --rate-limit <n>             Allow n requests per window for each API key (remote address without one); off without it
+  --rate-limit-window <ms>     Rate limit window (default 60000)
   --config <file>              JSON config file (translator config plus a "server" object)
   --logs [path]                Log warnings and errors to the console (default), or append every event as a JSON line to <path>
   --silent                     Same as logs: false (no console output, no file)
@@ -43,8 +50,9 @@ Options:
   --help                       Print this help
 
 Environment: LLM_TRANSLATOR_FRONT, LLM_TRANSLATOR_UPSTREAM, LLM_TRANSLATOR_UPSTREAM_KEY, LLM_TRANSLATOR_BACKEND,
-LLM_TRANSLATOR_HOST, LLM_TRANSLATOR_PORT, LLM_TRANSLATOR_API_KEY, LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED (1), LLM_TRANSLATOR_METRICS (1), LLM_TRANSLATOR_CONFIG. Flags win over the
-environment, which wins over the config file.
+LLM_TRANSLATOR_HOST, LLM_TRANSLATOR_PORT, LLM_TRANSLATOR_API_KEY, LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED (1), LLM_TRANSLATOR_METRICS (1), LLM_TRANSLATOR_CONFIG,
+LLM_TRANSLATOR_TLS_KEY, LLM_TRANSLATOR_TLS_CERT, LLM_TRANSLATOR_TLS_CA, LLM_TRANSLATOR_TLS_PASSPHRASE, LLM_TRANSLATOR_CORS_ORIGINS (comma separated),
+LLM_TRANSLATOR_RATE_LIMIT, LLM_TRANSLATOR_RATE_LIMIT_WINDOW. Flags win over the environment, which wins over the config file.
 `;
 
 /**
@@ -69,6 +77,13 @@ export function parse(argv) {
 			"api-key": { type: "string" },
 			"allow-unauthenticated": { type: "boolean" },
 			metrics: { type: "boolean" },
+			"tls-key": { type: "string" },
+			"tls-cert": { type: "string" },
+			"tls-ca": { type: "string" },
+			"tls-passphrase": { type: "string" },
+			"cors-origin": { type: "string", multiple: true },
+			"rate-limit": { type: "string" },
+			"rate-limit-window": { type: "string" },
 			config: { type: "string" },
 			logs: { type: "string" },
 			silent: { type: "boolean" },
@@ -120,7 +135,37 @@ export function merge(values, env, file) {
 		...(values["allow-unauthenticated"] || env.LLM_TRANSLATOR_ALLOW_UNAUTHENTICATED === "1" ? { allowUnauthenticated: true } : {}),
 		...(values.metrics || env.LLM_TRANSLATOR_METRICS === "1" ? { metrics: true } : {})
 	};
+	// TLS, CORS and the rate limit: a flag or variable overrides the same key of the file's object, and the rest of the file's object stays.
+	const tls = {
+		...fileServer?.tls,
+		...pick({ key: values["tls-key"] ?? env.LLM_TRANSLATOR_TLS_KEY, cert: values["tls-cert"] ?? env.LLM_TRANSLATOR_TLS_CERT }),
+		...pick({
+			ca: values["tls-ca"] ?? env.LLM_TRANSLATOR_TLS_CA,
+			passphrase: values["tls-passphrase"] ?? env.LLM_TRANSLATOR_TLS_PASSPHRASE
+		})
+	};
+	if (Object.keys(tls).length > 0) server.tls = tls;
+	const origins = values["cors-origin"] ?? (env.LLM_TRANSLATOR_CORS_ORIGINS ? env.LLM_TRANSLATOR_CORS_ORIGINS.split(",") : undefined);
+	if (origins) server.cors = origins.map((origin) => origin.trim()).filter(Boolean);
+	const requests = values["rate-limit"] ?? env.LLM_TRANSLATOR_RATE_LIMIT;
+	const windowMs = values["rate-limit-window"] ?? env.LLM_TRANSLATOR_RATE_LIMIT_WINDOW;
+	if (requests || windowMs) {
+		server.rateLimit = {
+			...fileServer?.rateLimit,
+			...(requests ? { requests: Number(requests) } : {}),
+			...(windowMs ? { windowMs: Number(windowMs) } : {})
+		};
+	}
 	return { translator, server };
+}
+
+/**
+ * Drop the keys whose value is undefined or empty.
+ * @param {Record<string, string | undefined>} entries - Candidate entries.
+ * @returns {Record<string, string>} Entries that have a value.
+ */
+function pick(entries) {
+	return Object.fromEntries(Object.entries(entries).filter(([, value]) => value));
 }
 
 /**
