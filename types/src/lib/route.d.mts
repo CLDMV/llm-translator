@@ -31,14 +31,16 @@ export function pick(config: any, endpoints: any[], model: string | undefined, s
  * Validate a client request body and resolve where it goes. Shared by `request` and `route` so both always agree.
  * @param {any} c - Captured translator parts (`capture`).
  * @param {any} body - Client request body.
- * @param {{endpoint?: string, advance?: boolean}} [options] - `endpoint` forces one pool member by name (used for failover; it must still serve the model, else `endpoint_not_in_pool`); `advance` moves the round robin cursor (`request` does, `route` does not).
- * @returns {{endpoint: any, model: string, requested: string | undefined, unserved: boolean, pin: {effort?: string, thinking?: boolean} | undefined, convert: any, pool: any[]}} The chosen endpoint, the model name sent
- * upstream, the model the client asked for, whether no endpoint serves it, the settings its alias pins, the converters (null for a native pass-through) and the pool in try order.
+ * @param {{endpoint?: string, advance?: boolean, wire?: string, tokens?: boolean}} [options] - `wire: "responses"` marks a request that came in on the Responses API; `endpoint` forces one pool member by name (used for failover; it must still serve the model, else `endpoint_not_in_pool`); `advance` moves the round robin cursor (`request` does, `route` does not).
+ * @returns {{endpoint: any, model: string, requested: string | undefined, unserved: boolean, pin: {effort?: string, thinking?: boolean} | undefined, convert: any, protocol: string, more: boolean, pool: any[]}} The chosen endpoint, the model name sent
+ * upstream, the model the client asked for, whether no endpoint serves it, the settings its alias pins, the protocol it goes over (`protocol`, see `lib/protocol`), whether an `auto` upstream has another to fall back to (`more`), the converters (null for a native pass-through) and the pool in try order.
  * @throws {TranslatorError} `invalid_body` when the body is not a JSON object, `endpoint_not_in_pool` when a forced endpoint no longer serves the model.
  */
 export function resolve(c: any, body: any, options?: {
     endpoint?: string;
     advance?: boolean;
+    wire?: string;
+    tokens?: boolean;
 }): {
     endpoint: any;
     model: string;
@@ -49,5 +51,7 @@ export function resolve(c: any, body: any, options?: {
         thinking?: boolean;
     } | undefined;
     convert: any;
+    protocol: string;
+    more: boolean;
     pool: any[];
 };

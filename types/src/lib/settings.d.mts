@@ -14,6 +14,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {boolean} thinkTags - Parse a leading `<think>...</think>` in content as reasoning.
  * @property {boolean} thinkOpen - With `thinkTags`: the output starts inside a thought because the chat template opens `<think>` in the generation prompt, so reasoning runs up to the first `</think>`. Without a `</think>` the content is plain text.
  * @property {boolean} reasoningRoundTrip - Carry reasoning the upstream needs back across turns. OpenAI-protocol upstream: the provider's reasoning fields (`reasoning_content`, `reasoning`, `reasoning_details`) travel in the thinking block's `llmt:` signature and are restored on the next request. Anthropic-protocol upstream with an OpenAI client: thinking blocks and their signatures travel as `reasoning_details` items the client replays. Off by default; the DeepSeek driver turns it on.
+ * @property {"auto"|"concise"|"detailed"|"none"} reasoningSummary - Responses-protocol upstream: the `reasoning.summary` asked for whenever the request sets a reasoning effort, so the model's reasoning summary comes back as thinking text. `none` does not ask for one.
  * @property {"chat_template_kwargs"|"reasoning_effort"|"none"} thinking - How Anthropic `thinking` is requested from the server.
  * @property {boolean} thinkingBudget - Send `thinking_token_budget` for `thinking.type = "enabled"`.
  * @property {boolean} effort - Map `output_config.effort` to `reasoning_effort`.
@@ -47,7 +48,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {"buffer"|"stream"} toolStreaming - OpenAI to Anthropic streams: `buffer` holds each tool call until its arguments are complete and emits one whole `tool_use` block (text and thinking keep streaming and appear before the block); `stream` forwards argument fragments incrementally and holds text that arrives meanwhile until the tool blocks are done.
  * @property {boolean} effortPassthrough - vLLM driver: send `xhigh` and `max` reasoning effort unchanged instead of clamping them to `high`.
  * @property {boolean} passthroughFilter - Restrict bodies forwarded from the OpenAI front to an OpenAI-protocol upstream to standard Chat Completions fields plus documented vLLM extensions. Off in the library; the server turns it on unless set to false.
- * @property {boolean | "auto"} nativeMessages - vLLM driver: send an Anthropic-front request to vLLM's own `/v1/messages` (vLLM 0.11.1 and later) with only normalisation, instead of converting it to Chat Completions. `false` (default) always converts, `true` always uses the native endpoint, `"auto"` uses it when the detected or configured version is 0.11.1 or later. A request the endpoint cannot take (a trailing assistant message, `document` blocks, deferred tools unless `toolSearch` is `native`) is converted, and so is every request once the server answers 404 to `/v1/messages`. The OpenAI front is never affected.
+ * @property {boolean | "auto"} nativeMessages - Deprecated: use the upstream's `api` instead. For a vLLM upstream that sets no `api`, `true` reads as `api: "anthropic.messages"`, `"auto"` as `api: "auto"` and `false` as `api: "openai.chat"`, with a deprecation warning; it is ignored (also with a warning) when `api` is set.
  * @property {number} contextWindow - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
  * @property {number} defaultMaxTokens - `max_tokens` used when an OpenAI request has none (Anthropic requires one).
  */
@@ -81,6 +82,10 @@ export type Settings = {
      * - Carry reasoning the upstream needs back across turns. OpenAI-protocol upstream: the provider's reasoning fields (`reasoning_content`, `reasoning`, `reasoning_details`) travel in the thinking block's `llmt:` signature and are restored on the next request. Anthropic-protocol upstream with an OpenAI client: thinking blocks and their signatures travel as `reasoning_details` items the client replays. Off by default; the DeepSeek driver turns it on.
      */
     reasoningRoundTrip: boolean;
+    /**
+     * - Responses-protocol upstream: the `reasoning.summary` asked for whenever the request sets a reasoning effort, so the model's reasoning summary comes back as thinking text. `none` does not ask for one.
+     */
+    reasoningSummary: "auto" | "concise" | "detailed" | "none";
     /**
      * - How Anthropic `thinking` is requested from the server.
      */
@@ -225,7 +230,7 @@ export type Settings = {
      */
     passthroughFilter: boolean;
     /**
-     * - vLLM driver: send an Anthropic-front request to vLLM's own `/v1/messages` (vLLM 0.11.1 and later) with only normalisation, instead of converting it to Chat Completions. `false` (default) always converts, `true` always uses the native endpoint, `"auto"` uses it when the detected or configured version is 0.11.1 or later. A request the endpoint cannot take (a trailing assistant message, `document` blocks, deferred tools unless `toolSearch` is `native`) is converted, and so is every request once the server answers 404 to `/v1/messages`. The OpenAI front is never affected.
+     * - Deprecated: use the upstream's `api` instead. For a vLLM upstream that sets no `api`, `true` reads as `api: "anthropic.messages"`, `"auto"` as `api: "auto"` and `false` as `api: "openai.chat"`, with a deprecation warning; it is ignored (also with a warning) when `api` is set.
      */
     nativeMessages: boolean | "auto";
     /**

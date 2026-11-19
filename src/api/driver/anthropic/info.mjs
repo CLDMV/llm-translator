@@ -20,12 +20,13 @@
 
 /**
  * Describe the Anthropic driver (native Messages API upstream).
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hosts: string[], probes: string[], headers: Record<string,string>, paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, protocols: string[], order: number, auth: string, strict: boolean, hosts: string[], probes: string[], headers: Record<string,string>, paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
 		name: "anthropic",
 		protocol: "anthropic.messages",
+		protocols: ["anthropic.messages"],
 		order: 38,
 		auth: "x-api-key",
 		strict: true,

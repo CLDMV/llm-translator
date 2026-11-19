@@ -159,13 +159,14 @@ export const PRESETS = Object.freeze({
 /**
  * The driver facts of a preset.
  * @param {string} name - Preset name.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hosts: string[], fields?: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, protocols: string[], order: number, auth: string, strict: boolean, hosts: string[], fields?: string[], paths: Record<string,string>}} Driver facts.
  */
 export function describe(name) {
 	const preset = PRESETS[name];
 	const facts = {
 		name,
 		protocol: "openai.chat",
+		protocols: ["openai.chat"],
 		order: preset.order,
 		auth: "bearer",
 		strict: false,

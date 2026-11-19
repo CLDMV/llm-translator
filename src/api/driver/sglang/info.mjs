@@ -20,12 +20,13 @@
 
 /**
  * Describe the SGLang driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, protocols: string[], probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
 		name: "sglang",
 		protocol: "openai.chat",
+		protocols: ["openai.chat", "openai.responses"],
 		order: 50,
 		auth: "bearer",
 		strict: false,

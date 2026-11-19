@@ -27,7 +27,7 @@ import { emit } from "../../lib/events.mjs";
 
 /**
  * Fastify plugin. Anthropic front: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`,
- * `GET|HEAD /` and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `POST /v1/embeddings`, `GET /v1/models`, `GET /v1/models/{id}`, `GET|HEAD /`. Responses stream as
+ * `GET|HEAD /` and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/responses/input_tokens`, `POST /v1/embeddings`, `GET /v1/models`, `GET /v1/models/{id}`, `GET|HEAD /`. Responses stream as
  * `text/event-stream` with keep-alive pings; a client disconnect aborts the upstream request. Register it with
  * `app.register(api.server.plugin, { apiKey })`. `authorize(request)` (sync or async) runs after `apiKey` and the body parse and decides
  * with `true` / `{ ok: true, context }` or `false` / `{ ok: false, status, message }`; `onUsage(report, context)` receives each request's usage report. When the Fastify `logger` is enabled, events also go to it as structured lines (`{ event }` plus the message), through the request's logger for events of a request.
@@ -74,6 +74,20 @@ export async function plugin(fastify, options = {}) {
 			} catch {
 				return resolve(config.settings).pingInterval;
 			}
+		},
+		// The settings of the upstream a request is routed to, for the Responses converters (the global ones when the body cannot be routed).
+		settings: (body) => {
+			try {
+				const routed = routeTo(captured, body, { wire: "responses" });
+				return captured.settings(routed.endpoint, routed.protocol);
+			} catch {
+				return resolve(config.settings);
+			}
+		},
+		responses: {
+			request: self.convert.openai.responses.to.openai.chat.request,
+			response: self.convert.openai.chat.to.openai.responses.response,
+			stream: self.convert.openai.chat.to.openai.responses.stream
 		},
 		send,
 		embed: embeddings.send,

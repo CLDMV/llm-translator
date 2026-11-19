@@ -55,9 +55,10 @@ async function settle(promise, interval) {
  * @param {Promise<any>} sending - Pending `send` result.
  * @param {any} api - Captured translator parts.
  * @param {string} [model] - Model the client asked for (used in the early `message_start`).
+ * @param {(source: AsyncIterable<any>) => AsyncIterable<any>} [convert] - Turns the upstream's stream into the client's events (the Responses front).
  * @returns {AsyncGenerator<any>} Client events.
  */
-export async function* late(sending, api, model) {
+export async function* late(sending, api, model, convert) {
 	// True once the upstream's stream is being read (the loop below then closes it).
 	let adopted = false;
 	try {
@@ -103,7 +104,7 @@ export async function* late(sending, api, model) {
 			// `offset` stays null until the first real block decides it: a thinking block takes over the early one (offset 0),
 			// anything else closes it and is shifted by one index.
 			let offset = null;
-			for await (const event of result.stream) {
+			for await (const event of convert ? convert(result.stream) : result.stream) {
 				if (!anthropic) {
 					yield event;
 					continue;
@@ -143,6 +144,11 @@ export async function* late(sending, api, model) {
  * @returns {Generator<any>} Events.
  */
 function* failure(api, body) {
+	if (api.wire === "responses") {
+		// The Responses API has no `[DONE]` sentinel: a stream that fails ends with one `error` event.
+		yield { event: "error", data: { type: "error", code: body.error.code, message: body.error.message, param: body.error.param } };
+		return;
+	}
 	if (api.front === "anthropic") {
 		yield { event: "error", data: body };
 		return;
@@ -403,8 +409,17 @@ export function register(fastify, options, captured) {
 		return api.get(request.params["*"], { signal: controller.signal });
 	});
 
-	const url = api.front === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
-	fastify.post(url, { bodyLimit }, async (request, reply) => {
+	// Streams of the Responses front fail with its own in-band error event (see `failure`).
+	const asResponses = { ...api, wire: "responses" };
+	/**
+	 * Answer a chat or messages request: send it upstream and write the reply, committing to a stream early when the upstream is slow.
+	 * @param {any} request - Fastify request.
+	 * @param {any} reply - Fastify reply.
+	 * @param {any} body - Body in the front's protocol (for the Responses front: the converted Chat Completions body).
+	 * @param {{ state: any, settings: any } | null} via - Set on the Responses front: the request converter's state and the upstream's settings, for converting the reply.
+	 * @returns {Promise<any>} The reply.
+	 */
+	const converse = async (request, reply, body, via) => {
 		// The client may have left before this handler ran (for example during a slow hook); then no upstream call is made.
 		if (reply.raw.destroyed) return reply;
 		const controller = new AbortController();
@@ -414,9 +429,10 @@ export function register(fastify, options, captured) {
 		const onUsage = typeof options.onUsage === "function" ? (report) => options.onUsage(report, contexts.get(request)) : undefined;
 		// The same interval times the early-commit wait and the keep-alives, and it comes from the upstream the request is routed to.
 		// Read it before sending: send advances a round robin, and reading after would see the next member.
-		const interval = api.interval(request.body);
-		const sending = api.send(request.body, {
+		const interval = api.interval(body);
+		const sending = api.send(body, {
 			signal: controller.signal,
+			wire: via ? "responses" : undefined,
 			clientHeaders: forwardable(request.headers),
 			cacheSalt: salts.get(request),
 			onUsage,
@@ -425,7 +441,7 @@ export function register(fastify, options, captured) {
 		sending.catch(() => {});
 		metrics?.attach(request, sending);
 		const gone = new Promise((resolve) => controller.signal.addEventListener("abort", () => resolve(GONE), { once: true }));
-		const result = await settle(Promise.race([sending, gone]), request.body?.stream === true ? interval : 0);
+		const result = await settle(Promise.race([sending, gone]), body?.stream === true ? interval : 0);
 		if (result === GONE) {
 			// A stream that arrives after the client left is never read; return it so its usage report is delivered.
 			sending.then(
@@ -434,12 +450,60 @@ export function register(fastify, options, captured) {
 			);
 			return reply;
 		}
-		if (result === STALLED) return stream(reply, api, controller, late(sending, api, request.body?.model), interval);
-		if (!result.stream) return reject(reply, result);
-		return stream(reply, api, controller, result.stream, interval, result.status, result.headers);
-	});
+		const convert = via ? (source) => api.responses.stream(source, via.state, via.settings) : undefined;
+		if (result === STALLED)
+			return stream(reply, via ? asResponses : api, controller, late(sending, via ? asResponses : api, body?.model, convert), interval);
+		if (!result.stream) {
+			if (!via || result.status >= 400) return reject(reply, result);
+			return reject(reply, { ...result, body: await api.responses.response(result.body, via.state, via.settings) });
+		}
+		return stream(
+			reply,
+			via ? asResponses : api,
+			controller,
+			convert ? convert(result.stream) : result.stream,
+			interval,
+			result.status,
+			result.headers
+		);
+	};
+
+	const url = api.front === "anthropic" ? "/v1/messages" : "/v1/chat/completions";
+	fastify.post(url, { bodyLimit }, (request, reply) => converse(request, reply, request.body, null));
 
 	if (api.front === "openai") {
+		// The Responses API is served through the Chat Completions path: the request is converted to a chat body, so routing, pools, failover,
+		// conversion to Anthropic or Ollama, usage and capture all apply, and the reply is converted back.
+		/**
+		 * Convert a Responses body to its Chat Completions form, reporting what was dropped.
+		 * @param {any} request - Fastify request.
+		 * @returns {Promise<{ chat: any, via: { state: any, settings: any } }>} Chat body and the reply conversion context.
+		 */
+		const converted = async (request) => {
+			const settings = api.settings(request.body);
+			const { body, state } = await api.responses.request(request.body, settings);
+			if (state.dropped.length > 0) {
+				api.emit({
+					type: "dropped",
+					level: "debug",
+					message: `Responses request: dropped ${state.dropped.join(", ")}`,
+					fields: [...state.dropped],
+					log: request.log
+				});
+			}
+			return { chat: body, via: { state, settings } };
+		};
+		fastify.post("/v1/responses", { bodyLimit }, async (request, reply) => {
+			const { chat, via } = await converted(request);
+			return converse(request, reply, chat, via);
+		});
+		fastify.post("/v1/responses/input_tokens", { bodyLimit }, async (request, reply) => {
+			const controller = new AbortController();
+			reply.raw.on("close", () => controller.abort());
+			const { chat } = await converted(request);
+			const { input_tokens } = await api.count(chat, { signal: controller.signal });
+			return reply.send({ object: "response.input_tokens", input_tokens });
+		});
 		// A plain forward: no streaming, no conversion, so none of the chat route's early-commit machinery applies.
 		fastify.post("/v1/embeddings", { bodyLimit }, async (request, reply) => {
 			const controller = new AbortController();

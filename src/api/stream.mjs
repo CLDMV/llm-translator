@@ -21,6 +21,7 @@ import { context, self } from "../lib/runtime.mjs";
 import { capture } from "../lib/capture.mjs";
 import { messages } from "../lib/sse.mjs";
 import * as vllm from "../lib/vllm.mjs";
+import { RESPONSES } from "../lib/protocol.mjs";
 
 /**
  * Rewrite the model name carried by a client event back to the name the client asked for.
@@ -59,9 +60,10 @@ export function stream(source, state) {
 	const c = capture(self, context, state.front);
 	const endpoint = c.endpoint(state.upstream);
 	const driver = c.driver(endpoint);
-	const settings = c.settings(endpoint);
-	const convert = state.native ? null : c.converters(endpoint);
-	const normalize = driver.chunk;
+	const settings = c.settings(endpoint, c.protocol(endpoint, state));
+	const convert = state.native ? null : c.converters(state);
+	// A driver's chunk normalizer reads Chat Completions chunks, which Responses events are not.
+	const normalize = c.protocol(endpoint, state) === RESPONSES ? undefined : driver.chunk;
 	const ctx = { endpoint, settings, state };
 	/**
 	 * Chunks the driver's normalizer was still holding when the stream ended (`flush(ctx)`), as upstream messages.

@@ -1,5 +1,5 @@
 /**
- * Rough prompt size: one token per four characters of the serialized system prompt, messages and tools.
+ * Rough prompt size: one token per four characters of the serialized system prompt, messages (or `input`) and tools.
  * @param {any} body - Upstream request body.
  * @returns {number} Estimated tokens.
  */

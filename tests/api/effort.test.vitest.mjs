@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 const GLM = ["low", "high", "max"];
-const upstream = { url: "http://vllm.test", backend: "vllm", version: "0.30.0" };
+const upstream = { url: "http://vllm.test", backend: "vllm", version: "0.30.0", api: "chat" };
 const base = { model: "GLM-5.3-Flash", max_tokens: 64, messages: [{ role: "user", content: "hi" }] };
 
 /**
@@ -273,7 +273,7 @@ describe("model list with levels and aliases", () => {
 		"glm-flash-off": { model: "GLM-5.3-Flash", thinking: false },
 		plain: "GLM-5.3-Flash"
 	};
-	const served = { url: "http://vllm.test", backend: "vllm", models: ["GLM-5.3-Flash", "other"] };
+	const served = { url: "http://vllm.test", backend: "vllm", api: "chat", models: ["GLM-5.3-Flash", "other"] };
 
 	it("shows the levels of a configured model and the alias names (Anthropic shape)", async () => {
 		const api = await glm({ aliases, upstreams: [served] });

@@ -29,6 +29,8 @@ import { estimate, bodyLength, output, patch, stream as estimating } from "../li
 import { warn } from "../lib/warn.mjs";
 import { start as record } from "../lib/record.mjs";
 import { emit } from "../lib/events.mjs";
+import { MISSING } from "../lib/responses-upstream.mjs";
+import { MESSAGES, RESPONSES, remember } from "../lib/protocol.mjs";
 import * as pool from "../lib/pool.mjs";
 import { createBudget } from "../lib/thinking.mjs";
 import * as fanout from "../lib/fanout.mjs";
@@ -63,7 +65,7 @@ const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache
  * a stream has started, an error chunk and `[DONE]`. Aborting the caller's signal aborts every branch. An OpenAI-protocol upstream
  * receives `n` unchanged and answers it itself.
  * @param {any} body - Client request body (per `front`).
- * @param {any} [options] - `{ signal, front, headers, clientHeaders, filter, cacheSalt, onUsage, log }`: abort signal for the upstream call, per-call front, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply) and the logger this request's events also go to (used by the server).
+ * @param {any} [options] - `{ signal, front, wire, headers, clientHeaders, filter, cacheSalt, onUsage, log }`: abort signal for the upstream call, per-call front, `wire: "responses"` for the Chat Completions form of a Responses API request, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply) and the logger this request's events also go to (used by the server).
  * @returns {Promise<{status: number, headers: Record<string,string>, body: any, usage: Promise<any>} | {status: number, headers: Record<string,string>, stream: AsyncIterable<{event?: string, data: *}>, usage: Promise<any>}>} A JSON reply, or a stream reply when the client asked for streaming and the upstream accepted.
  */
 export async function send(body, options = {}) {
@@ -120,6 +122,7 @@ export async function send(body, options = {}) {
 async function round({ transport, textOnly, jsonInstruction, request, response, stream, error, captured }, body, options, meter) {
 	const ask = {
 		front: options.front,
+		wire: options.wire,
 		headers: options.headers,
 		clientHeaders: options.clientHeaders,
 		filter: options.filter,
@@ -150,7 +153,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		// a stream that fails partway); meter the upstream's own counts, which the converter keeps on its state.
 		// A native reply has no converter state to read, and the endpoint tried before (failover) may have left a source behind.
 		if (sent.state.native) meter.source(null);
-		else meter.source(() => sent.state.convert?.upstreamUsage, sent.state.front === "anthropic" ? "openai" : "folded");
+		else meter.source(() => sent.state.convert?.upstreamUsage, usageShape(sent.state));
 	};
 	/**
 	 * Which sides of a converted reply's usage the upstream did not report, and so need an estimate (valid once the converter has read its reply).
@@ -161,7 +164,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 	 */
 	const gaps = (sent) => {
 		if (sent.state.native) return { input: false, output: false };
-		const counts = normalize(sent.state.front === "anthropic" ? "openai" : "folded", sent.state.convert?.upstreamUsage);
+		const counts = normalize(usageShape(sent.state), sent.state.convert?.upstreamUsage);
 		if (counts === null) return { input: true, output: true };
 		return {
 			input: counts.input_tokens === null && counts.cache_read_input_tokens === null && counts.cache_creation_input_tokens === null,
@@ -179,7 +182,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		const endpoint = captured.endpoint(sent.upstream);
 		const driver = captured.driver(endpoint);
 		const exact =
-			driver.count && !(hide && sent.state.stream)
+			driver.count && !sent.state.responses && !(hide && sent.state.stream)
 				? await driver.count({
 						endpoint,
 						request: sent.body,
@@ -223,22 +226,28 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		let sent = first;
 		let result = await call(transport, sent, options.signal, limitsNow());
 		const status = result.status;
-		if (status === 404 && sent.state.messages) {
-			// vLLM's native `/v1/messages` answers an Anthropic-shaped error for an unknown model but FastAPI's `{"detail":"Not Found"}` when the
-			// route is missing (a vLLM older than 0.11.1): only the second means the endpoint is not there, so only then is the request converted.
+		const wasMessages = sent.state.protocol === MESSAGES;
+		const wasResponses = sent.state.protocol === RESPONSES;
+		if (sent.more && ((status === 404 && wasMessages) || (MISSING.includes(status) && wasResponses))) {
+			// `api: "auto"` tried a protocol the server does not have: a missing route (404, 405) or one that is not implemented (501). The next
+			// protocol in line takes this request and every later one until the next detection.
 			const failure = await parse(result);
-			if (failure?.type === "error") return { upstream: sent, result, failure };
-			captured.state.noMessages.add(sent.upstream);
+			// A Messages route answers an Anthropic-shaped error for an unknown model but FastAPI's `{"detail":"Not Found"}` when the route is
+			// missing (vLLM before 0.11.1): only the second means the route is not there. An Anthropic upstream's own 404 is never "missing".
+			if (wasMessages && failure?.type === "error") return { upstream: sent, result, failure };
+			remember(captured.state, sent.upstream, sent.state.protocol);
+			const next = wasMessages ? "messages" : "responses";
+			const name = wasMessages ? "Messages API (/v1/messages)" : "Responses API (/v1/responses)";
 			announce({
 				type: "fallback",
-				kind: "messages",
+				kind: next,
 				level: "warn",
-				message: `Upstream ${sent.upstream}: /v1/messages answered 404; sent the request converted to Chat Completions, and will do so for this upstream until the next detection. Set nativeMessages: false on this upstream to skip the first attempt.`,
+				message: `Upstream ${sent.upstream}: ${name} answered ${status}; sent the request over the next protocol, and will do so for this upstream until the next detection. Set api on this upstream (for example "chat") to skip the first attempt.`,
 				endpoint: sent.upstream,
 				model: sent.body.model,
 				status,
 				reason: String(parseError(failure, status).message).trim().slice(0, 500),
-				action: "conversion"
+				action: wasMessages ? "conversion" : "chat"
 			});
 			sent = await request(body, { ...ask, endpoint: sent.upstream, retry: true });
 			note(sent);
@@ -489,6 +498,16 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 	meter.json(client);
 	meter.finish("done");
 	return { status: 200, headers: { "content-type": "application/json" }, body: client };
+}
+
+/**
+ * The shape of the upstream usage a converter keeps on its state: Chat Completions usage for an upstream that speaks Chat Completions or the
+ * Responses API (whose usage is converted to that shape) or for the Anthropic front, Anthropic usage reported the OpenAI way otherwise.
+ * @param {any} state - The `state` returned by `request`.
+ * @returns {"openai" | "folded"} Shape.
+ */
+function usageShape(state) {
+	return state.front === "anthropic" || state.responses ? "openai" : "folded";
 }
 
 /**

@@ -36,7 +36,7 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  */
 async function boot(server, config = {}) {
 	const upstream = await fakeVllm();
-	const api = await make({ upstreams: [upstream.url], ...config });
+	const api = await make({ upstreams: [{ url: upstream.url, api: "chat" }], ...config });
 	return { upstream, api, server: await api.server.start({ port: 0, ...server }) };
 }
 

@@ -21,12 +21,13 @@
 /**
  * Describe the LocalAI driver. It is found through `GET /version` (`{ version: "v3.1.0 (<commit>)" }`) or LocalAI's discovery document at
  * `GET /.well-known/localai.json`. The extra fields are the ones LocalAI's request schema accepts beyond the OpenAI set.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, protocols: string[], probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
 		name: "localai",
 		protocol: "openai.chat",
+		protocols: ["openai.chat", "openai.responses"],
 		order: 52,
 		auth: "bearer",
 		strict: false,

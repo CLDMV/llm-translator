@@ -65,7 +65,7 @@ export async function createTranslator(config) {
 		events: create(normalized.onEvent),
 		textOnly: new Set(),
 		jsonInstruction: new Set(),
-		noMessages: new Set(),
+		missing: new Map(),
 		cursors: new Map(),
 		front: undefined
 	};

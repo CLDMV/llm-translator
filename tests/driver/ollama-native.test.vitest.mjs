@@ -481,8 +481,8 @@ describe("the ollama driver in native mode", () => {
 		expect(warnings.some((event) => /truncates/.test(event.message ?? ""))).toBe(true);
 		const { request } = api.driver.ollama;
 		const body = { model: "m", messages: user, tool_choice: "required", n: 2, options: { num_ctx: 100000 } };
-		expect(request(body, { endpoint: { protocol: "ollama.chat", name: "o" }, settings: { contextWindow: 20 } })).toBe(body);
-		expect(request({ ...body, options: {} }, { endpoint: { protocol: "ollama.chat" }, settings: { contextWindow: 0 } }).tool_choice).toBe(
+		expect(request(body, { protocol: "ollama.chat", endpoint: { name: "o" }, settings: { contextWindow: 20 } })).toBe(body);
+		expect(request({ ...body, options: {} }, { protocol: "ollama.chat", endpoint: {}, settings: { contextWindow: 0 } }).tool_choice).toBe(
 			"required"
 		);
 		expect(request({ model: "m", messages: user, tool_choice: "required" }, { endpoint: { protocol: "openai.chat" } })).not.toHaveProperty(

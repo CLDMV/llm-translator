@@ -31,23 +31,23 @@ export function join(base, path) {
 /**
  * The path (with any query) of a call on an upstream. A driver that has a `path(kind, { endpoint, model })` leaf builds it from the endpoint
  * and the model (Azure OpenAI puts the deployment and `api-version` there); otherwise `info().paths[kind]` is used, with the standard
- * OpenAI path for `embeddings` and `models` when the driver does not name one.
+ * OpenAI path for `responses`, `embeddings` and `models` when the driver does not name one.
  * @param {any} driver - Driver record (`info` and the optional `path` leaf).
- * @param {"chat" | "messages" | "embeddings" | "models"} kind - Which call.
+ * @param {"chat" | "messages" | "responses" | "embeddings" | "models"} kind - Which call.
  * @param {any} endpoint - Runtime endpoint.
  * @param {string} [model] - The upstream's model name for the request.
+ * @param {string} [protocol] - The protocol the request goes over.
  * @returns {Promise<string>} Path starting with `/`.
  */
-export async function pathOf(driver, kind, endpoint, model) {
+export async function pathOf(driver, kind, endpoint, model, protocol) {
 	if (driver.path) return driver.path(kind, { endpoint, model });
 	// A driver with a native mode (`info().native`) names the paths of that mode, which replace the default ones for an endpoint using it.
-	const native =
-		driver.info.native !== undefined && endpoint.protocol === driver.info.native.protocol ? driver.info.native.paths : undefined;
+	const native = driver.info.native !== undefined && protocol === driver.info.native.protocol ? driver.info.native.paths : undefined;
 	return native?.[kind] ?? driver.info.paths[kind] ?? DEFAULT_PATHS[kind];
 }
 
 /** Standard OpenAI paths for the calls a driver does not name in `info().paths`. */
-const DEFAULT_PATHS = { embeddings: "/v1/embeddings", models: "/v1/models" };
+const DEFAULT_PATHS = { responses: "/v1/responses", embeddings: "/v1/embeddings", models: "/v1/models" };
 
 /**
  * Whether a listen address only accepts connections from this machine.
