@@ -34,6 +34,7 @@ import { fit, pinBody } from "../lib/effort.mjs";
 import { relax, strictTools } from "../lib/strict.mjs";
 import { TranslatorError } from "../lib/errors.mjs";
 import * as vllm from "../lib/vllm.mjs";
+import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
 
 /**
  * Who produced reasoning data signed for this endpoint: driver, protocol and host, so two upstreams on the generic driver stay apart.
@@ -141,8 +142,9 @@ async function prepare(c, body, options, picked) {
 	const stream = body.stream === true;
 	// The protocol of the call: what the upstream speaks, or the front's own when the request goes through unconverted (which includes
 	// an Anthropic-front request to vLLM's native `/v1/messages`).
-	const protocol = convert === null ? (c.front === "anthropic" ? "anthropic.messages" : "openai.chat") : endpoint.protocol;
-	const viaMessages = protocol === "anthropic.messages" && endpoint.protocol === "openai.chat";
+	const current = c.protocol(endpoint);
+	const protocol = convert === null ? (c.front === "anthropic" ? "anthropic.messages" : "openai.chat") : current;
+	const viaMessages = protocol === "anthropic.messages" && current === "openai.chat";
 	let upstream;
 	let converted;
 	if (convert) {
@@ -220,7 +222,8 @@ async function prepare(c, body, options, picked) {
 		fit(upstream, levels, model, (message, details) =>
 			warn(c.config, c.state, message, { type: "effort", endpoint: endpoint.name, model, ...details, log: options.log })
 		);
-	if (converted?.reasoningMissing) {
+	// A Responses upstream never needs reasoning sent back to accept tool calls (a model without reasoning has none), so it gets no warning.
+	if (converted?.reasoningMissing && protocol !== RESPONSES) {
 		warn(
 			c.config,
 			c.state,
@@ -228,8 +231,8 @@ async function prepare(c, body, options, picked) {
 			{ kind: "reasoning", endpoint: endpoint.name, log: options.log }
 		);
 	}
-	// The driver's request leaf shapes a Chat Completions body, which a native `/v1/messages` body is not.
-	if (driver.request && !viaMessages)
+	// The driver's request leaf shapes a Chat Completions body, which neither a native `/v1/messages` body nor a Responses one is.
+	if (driver.request && !viaMessages && protocol !== RESPONSES)
 		upstream = await driver.request(upstream, {
 			endpoint,
 			settings,
@@ -249,7 +252,8 @@ async function prepare(c, body, options, picked) {
 			log: options.log
 		});
 	}
-	const path = await http.pathOf(driver, protocol === "anthropic.messages" ? "messages" : "chat", endpoint, model);
+	const kind = protocol === "anthropic.messages" ? "messages" : protocol === RESPONSES ? "responses" : "chat";
+	const path = await http.pathOf(driver, kind, endpoint, model);
 	return {
 		upstream: endpoint.name,
 		pool: pool.map((entry) => entry.name),
@@ -270,6 +274,7 @@ async function prepare(c, body, options, picked) {
 			front: c.front,
 			native: convert === null,
 			messages: viaMessages,
+			responses: protocol === RESPONSES,
 			model: body.model,
 			stream,
 			unserved,

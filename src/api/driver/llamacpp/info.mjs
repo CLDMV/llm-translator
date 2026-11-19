@@ -20,12 +20,13 @@
 
 /**
  * Describe the llama.cpp driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, responses: boolean, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
 		name: "llamacpp",
 		protocol: "openai.chat",
+		responses: true,
 		order: 40,
 		auth: "bearer",
 		strict: false,

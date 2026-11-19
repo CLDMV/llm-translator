@@ -24,6 +24,7 @@ import { warn } from "../lib/warn.mjs";
 import { emit } from "../lib/events.mjs";
 import * as http from "../lib/http.mjs";
 import { validToolIdPolicy } from "../lib/ids.mjs";
+import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
 
 /**
  * Bind every endpoint to a driver. `backend: "auto"` endpoints are probed (drivers tried in `info().order` after any driver whose `info().hosts` names the endpoint host, the generic
@@ -114,10 +115,24 @@ async function bind(c, endpoint, network, probe) {
 	}
 	// A fresh detection forgets that the upstream once answered 404 to vLLM's native `/v1/messages`...
 	c.state.noMessages.delete(endpoint.name);
+	// ...and answered 404, 405 or 501 to the Responses API.
+	c.state.noResponses.delete(endpoint.name);
 	// ...and the readiness it was probed with.
 	Object.assign(endpoint.health, { ready: null, readyReason: null, checkedAt: null, unsupported: false });
 	endpoint.driver = driver.name;
 	endpoint.protocol = driver.info.protocol;
+	if (endpoint.api === "responses" && !driver.info.responses && driver.info.protocol !== RESPONSES) {
+		const named = c.drivers.filter((entry) => entry.info.responses).map((entry) => entry.name);
+		throw new TranslatorError(
+			`Upstream ${endpoint.name}: api "responses" needs a driver for a server that has the Responses API (${named.join(", ")}), but the upstream is bound to ${driver.name}; set backend to one of them`,
+			{ code: "unsupported_api", status: 500 }
+		);
+	}
+	// `api: "auto"` tries the Responses API first on a driver that declares it, and `send` falls back to the driver's own protocol (Chat
+	// Completions) when the server answers 404, 405 or 501 (remembered in `state.noResponses`); the default `api: "openai"` never tries it.
+	delete endpoint.chat;
+	if (endpoint.api === "auto" && driver.info.responses && driver.info.protocol !== RESPONSES) endpoint.chat = driver.info.protocol;
+	if (endpoint.api === "responses" || endpoint.chat !== undefined) endpoint.protocol = RESPONSES;
 	if (endpoint.api === "native") {
 		// The server's own chat API instead of its OpenAI-compatible one, for a driver that declares it in `info().native`.
 		if (!driver.info.native) {
@@ -131,6 +146,8 @@ async function bind(c, endpoint, network, probe) {
 	}
 	endpoint.facts = facts;
 	endpoint.driverSettings = (await driver.settings?.(facts)) ?? {};
+	// Reasoning models need their encrypted reasoning items back between turns on a stateless Responses call.
+	if (endpoint.protocol === RESPONSES) endpoint.driverSettings = { reasoningRoundTrip: true, ...endpoint.driverSettings };
 	endpoint.probed = {};
 	if (network && endpoint.backend === "auto" && driver.probe) {
 		// Only probe what the configuration leaves open: explicit settings always win.

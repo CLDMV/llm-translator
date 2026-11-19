@@ -29,6 +29,7 @@ import { estimate, bodyLength, output, patch, stream as estimating } from "../li
 import { warn } from "../lib/warn.mjs";
 import { start as record } from "../lib/record.mjs";
 import { emit } from "../lib/events.mjs";
+import { MISSING } from "../lib/responses-upstream.mjs";
 import * as pool from "../lib/pool.mjs";
 import { createBudget } from "../lib/thinking.mjs";
 import * as fanout from "../lib/fanout.mjs";
@@ -150,7 +151,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		// a stream that fails partway); meter the upstream's own counts, which the converter keeps on its state.
 		// A native reply has no converter state to read, and the endpoint tried before (failover) may have left a source behind.
 		if (sent.state.native) meter.source(null);
-		else meter.source(() => sent.state.convert?.upstreamUsage, sent.state.front === "anthropic" ? "openai" : "folded");
+		else meter.source(() => sent.state.convert?.upstreamUsage, usageShape(sent.state));
 	};
 	/**
 	 * Which sides of a converted reply's usage the upstream did not report, and so need an estimate (valid once the converter has read its reply).
@@ -161,7 +162,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 	 */
 	const gaps = (sent) => {
 		if (sent.state.native) return { input: false, output: false };
-		const counts = normalize(sent.state.front === "anthropic" ? "openai" : "folded", sent.state.convert?.upstreamUsage);
+		const counts = normalize(usageShape(sent.state), sent.state.convert?.upstreamUsage);
 		if (counts === null) return { input: true, output: true };
 		return {
 			input: counts.input_tokens === null && counts.cache_read_input_tokens === null && counts.cache_creation_input_tokens === null,
@@ -179,7 +180,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		const endpoint = captured.endpoint(sent.upstream);
 		const driver = captured.driver(endpoint);
 		const exact =
-			driver.count && !(hide && sent.state.stream)
+			driver.count && !sent.state.responses && !(hide && sent.state.stream)
 				? await driver.count({
 						endpoint,
 						request: sent.body,
@@ -239,6 +240,26 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 				status,
 				reason: String(parseError(failure, status).message).trim().slice(0, 500),
 				action: "conversion"
+			});
+			sent = await request(body, { ...ask, endpoint: sent.upstream, retry: true });
+			note(sent);
+			return { upstream: sent, result: await call(transport, sent, options.signal, limitsNow()) };
+		}
+		if (MISSING.includes(status) && sent.state.responses && captured.endpoint(sent.upstream).chat !== undefined) {
+			// `api: "auto"` tried the Responses API first and the server has none (a missing route, or not implemented): send this request over
+			// Chat Completions, and every later one, until the next detection.
+			const failure = await parse(result);
+			captured.state.noResponses.add(sent.upstream);
+			announce({
+				type: "fallback",
+				kind: "responses",
+				level: "warn",
+				message: `Upstream ${sent.upstream}: /v1/responses answered ${status}; sent the request over Chat Completions, and will do so for this upstream until the next detection. Set api: "openai" on this upstream to skip the first attempt.`,
+				endpoint: sent.upstream,
+				model: sent.body.model,
+				status,
+				reason: String(parseError(failure, status).message).trim().slice(0, 500),
+				action: "chat"
 			});
 			sent = await request(body, { ...ask, endpoint: sent.upstream, retry: true });
 			note(sent);
@@ -489,6 +510,16 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 	meter.json(client);
 	meter.finish("done");
 	return { status: 200, headers: { "content-type": "application/json" }, body: client };
+}
+
+/**
+ * The shape of the upstream usage a converter keeps on its state: Chat Completions usage for an upstream that speaks Chat Completions or the
+ * Responses API (whose usage is converted to that shape) or for the Anthropic front, Anthropic usage reported the OpenAI way otherwise.
+ * @param {any} state - The `state` returned by `request`.
+ * @returns {"openai" | "folded"} Shape.
+ */
+function usageShape(state) {
+	return state.front === "anthropic" || state.responses ? "openai" : "folded";
 }
 
 /**
