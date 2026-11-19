@@ -4,9 +4,10 @@
  * @param {Promise<any>} sending - Pending `send` result.
  * @param {any} api - Captured translator parts.
  * @param {string} [model] - Model the client asked for (used in the early `message_start`).
+ * @param {(source: AsyncIterable<any>) => AsyncIterable<any>} [convert] - Turns the upstream's stream into the client's events (the Responses front).
  * @returns {AsyncGenerator<any>} Client events.
  */
-export function late(sending: Promise<any>, api: any, model?: string): AsyncGenerator<any>;
+export function late(sending: Promise<any>, api: any, model?: string, convert?: (source: AsyncIterable<any>) => AsyncIterable<any>): AsyncGenerator<any>;
 /**
  * Register the routes for one front on a Fastify instance.
  * @param {any} fastify - Fastify instance (usually an encapsulated plugin scope).
