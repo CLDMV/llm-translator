@@ -39,22 +39,28 @@ import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
 /**
  * Who produced reasoning data signed for this endpoint: driver, protocol and host, so two upstreams on the generic driver stay apart.
  * @param {any} endpoint - Runtime endpoint.
+ * @param {string} protocol - The protocol of the request.
  * @returns {string} `driver:protocol:host`.
  */
-function producerOf(endpoint) {
-	return `${endpoint.driver}:${endpoint.protocol}:${URL.canParse(endpoint.url) ? new URL(endpoint.url).host : endpoint.url}`;
+function producerOf(endpoint, protocol) {
+	return `${endpoint.driver}:${protocol}:${URL.canParse(endpoint.url) ? new URL(endpoint.url).host : endpoint.url}`;
 }
 
 /**
  * Route a client request body (in the configured `front` protocol) to an upstream and convert it to that upstream's
  * protocol. Does no I/O.
  * @param {any} body - Client request body (Anthropic Messages or OpenAI Chat Completions, per `front`).
- * @param {any} [options] - `{ front, headers, clientHeaders, filter, images, usage }`. `front` overrides the configured front for this call, `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback), `endpoint` sends to that member of the model's pool (used for failover; default: the first in the pool's order), `hold: true` (used by `send`) advances a round robin and takes the chosen endpoint's in-flight slot, which the caller then releases, `jsonObject: "instruction"` sends a `json_object` response format as a system instruction (used by the JSON fallback, and applied by itself once a refusal is remembered for the endpoint and model), `tools: false` sends the request without tools (used by the tool fallback), `usage: true` (used by `send`) makes a streaming OpenAI-front request always ask the upstream for its final usage chunk, `cacheSalt` (a trusted per-call vLLM `cache_salt`, which replaces the upstream's `cacheSalt` setting), `retry: true` (used by `send` for the same request sent again) keeps the `dropped` event from repeating, `log` is the logger events of this request also go to (used by the server), `budget` (from `createBudget`, one per `send` for all its attempts) limits the cost of decoding reasoning signatures.
- * @returns {Promise<{upstream: string, method: string, url: string, path: string, headers: Record<string,string>, body: any, state: any, pool: string[], images: {sent: boolean, retry: boolean, key: string}, tools: {sent: boolean, retry: boolean}, json: {sent: boolean, retry: boolean, key: string}}>} The upstream request and the state `response`/`stream`/`error` need. `pool` lists the names of the endpoints serving the model in the order they are tried (`upstream` is the first); `images` tells `send` whether the body carries images, whether a refusal may be retried without them and the key under which a refusal is remembered; `tools` tells it whether the body carries tools and whether a tool-parser refusal may be retried without them; `json` tells it whether the body carries the schema emulation of `json_object`, whether a refusal may be retried with the instruction and the key under which a refusal is remembered.
+ * @param {any} [options] - `{ front, headers, clientHeaders, filter, images, usage }`. `front` overrides the configured front for this call, `tokens: true` (used by `token.count`) never picks a native Messages route on a server whose own protocol is another, because the tokenizer reads Chat Completions messages, `wire: "responses"` says the body is the Chat Completions form of a Responses API request (so the protocol is chosen for a Responses client), `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback), `endpoint` sends to that member of the model's pool (used for failover; default: the first in the pool's order), `hold: true` (used by `send`) advances a round robin and takes the chosen endpoint's in-flight slot, which the caller then releases, `jsonObject: "instruction"` sends a `json_object` response format as a system instruction (used by the JSON fallback, and applied by itself once a refusal is remembered for the endpoint and model), `tools: false` sends the request without tools (used by the tool fallback), `usage: true` (used by `send`) makes a streaming OpenAI-front request always ask the upstream for its final usage chunk, `cacheSalt` (a trusted per-call vLLM `cache_salt`, which replaces the upstream's `cacheSalt` setting), `retry: true` (used by `send` for the same request sent again) keeps the `dropped` event from repeating, `log` is the logger events of this request also go to (used by the server), `budget` (from `createBudget`, one per `send` for all its attempts) limits the cost of decoding reasoning signatures.
+ * @returns {Promise<{upstream: string, method: string, url: string, path: string, headers: Record<string,string>, body: any, state: any, pool: string[], more: boolean, images: {sent: boolean, retry: boolean, key: string}, tools: {sent: boolean, retry: boolean}, json: {sent: boolean, retry: boolean, key: string}}>} The upstream request and the state `response`/`stream`/`error` need. `pool` lists the names of the endpoints serving the model in the order they are tried (`upstream` is the first); `more` is true when the upstream is `api: "auto"` and has another protocol to fall back to; `images` tells `send` whether the body carries images, whether a refusal may be retried without them and the key under which a refusal is remembered; `tools` tells it whether the body carries tools and whether a tool-parser refusal may be retried without them; `json` tells it whether the body carries the schema emulation of `json_object`, whether a refusal may be retried with the instruction and the key under which a refusal is remembered.
  */
 export async function request(body, options = {}) {
 	const c = capture(self, context, options.front);
-	const picked = resolve(c, body, { endpoint: options.endpoint, advance: options.hold === true && options.endpoint === undefined });
+	const picked = resolve(c, body, {
+		endpoint: options.endpoint,
+		wire: options.wire,
+		tokens: options.tokens,
+		advance: options.hold === true && options.endpoint === undefined
+	});
 	if (options.hold !== true) return prepare(c, body, options, picked);
 	// `send` takes the in-flight slot of the chosen endpoint here, in the same synchronous step as the pick, so concurrent requests see it.
 	picked.endpoint.health.inflight++;
@@ -117,7 +123,7 @@ function checkStrict(c, upstream, endpoint, driver, settings, options) {
  * @returns {Promise<any>} The `request` result.
  */
 async function prepare(c, body, options, picked) {
-	const { endpoint, model, unserved, convert, pool, pin } = picked;
+	const { endpoint, model, unserved, convert, pool, pin, protocol } = picked;
 	const levels = Object.hasOwn(c.config.efforts, model) ? c.config.efforts[model] : undefined;
 	// An alias that pins settings overrides what the request asked for, before conversion; a pinned effort is always mapped.
 	if (pin) body = pinBody(body, pin, c.front);
@@ -130,8 +136,8 @@ async function prepare(c, body, options, picked) {
 	if (c.front === "openai" && body.constraint !== undefined) ({ constraint, ...body } = body);
 	const key = `${endpoint.name}\n${model}`;
 	// A refusal remembered earlier in this process, or an explicit `images: false`, sends the request without images.
-	const text = options.images === false || (c.state.textOnly.has(key) && c.settings(endpoint).imageFallback);
-	const base = c.settings(endpoint);
+	const text = options.images === false || (c.state.textOnly.has(key) && c.settings(endpoint, protocol).imageFallback);
+	const base = c.settings(endpoint, protocol);
 	// Likewise a remembered refusal of the JSON schema, or an explicit `jsonObject: "instruction"`, sends `json_object` as an instruction.
 	const instruction = options.jsonObject === "instruction" || (c.state.jsonInstruction.has(key) && base.jsonObjectFallback);
 	const settings = {
@@ -140,16 +146,13 @@ async function prepare(c, body, options, picked) {
 		...(pin?.effort === undefined ? {} : { effort: true })
 	};
 	const stream = body.stream === true;
-	// The protocol of the call: what the upstream speaks, or the front's own when the request goes through unconverted (which includes
-	// an Anthropic-front request to vLLM's native `/v1/messages`).
-	const current = c.protocol(endpoint);
-	const protocol = convert === null ? (c.front === "anthropic" ? "anthropic.messages" : "openai.chat") : current;
-	const viaMessages = protocol === "anthropic.messages" && current === "openai.chat";
+	// A native pass-through to a server whose own protocol is another: vLLM's `/v1/messages`, which takes an Anthropic body.
+	const viaMessages = protocol === "anthropic.messages" && convert === null && driver.info.protocol !== "anthropic.messages";
 	let upstream;
 	let converted;
 	if (convert) {
 		({ body: upstream, state: converted } = await convert.request(body, settings, {
-			producer: producerOf(endpoint),
+			producer: producerOf(endpoint, protocol),
 			budget: options.budget,
 			listed: levels !== undefined,
 			toolCallIds: driver.info.toolCallIds
@@ -237,6 +240,7 @@ async function prepare(c, body, options, picked) {
 			endpoint,
 			settings,
 			levels,
+			protocol,
 			state: converted,
 			warn: (message) => warn(c.config, c.state, message, { kind: "driver", endpoint: endpoint.name, log: options.log })
 		});
@@ -253,7 +257,7 @@ async function prepare(c, body, options, picked) {
 		});
 	}
 	const kind = protocol === "anthropic.messages" ? "messages" : protocol === RESPONSES ? "responses" : "chat";
-	const path = await http.pathOf(driver, kind, endpoint, model);
+	const path = await http.pathOf(driver, kind, endpoint, model, protocol);
 	return {
 		upstream: endpoint.name,
 		pool: pool.map((entry) => entry.name),
@@ -273,6 +277,7 @@ async function prepare(c, body, options, picked) {
 			upstream: endpoint.name,
 			front: c.front,
 			native: convert === null,
+			protocol,
 			messages: viaMessages,
 			responses: protocol === RESPONSES,
 			model: body.model,
@@ -280,6 +285,7 @@ async function prepare(c, body, options, picked) {
 			unserved,
 			convert: converted
 		},
+		more: picked.more,
 		images: { sent: images.carries(upstream), retry: settings.imageFallback && protocol === "openai.chat", key },
 		tools: { sent: tools.carries(upstream), retry: settings.toolFallback && protocol === "openai.chat" },
 		// Only an Anthropic-protocol upstream gets the emulated schema, so this never overlaps with the image and tool retries above.

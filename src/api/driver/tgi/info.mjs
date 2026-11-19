@@ -21,12 +21,13 @@
 /**
  * Describe the TGI driver. It is found through `GET /info`, TGI's router description. `grammar` is allowed through the OpenAI front's
  * request filter because the request normalizer folds it into `response_format`, the only place the chat endpoint reads a grammar.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, protocols: string[], order: number, auth: string, strict: boolean, probes: string[], fields: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
 		name: "tgi",
 		protocol: "openai.chat",
+		protocols: ["openai.chat"],
 		order: 45,
 		auth: "bearer",
 		strict: false,

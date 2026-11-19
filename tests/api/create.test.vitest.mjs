@@ -62,7 +62,8 @@ describe("detection", () => {
 			const [upstream] = api.status().upstreams;
 			expect(upstream).toMatchObject({
 				driver: "vllm",
-				protocol: "openai.chat",
+				protocol: "anthropic.messages",
+				api: "auto",
 				version: "0.15.2",
 				models: ["qwen3-coder"],
 				facts: { version: "0.15.2", maxModelLen: 32768 }
@@ -103,7 +104,7 @@ describe("detection", () => {
 					: json(res, 200, { id: "x", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] })
 		});
 		try {
-			const api = await make({ upstreams: [server.url] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat" }] });
 			expect(api.status().upstreams[0].probed.images).toBe(false);
 			const call = await api.request({
 				model: "m",

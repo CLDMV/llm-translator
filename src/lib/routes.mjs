@@ -432,6 +432,7 @@ export function register(fastify, options, captured) {
 		const interval = api.interval(body);
 		const sending = api.send(body, {
 			signal: controller.signal,
+			wire: via ? "responses" : undefined,
 			clientHeaders: forwardable(request.headers),
 			cacheSalt: salts.get(request),
 			onUsage,

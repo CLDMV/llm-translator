@@ -20,12 +20,13 @@
 
 /**
  * Describe the DeepSeek driver.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hosts: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, protocols: string[], order: number, auth: string, strict: boolean, hosts: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
 	return {
 		name: "deepseek",
 		protocol: "openai.chat",
+		protocols: ["openai.chat"],
 		order: 35,
 		auth: "bearer",
 		strict: false,

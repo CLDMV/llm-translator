@@ -132,7 +132,7 @@ describe("addConstraint", () => {
 
 describe("constraint on a request", () => {
 	it("takes metadata.constraint on the Anthropic front and the setting as a default", async () => {
-		const vllm = await build("vllm", { constraint: { regex: "a+" } }, {}, { version: "0.12.0" });
+		const vllm = await build("vllm", { constraint: { regex: "a+" } }, {}, { version: "0.12.0", api: "chat" });
 		expect((await vllm.request(hello)).body.structured_outputs).toEqual({ regex: "a+" });
 		const result = await vllm.request({ ...hello, metadata: { user_id: "u", constraint: { choice: ["yes", "no"] } } });
 		expect(result.body.structured_outputs).toEqual({ choice: ["yes", "no"] });

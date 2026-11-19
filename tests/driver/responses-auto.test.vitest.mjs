@@ -94,17 +94,18 @@ const server = (status) =>
 	});
 const paths = (transport) => transport.calls.map((entry) => new URL(entry.url).pathname);
 const upstream = (extra = {}) => ({ url, backend: "vllm", api: "auto", models: ["qwen"], ...extra });
+const asResponses = { wire: "responses" };
 const text = (reply) => reply.body.choices?.[0]?.message?.content;
 
 describe('api: "auto" with a driver that declares the Responses API', () => {
 	it("sends to /v1/responses and reports the protocol", async () => {
 		const transport = server();
 		const api = await make({ front: "openai", upstreams: [upstream()], transport, detect: false });
-		expect(api.status().upstreams[0]).toMatchObject({ protocol: "openai.responses", responses: true });
-		const reply = await api.send({ model: "qwen", messages: user });
+		expect(api.status().upstreams[0]).toMatchObject({ protocol: "openai.chat", responses: true });
+		const reply = await api.send({ model: "qwen", messages: user }, asResponses);
 		expect(text(reply)).toBe("from responses");
 		expect(paths(transport)).toEqual(["/v1/responses"]);
-		expect(api.status().upstreams[0]).toMatchObject({ protocol: "openai.responses", responses: true });
+		expect(api.status().upstreams[0]).toMatchObject({ protocol: "openai.chat", responses: true });
 	});
 
 	for (const code of [404, 405, 501]) {
@@ -113,21 +114,21 @@ describe('api: "auto" with a driver that declares the Responses API', () => {
 			const api = await make({ front: "openai", upstreams: [upstream()], transport, detect: false });
 			const events = [];
 			api.events.on("fallback", (event) => events.push(event));
-			expect(text(await api.send({ model: "qwen", messages: user }))).toBe("from chat");
+			expect(text(await api.send({ model: "qwen", messages: user }, asResponses))).toBe("from chat");
 			expect(paths(transport)).toEqual(["/v1/responses", "/v1/chat/completions"]);
-			expect(text(await api.send({ model: "qwen", messages: user }))).toBe("from chat");
+			expect(text(await api.send({ model: "qwen", messages: user }, asResponses))).toBe("from chat");
 			expect(paths(transport)).toEqual(["/v1/responses", "/v1/chat/completions", "/v1/chat/completions"]);
 			expect(events).toHaveLength(1);
 			expect(events[0]).toMatchObject({ kind: "responses", action: "chat", status: code, endpoint: "upstream-0" });
 			expect(api.status().upstreams[0]).toMatchObject({ protocol: "openai.chat", responses: false });
-			expect(api.route({ model: "qwen", messages: user })).toMatchObject({ protocol: "openai.chat" });
+			expect(api.route({ model: "qwen", messages: user }, asResponses)).toMatchObject({ protocol: "openai.chat" });
 		});
 
 		it(`falls back on ${code} for a streamed request too`, async () => {
 			const transport = server(code);
 			const api = await make({ front: "openai", upstreams: [upstream()], transport, detect: false });
 			for (let round = 0; round < 2; round++) {
-				const reply = await api.send({ model: "qwen", stream: true, messages: user });
+				const reply = await api.send({ model: "qwen", stream: true, messages: user }, asResponses);
 				const chunks = (await collect(reply.stream)).map((entry) => entry.data);
 				expect(
 					chunks
@@ -140,23 +141,20 @@ describe('api: "auto" with a driver that declares the Responses API', () => {
 		});
 	}
 
-	it("falls back for the Anthropic front", async () => {
-		const transport = server(404);
-		const api = await make({
-			front: "anthropic",
-			upstreams: [upstream({ settings: { nativeMessages: false } })],
-			transport,
-			detect: false
-		});
-		const reply = await api.send({ model: "qwen", max_tokens: 8, messages: user });
+	it("sends an Anthropic or Chat Completions client over Chat Completions, never asking for /v1/responses", async () => {
+		const transport = server();
+		const anthropic = await make({ front: "anthropic", upstreams: [upstream()], transport, detect: false });
+		const reply = await anthropic.send({ model: "qwen", max_tokens: 8, messages: user });
 		expect(reply.body.content[0].text).toBe("from chat");
-		expect(paths(transport)).toEqual(["/v1/responses", "/v1/chat/completions"]);
+		const openai = await make({ front: "openai", upstreams: [upstream()], transport, detect: false });
+		expect(text(await openai.send({ model: "qwen", messages: user }))).toBe("from chat");
+		expect(paths(transport)).toEqual(["/v1/chat/completions", "/v1/chat/completions"]);
 	});
 
 	it("reads a Responses reply that was already on its way when the upstream dropped to Chat", async () => {
 		const api = await make({ front: "openai", upstreams: [upstream()], transport: server(404), detect: false });
-		const sent = await api.request({ model: "qwen", messages: user });
-		await api.send({ model: "qwen", messages: user });
+		const sent = await api.request({ model: "qwen", messages: user }, asResponses);
+		await api.send({ model: "qwen", messages: user }, asResponses);
 		expect(api.status().upstreams[0].responses).toBe(false);
 		expect(sent.state.responses).toBe(true);
 		expect(text({ body: await api.response(responsesAnswer, sent.state) })).toBe("from responses");
@@ -166,21 +164,21 @@ describe('api: "auto" with a driver that declares the Responses API', () => {
 		it(`does not fall back on ${code}`, async () => {
 			const transport = server(code);
 			const api = await make({ front: "openai", upstreams: [upstream()], transport, detect: false });
-			const reply = await api.send({ model: "qwen", messages: user });
+			const reply = await api.send({ model: "qwen", messages: user }, asResponses);
 			expect(reply.status).toBe(code);
-			await api.send({ model: "qwen", messages: user });
+			await api.send({ model: "qwen", messages: user }, asResponses);
 			expect(paths(transport)).toEqual(["/v1/responses", "/v1/responses"]);
-			expect(api.status().upstreams[0]).toMatchObject({ protocol: "openai.responses", responses: true });
+			expect(api.status().upstreams[0]).toMatchObject({ protocol: "openai.chat", responses: true });
 		});
 	}
 
 	it("a new detection forgets the fallback", async () => {
 		const transport = server(404);
 		const api = await make({ front: "openai", upstreams: [upstream()], transport, detect: false });
-		await api.send({ model: "qwen", messages: user });
+		await api.send({ model: "qwen", messages: user }, asResponses);
 		expect(api.status().upstreams[0].responses).toBe(false);
 		await api.detect({ network: false });
-		expect(api.status().upstreams[0]).toMatchObject({ protocol: "openai.responses", responses: true });
+		expect(api.status().upstreams[0]).toMatchObject({ protocol: "openai.chat", responses: true });
 	});
 
 	it("api: responses and api: openai stay explicit, with no fallback", async () => {
@@ -191,8 +189,8 @@ describe('api: "auto" with a driver that declares the Responses API', () => {
 			transport,
 			detect: false
 		});
-		expect((await api.send({ model: "a", messages: user })).status).toBe(404);
-		await api.send({ model: "b", messages: user });
+		expect((await api.send({ model: "a", messages: user }, asResponses)).status).toBe(404);
+		await api.send({ model: "b", messages: user }, asResponses);
 		expect(paths(transport)).toEqual(["/v1/responses", "/v1/chat/completions"]);
 		expect(api.status().upstreams.map((entry) => [entry.protocol, entry.responses])).toEqual([
 			["openai.responses", true],
@@ -214,7 +212,7 @@ describe('api: "auto" with a driver that declares the Responses API', () => {
 		);
 		await api.detect();
 		transport.calls.length = 0;
-		expect((await api.send({ model: "m", messages: user })).status).toBeGreaterThanOrEqual(400);
+		expect((await api.send({ model: "m", messages: user }, asResponses)).status).toBeGreaterThanOrEqual(400);
 		expect(paths(transport)).toEqual(["/api/responses"]);
 	});
 });

@@ -26,6 +26,7 @@ describe("token.count", () => {
 		const server = await fakeVllm();
 		try {
 			const api = await make({ upstreams: [server.url] });
+			// A vLLM that has /v1/messages gets the Anthropic body there, and its tokenizer still reads Chat Completions messages.
 			expect(await api.token.count(hello)).toEqual({ input_tokens: 42 });
 			const call = server.requests.filter((entry) => entry.url === "/tokenize").at(-1);
 			expect(call.body).toMatchObject({ model: "qwen3-coder", add_generation_prompt: true });

@@ -36,13 +36,13 @@ export function join(base, path) {
  * @param {"chat" | "messages" | "responses" | "embeddings" | "models"} kind - Which call.
  * @param {any} endpoint - Runtime endpoint.
  * @param {string} [model] - The upstream's model name for the request.
+ * @param {string} [protocol] - The protocol the request goes over.
  * @returns {Promise<string>} Path starting with `/`.
  */
-export async function pathOf(driver, kind, endpoint, model) {
+export async function pathOf(driver, kind, endpoint, model, protocol) {
 	if (driver.path) return driver.path(kind, { endpoint, model });
 	// A driver with a native mode (`info().native`) names the paths of that mode, which replace the default ones for an endpoint using it.
-	const native =
-		driver.info.native !== undefined && endpoint.protocol === driver.info.native.protocol ? driver.info.native.paths : undefined;
+	const native = driver.info.native !== undefined && protocol === driver.info.native.protocol ? driver.info.native.paths : undefined;
 	return native?.[kind] ?? driver.info.paths[kind] ?? DEFAULT_PATHS[kind];
 }
 

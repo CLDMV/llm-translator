@@ -45,12 +45,12 @@ function overflow(body, ctx) {
  * Remove `tool_choice`, `n` and `logit_bias` (recorded in `state.dropped`; with `tool_choice: "none"` the tools are removed too, so a forbidden tool call cannot happen), replace images given by URL with a note, and warn once per
  * upstream when the prompt is estimated to exceed `contextWindow` (Ollama truncates silently).
  * @param {any} body - Chat Completions request body.
- * @param {any} [ctx] - `{ endpoint, settings, state, warn }`.
+ * @param {any} [ctx] - `{ endpoint, settings, state, warn, protocol }` (`protocol` is the one the request goes over).
  * @returns {any} Normalized body.
  */
 export function request(body, ctx) {
 	// The native API has no `tool_choice`, `n`, `logit_bias` or URL images; the native conversion has already left them out and said so.
-	if (ctx?.endpoint?.protocol === "ollama.chat") {
+	if (ctx?.protocol === "ollama.chat") {
 		overflow(body, ctx);
 		return body;
 	}

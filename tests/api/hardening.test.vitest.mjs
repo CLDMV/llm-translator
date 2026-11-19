@@ -169,11 +169,11 @@ describe("vLLM reasoning effort and thinking budget", () => {
 		expect(clamp("max", { effortPassthrough: true }).reasoning_effort).toBe("max");
 		expect(api.driver.vllm.request({ model: "m", reasoning_effort: "max" }).reasoning_effort).toBe("high");
 		expect(api.driver.vllm.request({ model: "m", reasoning_effort: "max" }, {}).reasoning_effort).toBe("high");
-		const sent = await make({ upstreams: [{ url: "http://a.test", backend: "vllm", version: "0.30.0" }], detect: false });
+		const sent = await make({ upstreams: [{ url: "http://a.test", backend: "vllm", version: "0.30.0", api: "chat" }], detect: false });
 		const prepared = await sent.request({ ...hello, output_config: { effort: "max" } });
 		expect(prepared.body.reasoning_effort).toBe("high");
 		const raw = await make({
-			upstreams: [{ url: "http://a.test", backend: "vllm", version: "0.30.0", settings: { effortPassthrough: true } }],
+			upstreams: [{ url: "http://a.test", backend: "vllm", version: "0.30.0", api: "chat", settings: { effortPassthrough: true } }],
 			detect: false
 		});
 		expect((await raw.request({ ...hello, output_config: { effort: "max" } })).body.reasoning_effort).toBe("max");

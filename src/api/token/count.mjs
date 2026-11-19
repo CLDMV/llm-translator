@@ -31,7 +31,7 @@ import { estimate } from "../../lib/estimate.mjs";
 export async function count(body, options = {}) {
 	const c = capture(self, context, options.front);
 	const { request } = self;
-	const prepared = await request(body, { front: options.front });
+	const prepared = await request(body, { front: options.front, tokens: true });
 	const endpoint = c.endpoint(prepared.upstream);
 	const driver = c.driver(endpoint);
 	const exact = driver.count

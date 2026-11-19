@@ -115,35 +115,38 @@ describe("selecting the protocol", () => {
 
 	const backends = ["openai", "compatible", "vllm", "ollama", "lmstudio", "llamacpp", "sglang", "localai"];
 	const protocols = async (extra) => {
+		const { front, ...rest } = extra;
 		const api = await make({
-			upstreams: backends.map((backend) => ({ url, name: backend, backend, models: [backend], ...extra })),
+			front,
+			upstreams: backends.map((backend) => ({ url, name: backend, backend, models: [backend], ...rest })),
 			detect: false,
 			transport: fakeTransport(() => ({ body: {} }))
 		});
-		return api.status().upstreams.map((entry) => entry.protocol);
+		return api.status().upstreams.map((entry) => [entry.protocol, entry.responses]);
 	};
 
-	it("keeps Chat Completions as the default for every driver, and for api: openai", async () => {
-		for (const extra of [{}, { api: "openai" }]) {
-			expect(await protocols(extra)).toEqual(backends.map(() => "openai.chat"));
+	it("goes over Chat Completions for a Chat Completions client under auto (the default) and api: chat, for every driver", async () => {
+		for (const extra of [{}, { api: "chat" }, { api: "openai" }]) {
+			expect(await protocols({ front: "openai", ...extra })).toEqual(backends.map(() => ["openai.chat", extra.api === undefined])); // a Responses client would reach the Responses API under auto
 		}
 		const named = await make({ upstreams: [{ url, backend: "openai", api: "openai" }], detect: false });
 		expect((await named.request({ model: "m", max_tokens: 4, messages: user })).url).toBe("http://responses.test/v1/chat/completions");
 	});
 
-	it("opts in for each driver that declares it, and api: auto starts on the Responses API for them", async () => {
-		expect(await protocols({ api: "responses" })).toEqual(backends.map(() => "openai.responses"));
-		expect(await protocols({ api: "auto" })).toEqual(backends.map(() => "openai.responses"));
+	it("opts in for each driver that declares it with api: responses, and api: auto starts a Responses client on it", async () => {
+		expect(await protocols({ api: "responses" })).toEqual(backends.map(() => ["openai.responses", true]));
+		expect(await protocols({ api: "codex" })).toEqual(backends.map(() => ["openai.responses", true]));
+		expect(await protocols({ api: "auto" })).toEqual(backends.map(() => ["openai.chat", false]));
 	});
 
 	it("rejects an api value it does not know, and a driver without the Responses API", async () => {
 		await expect(make({ upstreams: [{ url, api: "grpc" }], detect: false })).rejects.toMatchObject({
 			code: "INVALID_CONFIG",
-			message: expect.stringContaining('"openai", "responses", "auto" or "native"')
+			message: expect.stringContaining('"auto", "anthropic.messages"')
 		});
 		await expect(make({ upstreams: [{ url, backend: "deepseek", api: "responses" }], detect: false })).rejects.toMatchObject({
 			code: "unsupported_api",
-			message: expect.stringMatching(/Responses API \(.*\bopenai\b.*\bcompatible\b.*\)/)
+			message: expect.stringMatching(/speaks it \(.*\bopenai\b.*\bcompatible\b.*\)/)
 		});
 	});
 

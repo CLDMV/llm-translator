@@ -47,7 +47,7 @@ describe("request: anthropic front to an OpenAI-protocol upstream", () => {
 
 	it("applies settings in order: endpoint > global > probed > driver > defaults", async () => {
 		const api = await make({
-			upstreams: [{ url: "http://vllm.test", backend: "vllm", version: "0.12.0", settings: { maxTokensField: "max_tokens" } }],
+			upstreams: [{ url: "http://vllm.test", backend: "vllm", version: "0.12.0", api: "chat", settings: { maxTokensField: "max_tokens" } }],
 			settings: { maxTokensField: "max_completion_tokens", topK: false },
 			detect: false
 		});

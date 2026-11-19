@@ -78,7 +78,8 @@ export async function plugin(fastify, options = {}) {
 		// The settings of the upstream a request is routed to, for the Responses converters (the global ones when the body cannot be routed).
 		settings: (body) => {
 			try {
-				return captured.settings(routeTo(captured, body).endpoint);
+				const routed = routeTo(captured, body, { wire: "responses" });
+				return captured.settings(routed.endpoint, routed.protocol);
 			} catch {
 				return resolve(config.settings);
 			}

@@ -1,5 +1,5 @@
 /**
- * @fileoverview vLLM's native `/v1/messages`: the `nativeMessages` setting, version detection, normalisation, the requests that are converted anyway and the 404 fallback.
+ * @fileoverview vLLM's native `/v1/messages`: the `api` setting, version detection, normalisation, the requests that are converted anyway and the 404 fallback.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { closeAll, collect, fakeTransport, make } from "../helpers/translator.mjs";
@@ -30,13 +30,12 @@ const chatAnswer = {
 };
 const settings = (extra) => resolve(extra);
 
-/** A vLLM upstream with a known version, on `nativeMessages: "auto"` unless the test says otherwise. */
+/** A vLLM upstream with a known version, on the default `api: "auto"` unless the test says otherwise. */
 const upstream = (extra = {}) => ({
 	url,
 	backend: "vllm",
 	version: "0.12.0",
 	models: ["qwen"],
-	settings: { nativeMessages: "auto" },
 	...extra
 });
 
@@ -49,8 +48,8 @@ const server = (messages = () => ({ body: answer })) =>
 const paths = (transport) => transport.calls.map((call) => new URL(call.url).pathname);
 const sseResponse = (events) => new Response(anthropicSse(events), { status: 200, headers: { "content-type": "text/event-stream" } });
 
-describe("nativeMessages setting", () => {
-	it("defaults to false and accepts true, false and auto", () => {
+describe("nativeMessages setting (deprecated)", () => {
+	it("is still validated: defaults to false and accepts true, false and auto", () => {
 		expect(settings().nativeMessages).toBe(false);
 		for (const value of [true, false, "auto"]) expect(settings({ nativeMessages: value }).nativeMessages).toBe(value);
 		expect(() => settings({ nativeMessages: "yes" })).toThrow(/Invalid setting nativeMessages/);
@@ -58,22 +57,14 @@ describe("nativeMessages setting", () => {
 	});
 });
 
-describe("vllm.wants", () => {
+describe("vllm.eligible", () => {
 	const vllmEndpoint = (version, facts) => ({ driver: "vllm", version, facts });
-	it("is off for another driver and for false", () => {
-		expect(vllm.wants({ driver: "openai" }, settings({ nativeMessages: true }))).toBe(false);
-		expect(vllm.wants(vllmEndpoint("0.12.0"), settings())).toBe(false);
-	});
-	it("true always uses it, even without a version", () => {
-		expect(vllm.wants(vllmEndpoint(undefined), settings({ nativeMessages: true }))).toBe(true);
-	});
-	it("auto needs a known version of 0.11.1 or later, from detection or from the config", () => {
-		const auto = settings({ nativeMessages: "auto" });
-		expect(vllm.wants(vllmEndpoint(undefined), auto)).toBe(false);
-		expect(vllm.wants(vllmEndpoint(undefined, { version: "0.11.0" }), auto)).toBe(false);
-		expect(vllm.wants(vllmEndpoint(undefined, { version: "0.11.1" }), auto)).toBe(true);
-		expect(vllm.wants(vllmEndpoint("0.20.1rc1"), auto)).toBe(true);
-		expect(vllm.wants(vllmEndpoint("0.10.2"), auto)).toBe(false);
+	it("needs a known version of 0.11.1 or later, from detection or from the config", () => {
+		expect(vllm.eligible(vllmEndpoint(undefined))).toBe(false);
+		expect(vllm.eligible(vllmEndpoint(undefined, { version: "0.11.0" }))).toBe(false);
+		expect(vllm.eligible(vllmEndpoint(undefined, { version: "0.11.1" }))).toBe(true);
+		expect(vllm.eligible(vllmEndpoint("0.20.1rc1"))).toBe(true);
+		expect(vllm.eligible(vllmEndpoint("0.10.2"))).toBe(false);
 	});
 });
 
@@ -226,16 +217,18 @@ describe("vllm.response and vllm.stream", () => {
 });
 
 describe("choosing the native endpoint", () => {
-	it("is off by default: the request is converted", async () => {
+	it("api: chat converts the request, and so does an unknown version by default", async () => {
 		const transport = server();
-		const api = await make({ upstreams: [{ ...upstream(), settings: {} }], transport, detect: false });
+		const api = await make({ upstreams: [upstream({ api: "chat" })], transport, detect: false });
 		const sent = await api.request({ model: "qwen", max_tokens: 8, messages: user });
 		expect(sent.path).toBe("/v1/chat/completions");
 		expect(sent.state).toMatchObject({ native: false, messages: false });
 		expect(api.status().upstreams[0].messages).toBe(false);
+		const unknown = await make({ upstreams: [upstream({ version: undefined })], transport, detect: false });
+		expect((await unknown.request({ model: "qwen", max_tokens: 8, messages: user })).path).toBe("/v1/chat/completions");
 	});
 
-	it("auto on a version that has it sends the Anthropic body to /v1/messages with bearer auth only", async () => {
+	it("the default (auto) on a version that has it sends the Anthropic body to /v1/messages with bearer auth only", async () => {
 		const api = await make({ upstreams: [upstream({ apiKey: "k" })], transport: server(), detect: false });
 		const sent = await api.request(
 			{ model: "qwen", max_tokens: 8, system: [{ type: "text", text: "s" }], messages: user, metadata: { sampling: { min_p: 0.1 } } },
@@ -247,24 +240,24 @@ describe("choosing the native endpoint", () => {
 		expect(sent.headers.authorization).toBe("Bearer k");
 		expect(sent.headers["anthropic-beta"]).toBeUndefined();
 		expect(sent.headers["x-api-key"]).toBeUndefined();
-		expect(api.route({ model: "qwen", messages: user })).toMatchObject({ native: true, protocol: "openai.chat", backend: "vllm" });
-		expect(api.status().upstreams[0]).toMatchObject({ messages: true, protocol: "openai.chat" });
+		expect(api.route({ model: "qwen", messages: user })).toMatchObject({ native: true, protocol: "anthropic.messages", backend: "vllm" });
+		expect(api.status().upstreams[0]).toMatchObject({ messages: true, protocol: "anthropic.messages", api: "auto" });
 	});
 
-	it("auto on an older or unknown version converts; true uses it regardless", async () => {
+	it("auto on an older or unknown version converts; api: messages uses it regardless", async () => {
 		for (const version of ["0.10.2", undefined]) {
 			const api = await make({ upstreams: [upstream({ version })], transport: server(), detect: false });
 			expect((await api.request({ model: "qwen", max_tokens: 8, messages: user })).path).toBe("/v1/chat/completions");
 		}
 		const forced = await make({
-			upstreams: [upstream({ version: "0.10.2", settings: { nativeMessages: true } })],
+			upstreams: [upstream({ version: "0.10.2", api: "messages" })],
 			transport: server(),
 			detect: false
 		});
 		expect((await forced.request({ model: "qwen", max_tokens: 8, messages: user })).path).toBe("/v1/messages");
 	});
 
-	it("the global setting applies too, and other drivers ignore it", async () => {
+	it("the deprecated global nativeMessages setting still applies, and other drivers ignore it", async () => {
 		const api = await make({
 			upstreams: [
 				{ url, backend: "vllm", version: "0.13.0", models: ["qwen"] },

@@ -1,6 +1,6 @@
 # Running Claude Code against vLLM
 
-This walks through pointing Claude Code at a local vLLM server through the translator: Claude Code talks the Anthropic Messages protocol to the translator, which converts it to Chat Completions for vLLM and converts the answers back.
+This walks through pointing Claude Code at a local vLLM server through the translator: Claude Code talks the Anthropic Messages protocol to the translator, which sends it to vLLM's own `/v1/messages` (vLLM 0.11.1 and later, with no setting needed) or, on an older or unknown version, converts it to Chat Completions and converts the answers back. Set `api: "chat"` on the upstream to always convert; see [drivers.md](drivers.md#choosing-the-protocol-api).
 
 ## 1. Start vLLM with tool calling and reasoning enabled
 
