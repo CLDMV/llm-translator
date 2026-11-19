@@ -21,8 +21,7 @@
  */
 import { resolve } from "./settings.mjs";
 import * as vllm from "./vllm.mjs";
-import { PROTOCOL } from "./ollama.mjs";
-import * as upstream from "./responses-upstream.mjs";
+import { MESSAGES, CHAT, RESPONSES, OLLAMA, candidates, frontOf } from "./protocol.mjs";
 
 /**
  * Collect the mounted drivers, sorted by `info().order`.
@@ -68,7 +67,7 @@ export function capture(self, context, frontOverride) {
 	const fromOllama = { anthropic: self.convert.ollama.chat.to.anthropic.messages, openai: self.convert.ollama.chat.to.openai.chat };
 	const front = frontOverride ?? config.front;
 	const drivers = collect(self.driver);
-	const nativeProtocol = front === "anthropic" ? "anthropic.messages" : "openai.chat";
+	const nativeProtocol = front === "anthropic" ? MESSAGES : CHAT;
 	const convert =
 		front === "anthropic"
 			? { request: toOpenai.request, response: toAnthropic.response, stream: toAnthropic.stream }
@@ -84,6 +83,43 @@ export function capture(self, context, frontOverride) {
 		response: fromResponses.response,
 		stream: fromResponses.stream
 	};
+	/**
+	 * Converters for a protocol, as seen from the call's front.
+	 * @param {string} protocol - Protocol id.
+	 * @returns {{request: Function, response: Function, stream: Function} | null} Converters or null.
+	 */
+	const convertersFor = (protocol) => {
+		if (protocol === OLLAMA) return ollama;
+		if (protocol === nativeProtocol) return null;
+		if (protocol === RESPONSES) return responses;
+		return convert;
+	};
+	const plan = (endpoint, ask = {}) => {
+		const { info } = drivers.find((entry) => entry.name === endpoint.driver);
+		const asked = ask.front ?? front;
+		const client = frontOf(asked, ask.wire);
+		const settings =
+			ask.body !== undefined && endpoint.driver === "vllm"
+				? resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings)
+				: null;
+		// A Messages route on a server whose own protocol is another (vLLM's) takes an Anthropic client's body as it is, so the other fronts cannot use it, nor can a body
+		// it cannot take (see `vllm.unsuited`), nor, unasked, a version known to be older than the route.
+		const usable = (protocol) => {
+			if (protocol !== MESSAGES || info.protocol === MESSAGES) return true;
+			if (asked !== "anthropic" || ask.tokens === true) return false;
+			if (endpoint.driver !== "vllm") return true;
+			if (settings !== null && vllm.unsuited(ask.body, settings) !== null) return false;
+			return endpoint.api !== "auto" || vllm.eligible(endpoint);
+		};
+		const list = candidates({ api: endpoint.api, front: client, info, missing: state.missing.get(endpoint.name), usable });
+		const protocol = list[0];
+		const same = asked === front;
+		return {
+			protocol,
+			more: endpoint.api === "auto" && list.length > 1,
+			convert: same ? convertersFor(protocol) : undefined
+		};
+	};
 	return {
 		config,
 		state,
@@ -96,12 +132,19 @@ export function capture(self, context, frontOverride) {
 		 */
 		endpoint: (name) => state.endpoints.find((entry) => entry.name === name),
 		/**
-		 * The protocol an endpoint is using now (an `api: "auto"` endpoint may have dropped from the Responses API to Chat Completions).
+		 * The protocol a request goes over: the one a request already sent used (`sent.protocol`), else the first candidate (see `lib/protocol`).
 		 * @param {any} endpoint - Runtime endpoint.
 		 * @param {any} [sent] - The `state` of a request already sent, whose own protocol wins.
-		 * @returns {string} Protocol name.
+		 * @returns {string} Protocol id.
 		 */
-		protocol: (endpoint, sent) => upstream.protocolOf(endpoint, state.noResponses, sent?.responses),
+		protocol: (endpoint, sent) => sent?.protocol ?? plan(endpoint).protocol,
+		/**
+		 * Choose the protocol for a request to an endpoint and the converters it needs.
+		 * @param {any} endpoint - Runtime endpoint.
+		 * @param {{body?: any, wire?: string, tokens?: boolean, front?: "anthropic" | "openai"}} [ask] - The client `body` (without it a body-dependent exclusion is not applied), `wire: "responses"` for a request that came in on the Responses API, `tokens: true` for a token count (a tokenizer reads Chat Completions messages, so a native Messages route is left out) and `front` to ask as another front than the call's.
+		 * @returns {{protocol: string, more: boolean, convert: any}} The protocol, whether an `auto` upstream has another to fall back to, and the converters (null when the body goes through as it is).
+		 */
+		plan,
 		/**
 		 * Find the driver record an endpoint uses.
 		 * @param {any} endpoint - Runtime endpoint.
@@ -109,30 +152,27 @@ export function capture(self, context, frontOverride) {
 		 */
 		driver: (endpoint) => drivers.find((entry) => entry.name === endpoint.driver),
 		/**
-		 * Resolve the effective settings for an endpoint: endpoint > global > probed > driver > defaults.
+		 * Resolve the effective settings for an endpoint: endpoint > global > probed > driver > defaults. Given the protocol a request goes over, the Responses
+		 * API also turns `reasoningRoundTrip` on (below the driver and the config, so an explicit setting still wins): a stateless Responses call needs its
+		 * encrypted reasoning items back between turns.
 		 * @param {any} endpoint - Runtime endpoint.
+		 * @param {string} [protocol] - The protocol of the request.
 		 * @returns {any} Resolved settings.
 		 */
-		settings: (endpoint) => resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings),
+		settings: (endpoint, protocol) =>
+			resolve(
+				protocol === RESPONSES ? { reasoningRoundTrip: true } : undefined,
+				endpoint.driverSettings,
+				endpoint.probed,
+				config.settings,
+				endpoint.settings
+			),
 		/**
-		 * Converters for an endpoint (the Responses API one included), or null when the request goes to it without conversion: the front and the upstream speak the same
-		 * protocol, or (given the request `body`) an Anthropic-front request goes to a vLLM upstream's native `/v1/messages` (the
-		 * `nativeMessages` setting, unless the upstream answered 404 to it before or the body is one the endpoint cannot take).
-		 * @param {any} endpoint - Runtime endpoint.
-		 * @param {any} [body] - Client request body; without it vLLM's native endpoint is never chosen.
-		 * @param {any} [sent] - The `state` of a request already sent: its reply is read the way it was asked for, even if the upstream has dropped from the Responses API to Chat Completions since.
+		 * Converters for a request already sent, read the way it was asked for even if the upstream has moved to another protocol since; null when
+		 * the reply goes through as it is (the front and the upstream speak the same protocol, which includes vLLM's native `/v1/messages`).
+		 * @param {any} sent - The `state` returned by `request`.
 		 * @returns {{request: Function, response: Function, stream: Function} | null} Converters or null.
 		 */
-		converters: (endpoint, body, sent) => {
-			const protocol = upstream.protocolOf(endpoint, state.noResponses, sent?.responses);
-			if (protocol === PROTOCOL) return ollama;
-			if (protocol === nativeProtocol) return null;
-			if (protocol === upstream.PROTOCOL) return responses;
-			if (front === "anthropic" && body !== undefined && endpoint.driver === "vllm" && !state.noMessages.has(endpoint.name)) {
-				const settings = resolve(endpoint.driverSettings, endpoint.probed, config.settings, endpoint.settings);
-				if (vllm.wants(endpoint, settings) && vllm.unsuited(body, settings) === null) return null;
-			}
-			return convert;
-		}
+		converters: (sent) => convertersFor(sent.protocol)
 	};
 }

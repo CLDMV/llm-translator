@@ -21,6 +21,7 @@ import { TranslatorError } from "./errors.mjs";
 import * as pool from "./pool.mjs";
 import { valid as validCapture } from "./record.mjs";
 import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
+import { ALIASES, canonical } from "./protocol.mjs";
 
 /**
  * @typedef {object} UpstreamConfig
@@ -30,7 +31,7 @@ import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
  * @property {Record<string,string>} [headers] Extra headers sent to the upstream.
  * @property {string} [apiVersion] Azure OpenAI `api-version`. Set, it selects the classic per-deployment URLs; unset, the v1 API is used.
  * @property {string} [deployment] Azure OpenAI deployment name for the classic URLs. Defaults to the request's model.
- * @property {"openai" | "responses" | "auto" | "native"} [api] Which API of the server to use: `"openai"` (default) is the OpenAI-compatible Chat Completions one, `"responses"` the Responses API (`/v1/responses`, for a driver that declares `info().responses`), `"auto"` the Responses API first on a driver that declares it, falling back to Chat Completions when the server answers 404, 405 or 501 to it (and Chat Completions on a driver that does not), and `"native"` the server's own chat API, for a driver that has one (Ollama's `/api/chat`).
+ * @property {string} [api] Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"` and `"ollama.chat"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third and `"native"` and `"ollama"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
  * @property {string} [backend] Driver name, or `"auto"` (default) to detect.
  * @property {string[]} [models] Models this upstream serves (routing).
  * @property {boolean} [default] Marks the fallback upstream.
@@ -55,9 +56,10 @@ function baseUrl(url) {
  * Normalize one upstream entry into the runtime endpoint record.
  * @param {string | UpstreamConfig} entry - Upstream URL or config object.
  * @param {number} index - Position in the list.
+ * @param {any} [globalSettings] - The config's global `settings`.
  * @returns {any} Runtime endpoint.
  */
-export function endpoint(entry, index) {
+export function endpoint(entry, index, globalSettings) {
 	const raw = typeof entry === "string" ? { url: entry } : entry;
 	if (!raw || typeof raw !== "object" || typeof raw.url !== "string" || raw.url === "") {
 		throw new TranslatorError(`upstreams[${index}] needs a "url"`, { code: "INVALID_CONFIG", status: 500 });
@@ -67,15 +69,16 @@ export function endpoint(entry, index) {
 			throw new TranslatorError(`upstreams[${index}].${key} must be a non-empty string`, { code: "INVALID_CONFIG", status: 500 });
 		}
 	}
-	if (raw.api !== undefined && !["openai", "responses", "auto", "native"].includes(raw.api)) {
+	if (raw.api !== undefined && canonical(raw.api) === undefined) {
 		throw new TranslatorError(
-			`upstreams[${index}].api must be "openai", "responses", "auto" or "native" (got ${JSON.stringify(raw.api)})`,
-			{
-				code: "INVALID_CONFIG",
-				status: 500
-			}
+			`upstreams[${index}].api must be one of ${Object.keys(ALIASES)
+				.map((name) => JSON.stringify(name))
+				.join(", ")} (got ${JSON.stringify(raw.api)})`,
+			{ code: "INVALID_CONFIG", status: 500 }
 		);
 	}
+	// `nativeMessages` (vLLM) is the deprecated way to choose the protocol; `detect` reads it once the driver is known (only a vLLM upstream ever did).
+	const legacy = raw.settings?.nativeMessages ?? globalSettings?.nativeMessages;
 	return {
 		name: raw.name ?? `upstream-${index}`,
 		url: baseUrl(raw.url),
@@ -83,7 +86,9 @@ export function endpoint(entry, index) {
 		headers: { ...raw.headers },
 		apiVersion: raw.apiVersion,
 		deployment: raw.deployment,
-		api: raw.api ?? "openai",
+		api: raw.api === undefined ? "auto" : canonical(raw.api),
+		apiSet: raw.api !== undefined,
+		legacy,
 		backend: raw.backend ?? "auto",
 		models: Array.isArray(raw.models) ? [...raw.models] : undefined,
 		default: raw.default === true,
@@ -134,7 +139,7 @@ export function normalize(config = {}) {
 	}
 	return {
 		front,
-		endpoints: list.map(endpoint),
+		endpoints: list.map((entry, index) => endpoint(entry, index, config.settings)),
 		...normalizeAliases(config.aliases),
 		efforts: normalizeEfforts(config.efforts),
 		pool: pool.normalize(config.pool),

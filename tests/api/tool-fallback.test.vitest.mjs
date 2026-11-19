@@ -35,7 +35,7 @@ const picky = (message) => (_req, body, res) => {
 	return body.stream ? sse(res, textChunks(["no tools"])) : json(res, 200, completion("no tools"));
 };
 const chats = (server) => server.requests.filter((entry) => entry.url === "/v1/chat/completions");
-const upstreamOf = (server, settings) => make({ upstreams: [{ url: server.url, settings: { images: true, ...settings } }] });
+const upstreamOf = (server, settings) => make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true, ...settings } }] });
 
 describe("recognising a missing tool parser", () => {
 	it.each([

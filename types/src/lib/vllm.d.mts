@@ -1,10 +1,10 @@
 /**
- * Is the native endpoint wanted for this upstream, going by the `nativeMessages` setting and the version?
+ * May `/v1/messages` be tried on this upstream without being asked for? Only when the detected or configured version is known and is 0.11.1 or later:
+ * an older server has no such route, and an unknown version stays on Chat Completions (set `api` to use the route anyway).
  * @param {any} endpoint - Runtime endpoint.
- * @param {any} settings - Resolved settings for the endpoint.
- * @returns {boolean} True for a vLLM upstream with `nativeMessages: true`, or `"auto"` and a known version of 0.11.1 or later (an unknown version stays on conversion).
+ * @returns {boolean} True for a vLLM upstream with a known version of 0.11.1 or later.
  */
-export function wants(endpoint: any, settings: any): boolean;
+export function eligible(endpoint: any): boolean;
 /**
  * Why a request cannot go to the native endpoint, so it is converted instead.
  *

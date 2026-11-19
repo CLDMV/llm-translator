@@ -92,7 +92,7 @@ describe("retrying without images", () => {
 	it("retries a refused request once without images and remembers the model", async () => {
 		const server = await fakeVllm({ chat: picky() });
 		try {
-			const api = await make({ upstreams: [{ url: server.url, settings: { images: true } }] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true } }] });
 			const first = await api.send(withImage);
 			expect(first.status).toBe(200);
 			expect(first.body.content[0].text).toBe("seen");
@@ -111,7 +111,7 @@ describe("retrying without images", () => {
 	it("retries a streaming request", async () => {
 		const server = await fakeVllm({ chat: picky("Model does not support images.") });
 		try {
-			const api = await make({ upstreams: [{ url: server.url, settings: { images: true } }] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true } }] });
 			const reply = await api.send({ ...withImage, stream: true });
 			expect(reply.status).toBe(200);
 			const events = await collect(reply.stream);
@@ -125,7 +125,7 @@ describe("retrying without images", () => {
 	it("drops PDF page images and keeps the text on the retry", async () => {
 		const server = await fakeVllm({ chat: picky() });
 		try {
-			const api = await make({ upstreams: [{ url: server.url, settings: { images: true } }] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true } }] });
 			const reply = await api.send({
 				...withImage,
 				messages: [
@@ -148,7 +148,7 @@ describe("retrying without images", () => {
 	it("retries an OpenAI-front request that was forwarded unchanged", async () => {
 		const server = await fakeVllm({ chat: picky() });
 		try {
-			const api = await make({ upstreams: [{ url: server.url, settings: { images: true } }] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true } }] });
 			const body = {
 				model: "qwen3-coder",
 				messages: [
@@ -169,7 +169,7 @@ describe("retrying without images", () => {
 	it("does not retry other 400s", async () => {
 		const server = await fakeVllm({ chat: picky("Invalid image data URL") });
 		try {
-			const api = await make({ upstreams: [{ url: server.url, settings: { images: true } }] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true } }] });
 			const reply = await api.send(withImage);
 			expect(reply.status).toBe(400);
 			expect(reply.body.error.message).toBe("Invalid image data URL");
@@ -182,7 +182,7 @@ describe("retrying without images", () => {
 	it("does not retry when the request had no images", async () => {
 		const server = await fakeVllm({ chat: (_req, _body, res) => json(res, 400, REFUSAL) });
 		try {
-			const api = await make({ upstreams: [{ url: server.url, settings: { images: true } }] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true } }] });
 			const reply = await api.send({ model: "qwen3-coder", max_tokens: 8, messages: [{ role: "user", content: "hi" }] });
 			expect(reply.status).toBe(400);
 			expect(chats(server)).toHaveLength(1);
@@ -194,7 +194,7 @@ describe("retrying without images", () => {
 	it("does not retry when imageFallback is off", async () => {
 		const server = await fakeVllm({ chat: picky() });
 		try {
-			const api = await make({ upstreams: [{ url: server.url, settings: { images: true, imageFallback: false } }] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true, imageFallback: false } }] });
 			const reply = await api.send(withImage);
 			expect(reply.status).toBe(400);
 			expect(chats(server)).toHaveLength(1);
@@ -208,7 +208,7 @@ describe("retrying without images", () => {
 	it("returns the error when the retry fails too", async () => {
 		const server = await fakeVllm({ chat: (_req, _body, res) => json(res, 400, REFUSAL) });
 		try {
-			const api = await make({ upstreams: [{ url: server.url, settings: { images: true } }] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true } }] });
 			const reply = await api.send(withImage);
 			expect(reply.status).toBe(400);
 			expect(chats(server)).toHaveLength(2);
@@ -227,7 +227,7 @@ describe("retrying without images through the server", () => {
 	it("answers the client after the retry", async () => {
 		const server = await fakeVllm({ chat: picky() });
 		try {
-			const api = await make({ upstreams: [{ url: server.url, settings: { images: true } }] });
+			const api = await make({ upstreams: [{ url: server.url, api: "chat", settings: { images: true } }] });
 			const running = await api.server.start({ port: 0 });
 			const reply = await fetch(`${running.url}/v1/messages`, {
 				method: "POST",

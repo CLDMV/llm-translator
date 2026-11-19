@@ -19,11 +19,12 @@
 /**
  * Describe the Azure OpenAI driver. The key goes in the `api-key` header. The real paths come from the `path` leaf, because they depend on the
  * upstream's `apiVersion` and `deployment`; `paths` holds the v1 API paths for a base URL without `/openai`.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, hostSuffixes: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, protocols: string[], order: number, auth: string, strict: boolean, hostSuffixes: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info(): {
     name: string;
     protocol: string;
+    protocols: string[];
     order: number;
     auth: string;
     strict: boolean;

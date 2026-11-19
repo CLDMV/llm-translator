@@ -18,7 +18,7 @@
  */
 /**
  * Describe the LM Studio driver. It is found through `GET /api/v0/models`, LM Studio's own REST listing.
- * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, responses: boolean, probes: string[], paths: Record<string,string>}} Driver facts.
+ * @returns {{name: string, protocol: string, order: number, auth: string, strict: boolean, protocols: string[], probes: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info(): {
     name: string;
@@ -26,7 +26,7 @@ export function info(): {
     order: number;
     auth: string;
     strict: boolean;
-    responses: boolean;
+    protocols: string[];
     probes: string[];
     paths: Record<string, string>;
 };

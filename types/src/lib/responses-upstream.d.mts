@@ -1,14 +1,4 @@
 /**
- * The protocol an upstream is using right now. An `api: "auto"` upstream on a driver that declares the Responses API starts on it
- * (`endpoint.protocol`) and drops to its Chat Completions protocol (`endpoint.chat`) once the server answered 404, 405 or 501 to it.
- * @param {any} endpoint - Runtime endpoint.
- * @param {Set<string>} missing - Names of the upstreams that have no Responses API (`state.noResponses`).
- * @param {boolean} [used] - Whether the request in hand went over the Responses API; decides for it when given, so a reply that was
- * already on its way when the fallback happened is still read as the Responses reply it is.
- * @returns {string} Protocol name.
- */
-export function protocolOf(endpoint: any, missing: Set<string>, used?: boolean): string;
-/**
  * Convert a Chat Completions request body into a Responses request body.
  *
  * System messages before the first turn become `instructions`; assistant turns become message and `function_call` items and their
