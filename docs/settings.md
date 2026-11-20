@@ -62,6 +62,10 @@ Every converter accepts an optional `settings` argument (partial objects are fin
 
 Upgrading: the old default was Chat Completions. `"auto"` still gives a Chat Completions client Chat Completions on every driver, but an Anthropic client now reaches vLLM 0.11.1 and later over `/v1/messages` and a Responses client reaches a server that has it over `/v1/responses`. Set `api: "chat"` on an upstream to keep Chat Completions for every client.
 
+## Upstream `vertex` (not a converter setting)
+
+`vertex` is set on an upstream for the Google Vertex AI driver, next to `url`, `apiKey` and `backend`, not in `settings`. It is an object with `project` and `region` (strings), and `credentials` (a service account or `authorized_user` key as an object, JSON text or file path), `accessToken` (a string), `getToken` (a function returning a token, or a promise of one) and `metadataServer` (`true` or a base URL) that choose how requests are authenticated. A value of the wrong type throws a `TranslatorError` with code `INVALID_CONFIG` when the translator is created. Without these keys the driver reads `ANTHROPIC_VERTEX_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT`, `CLOUD_ML_REGION`, `GOOGLE_ACCESS_TOKEN` and `GOOGLE_APPLICATION_CREDENTIALS` and gcloud's application default credentials file. The order, the gcloud commands that set each one up and the other behaviour are in [drivers.md](drivers.md#google-vertex-ai-claude).
+
 ## Pool config (not a converter setting)
 
 Failover and load balancing between upstreams that serve the same model are configured with the translator's `pool` key, not with `settings`: `strategy` (`failover`, `round_robin`, `least_busy`), `models` (strategy per model after aliases) and `backoff` (`base` and `max` in ms), `connectTimeout` and `headersTimeout` (ms), `healthInterval` and `healthTimeout` (ms, readiness probes). It is described in [server.md](server.md#endpoint-pools-failover-and-load-balancing). An invalid value throws a `TranslatorError` with the code `INVALID_CONFIG` when the translator is created.

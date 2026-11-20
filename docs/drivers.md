@@ -20,6 +20,7 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `mistral`    | `openai.chat`        | `chat`                             | 36    | host `api.mistral.ai` (no request of its own)                                                                   |
 | `openrouter` | `openai.chat`        | `chat`                             | 37    | host `openrouter.ai` (no request of its own)                                                                    |
 | `anthropic`  | `anthropic.messages` | `messages`                         | 38    | host `api.anthropic.com` (no request), or `GET /v1/models` answers with an Anthropic model list                 |
+| `vertex`     | `anthropic.messages` | `messages`                         | 39    | host `aiplatform.googleapis.com` or `<region>-aiplatform.googleapis.com` (no request of its own)                |
 | `llamacpp`   | `openai.chat`        | `chat`, `responses`                | 40    | `GET /props` has llama-server fields, or `GET /v1/models` lists `owned_by: "llamacpp"`                          |
 | `tgi`        | `openai.chat`        | `chat`                             | 45    | `GET /info` is Text Generation Inference's router description (strict shape check)                              |
 | `localai`    | `openai.chat`        | `chat`, `responses`                | 52    | `GET /version` is `<version> (<commit>)`, or `GET /.well-known/localai.json` is LocalAI's discovery document    |
@@ -35,7 +36,8 @@ A driver folder contains these files, all optional except `info`:
 - `settings.mjs`: `settings(facts) → partial settings`. A driver for a server that renders `tool_reference` content parts returns `{ toolSearch: "native" }` here (see [tool search](claude-code.md#tool-search)).
 - `probe.mjs`: `probe({ endpoint, transport, facts, ... }) → partial settings`, for checks that need a request (vLLM uses it for inline system messages).
 - `request.mjs`, `response.mjs`, `chunk.mjs`, `flush.mjs`, `error.mjs`: normalizers in the upstream protocol. `request(body, ctx)` and `response(body, ctx)` get the converted body, `chunk(chunk, ctx)` gets each parsed streaming chunk, `flush(ctx) → chunk[]` (needs a `chunk` normalizer) returns chunks the normalizer was still holding when the stream ended, emitted before the final events (on the OpenAI front before `[DONE]`, and before the chunk with the `finish_reason` and the usage-only chunk, which a driver that has `flush` has held back until the stream ends), `error(status, body, ctx)` gets an error body before it is rendered for the client.
-- `path.mjs`: `path(kind, { endpoint, model }) → path`, for a backend whose URLs depend on the upstream or the model. `kind` is `"chat"`, `"messages"`, `"embeddings"` or `"models"`; the result (with any query string) replaces `info().paths[kind]` for that call. The Azure driver builds the deployment path and `api-version` this way.
+- `path.mjs`: `path(kind, { endpoint, model, stream }) → path`, for a backend whose URLs depend on the upstream or the model. `kind` is `"chat"`, `"messages"`, `"embeddings"` or `"models"`; the result (with any query string) replaces `info().paths[kind]` for that call. The Azure driver builds the deployment path and `api-version` this way.
+- `auth.mjs`: `auth({ endpoint, headers, transport, timeout }) → headers`, for a backend whose credentials have to be fetched. It gets the headers the request would send and returns the ones to send; it runs for every request except a token count (which builds its own headers) and may be asynchronous. The Vertex AI driver adds a Google access token as the bearer token here.
 - `token/count.mjs` and `model/list.mjs`: exact token counting and a live model listing.
 
 ## Detection
@@ -58,6 +60,7 @@ A driver folder contains these files, all optional except `info`:
 - LM Studio: `GET /api/v0/models`, LM Studio's REST listing. Bound only when `object` is `"list"`, `data` is a non-empty array and every entry has `object: "model"`, string `id`, `arch`, `compatibility_type` and `state`, and a `type` of `llm`, `vlm` or `embeddings`; OpenAI's plain `/v1/models` shape or any other server's reply can never pass. Facts are `{ models, loaded }`: the ids of the chat models (embedding models left out) and those with `state: "loaded"`.
 - Ollama: `GET /api/version` (and the shared `GET /v1/models` for the model list). Facts are `{ version, models }`.
 - Anthropic: `api.anthropic.com` is matched by host name with no request. Any other host is asked for `GET /v1/models` with `anthropic-version` and the upstream's key as `x-api-key` (no bearer header), and is bound only when the answer is an Anthropic model list: no `object` key, a boolean `has_more`, `first_id` and `last_id` that are null or strings and name the first and last entry of `data` (both null when it is empty), and every entry has `type: "model"`, a string `id` and a string `display_name`. OpenAI's `{ object: "list", data: [{ id, object: "model" }] }` can never pass, and a server that answers with the OpenAI shape whatever headers it is sent stays on the generic driver. Facts are `{ models }`, so the served model list comes from the server. The driver is tried at order 38, after the host-name drivers and before llama.cpp. The request is sent together with the other later probes, so it adds one request but no round trip, and it is a separate request from the bearer `GET /v1/models` the other drivers share because the headers differ. A server that requires a key and has none configured answers 401 and is not detected; set `apiKey`, or `backend: "anthropic"`.
+- Vertex AI: a host-name check (`aiplatform.googleapis.com` and `<region>-aiplatform.googleapis.com`), no request of its own. A Vertex AI URL behind a proxy or gateway has another host name, so set `backend: "vertex"` for it.
 - OpenAI, Azure OpenAI, DeepSeek, Mistral and OpenRouter: a host-name check, no request of their own. (vLLM is tried first and probes any host; a hosted API answers it with a 404 or an error.)
 - Generic: `GET /v1/models` for reachability and the served model ids.
 
@@ -132,6 +135,86 @@ What the `azure` driver changes compared with the generic one:
 - Content filter. A choice with `finish_reason: "content_filter"` ends the Anthropic reply with `stop_reason: "refusal"`, and its `content_filter_results` give the refusal category (`general_harms` when a harm category was filtered). A prompt that is refused outright answers HTTP 400 with `error.code: "content_filter"`; the error keeps its code and `param`, and its message lists the categories named as filtered in `innererror.content_filter_result`.
 
 Nothing here has been run against the real API: the URL forms, the `api-key` header and the content filter shapes are from the Microsoft Learn pages on the [v1 API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle) and [content filtering](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/content-filter), and real-backend validation is tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70). Microsoft Entra ID (bearer token) authentication, sovereign cloud hosts such as `openai.azure.us`, and the preview features behind `api-version=preview` on the v1 path are not handled.
+
+## Google Vertex AI (Claude)
+
+What the `vertex` driver changes compared with the native Anthropic one. It serves Anthropic's Claude models through Vertex AI's raw endpoint, so it speaks only the Messages protocol (`anthropic.messages`).
+
+- Bound by host name (`aiplatform.googleapis.com`, `<region>-aiplatform.googleapis.com`, `aiplatform.us.rep.googleapis.com` and `aiplatform.eu.rep.googleapis.com`) with no request, or by `backend: "vertex"`, which is needed behind a proxy. An Anthropic client's request is forwarded as it is, and an OpenAI client's request is converted to a Messages body first, exactly as for the Anthropic driver.
+- The URL is `POST https://<region>-aiplatform.googleapis.com/v1/projects/<project>/locations/<region>/publishers/anthropic/models/<model>:rawPredict`, and `:streamRawPredict` for a streaming request. For the region `global` the host is `aiplatform.googleapis.com`, and the multi-region endpoints `us` and `eu` use `aiplatform.us.rep.googleapis.com` and `aiplatform.eu.rep.googleapis.com` (the region in the path is `us` or `eu`). A model id is used as given, so older models keep the `@` before their date (`claude-sonnet-4-5@20250929`) and newer ones have none (`claude-sonnet-5-5`).
+- Vertex AI wants the model in the path and the API version in the body, so the driver adds `anthropic_version: "vertex-2023-10-16"` to the body and removes `model` from it. `stream` stays in the body. The `anthropic-version` and `x-api-key` headers are not sent. A client's `anthropic-beta` header is forwarded, and so are the upstream's own `headers` (for example `x-goog-user-project` to bill another project).
+- Token counting uses `POST .../publishers/anthropic/models/count-tokens:rawPredict` with the model in the body. When that answers anything but a count (a 404 from a project or region that does not have it, a network error, no credentials) the character estimate is used instead, as for the other drivers.
+- Errors are read from Google's envelope (`{ "error": { "code", "message", "status" } }`, also when it comes wrapped in an array) and from Claude's own (`{ "type": "error", "error": { "type", "message" } }`), and answered in the client's protocol with the HTTP status kept. For an OpenAI client Google's `status` (`NOT_FOUND`, `PERMISSION_DENIED`) is the error `code`.
+- Vertex AI has no Models API (Anthropic lists it among the unsupported endpoints), so the driver has no live model list: the model list is the upstream's `models`, and the models are not detected. Set `models` to the ids the project has enabled.
+- Anthropic lists what Claude on Vertex AI does not support: URL sources for images and documents, the Files API, the code execution, web fetch and advisor server tools, Agent Skills, the MCP connector, programmatic tool calling, Message Batches and server-side `fallbacks`. The driver forwards a request that uses one and Vertex AI refuses it; nothing is removed from the body.
+
+### Upstream fields
+
+`vertex` is an upstream field next to `url`, `apiKey` and `backend`. Every key is optional:
+
+```js
+{
+	backend: "vertex",
+	models: ["claude-sonnet-4-5@20250929"],
+	vertex: {
+		project: "my-project",
+		region: "us-east5",
+		credentials: "/etc/llm-translator/key.json"
+	}
+}
+```
+
+- `project`: the Google Cloud project id. Without it the driver uses `ANTHROPIC_VERTEX_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT` or `GCLOUD_PROJECT` (in that order), and then the `project_id` (or `quota_project_id`) of the credentials file. Those names are the ones Anthropic's Vertex SDKs and Claude Code read (`ANTHROPIC_VERTEX_PROJECT_ID`) and the ones Google's libraries read. When no project is found the request fails with an `INVALID_CONFIG` error before anything is sent.
+- `region`: for example `us-east5`, `europe-west1`, `global`, `us` or `eu`. Without it the region in the upstream's host name is used, then `CLOUD_ML_REGION` (the variable Anthropic's SDKs and Claude Code read).
+- `url` is optional for `backend: "vertex"`: it defaults to the region's host (`https://<region>-aiplatform.googleapis.com`, `https://aiplatform.googleapis.com` for `global`), using `region` or `CLOUD_ML_REGION`. Set it to reach Vertex AI through a proxy or a private endpoint, for example Private Service Connect.
+- `credentials`, `accessToken`, `getToken` and `metadataServer` choose how requests are authenticated, see the next section.
+
+The command line takes the same from the environment: `llm-translator --upstream https://us-east5-aiplatform.googleapis.com --backend vertex` with `GOOGLE_CLOUD_PROJECT` and `GOOGLE_APPLICATION_CREDENTIALS` set. The JSON config file takes the `vertex` object as it is, except `getToken`, which is a function and so only exists in the library.
+
+### Authentication
+
+Vertex AI takes a Google OAuth 2.0 access token as a bearer token (not an API key). The driver gets one from the first source below that is set, using only `node:crypto` and the translator's own transport, with no Google library. Explicit settings come before the environment.
+
+| Order | Source                                        | How to set it up                                                                                                                                                                                                |
+| ----- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | `vertex.getToken`                             | A function, sync or async, that returns the token as a string (or `{ token }`). It is called with `{ signal }` for every request and does its own caching. Use it for anything the driver does not read itself. |
+| 2     | `vertex.accessToken`                          | A token you got yourself, for example `gcloud auth print-access-token`. It lasts about an hour and is never refreshed.                                                                                          |
+| 3     | The upstream's `apiKey`                       | Used as the bearer token, like `accessToken`. This is what `--upstream-key` and `LLM_TRANSLATOR_UPSTREAM_KEY` set.                                                                                              |
+| 4     | `vertex.credentials`                          | A service account key or an `authorized_user` file, as an object, as JSON text or as a file path.                                                                                                               |
+| 5     | `GOOGLE_ACCESS_TOKEN`                         | The same as `accessToken`, from the environment.                                                                                                                                                                |
+| 6     | `GOOGLE_APPLICATION_CREDENTIALS`              | The path of a service account key or `authorized_user` file.                                                                                                                                                    |
+| 7     | gcloud's application default credentials file | `~/.config/gcloud/application_default_credentials.json` (`%APPDATA%\gcloud\...` on Windows, or under `CLOUDSDK_CONFIG`), which `gcloud auth application-default login` writes.                                  |
+| 8     | The GCE metadata server                       | Only when `vertex.metadataServer` is `true` (or a base URL), because it is a network call to a link-local address. For Compute Engine, GKE and Cloud Run.                                                       |
+
+Setting each one up:
+
+- **Service account key (recommended for a server).** Enable the API and give a service account the Vertex AI user role, then export a key:
+
+  ```bash
+  gcloud services enable aiplatform.googleapis.com --project my-project
+  gcloud iam service-accounts create llm-translator --project my-project
+  gcloud projects add-iam-policy-binding my-project --member serviceAccount:llm-translator@my-project.iam.gserviceaccount.com --role roles/aiplatform.user
+  gcloud iam service-accounts keys create key.json --iam-account llm-translator@my-project.iam.gserviceaccount.com
+  export GOOGLE_APPLICATION_CREDENTIALS=$PWD/key.json
+  ```
+
+  The driver signs an RS256 JWT with the key (scope `https://www.googleapis.com/auth/cloud-platform`), exchanges it at the key's `token_uri`, and caches the token until a minute before it expires. Concurrent requests share one refresh, and a failed refresh is not cached. A key is a long-lived secret: keep the file out of the repository and readable only by the service.
+
+- **Your own account (development).** `gcloud auth application-default login` writes an `authorized_user` file. The driver finds it with no setting, and trades its refresh token for access tokens the same way. A quick alternative is `export GOOGLE_ACCESS_TOKEN=$(gcloud auth print-access-token)`, which expires after an hour.
+- **A static token.** `vertex: { accessToken: "ya29...." }` or `apiKey`, for a short-lived run or when something else renews it and restarts the translator.
+- **Anything else.** Workload identity federation (`external_account` files), service account impersonation (`impersonated_service_account` files) and similar sources are not read by the driver. Use `getToken` with whatever your environment provides, for example the `google-auth-library` package or a call to `gcloud auth print-access-token`:
+
+  ```js
+  import { GoogleAuth } from "google-auth-library";
+  const auth = new GoogleAuth({ scopes: "https://www.googleapis.com/auth/cloud-platform" });
+  const vertex = { project: "my-project", region: "us-east5", getToken: () => auth.getAccessToken() };
+  ```
+
+- **On Google Cloud.** `vertex: { metadataServer: true, project: "my-project", region: "us-east5" }` asks `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token` with `Metadata-Flavor: Google` and caches the token. The project is not read from the metadata server, so set it. The attached service account needs the Vertex AI user role.
+
+The Claude models also have to be enabled for the project in Model Garden, and not every region serves every model (regional endpoints serve older models only; use `global`, `us` or `eu` for the newest): an unknown model or region answers 404 `NOT_FOUND`. A token problem answers 401 with the cause (`No Google credentials for Vertex AI`, or Google's own refusal such as `invalid_grant`), and a missing role answers 403 `PERMISSION_DENIED`. The token and the key are never written to the status, the events or the capture records.
+
+Nothing here has been run against Google: the URL, the body fields, the endpoint hosts and the unsupported feature list are from Anthropic's page on [Claude Models on Google Cloud (Google managed)](https://platform.claude.com/docs/en/build-with-claude/claude-models-on-google-cloud/google-managed), the `count-tokens` method, the environment variable names, the `anthropic-beta` header and the error envelope are written from memory of Anthropic's and Google's SDKs and need checking against the real service, the token flows follow Google's [OAuth 2.0 for service accounts](https://developers.google.com/identity/protocols/oauth2/service-account), and the tests run against a local stand-in. Real-backend validation is tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70).
 
 ## OpenRouter
 

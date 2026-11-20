@@ -40,6 +40,7 @@ export function collect(driverApi) {
 			settings: driver.settings,
 			probe: driver.probe,
 			path: driver.path,
+			auth: driver.auth,
 			request: driver.request,
 			response: driver.response,
 			chunk: driver.chunk,

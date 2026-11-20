@@ -22,6 +22,7 @@ import * as pool from "./pool.mjs";
 import { valid as validCapture } from "./record.mjs";
 import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
 import { ALIASES, canonical } from "./protocol.mjs";
+import { host as vertexHost, regionFor } from "./vertex.mjs";
 
 /**
  * @typedef {object} UpstreamConfig
@@ -31,6 +32,7 @@ import { ALIASES, canonical } from "./protocol.mjs";
  * @property {Record<string,string>} [headers] Extra headers sent to the upstream.
  * @property {string} [apiVersion] Azure OpenAI `api-version`. Set, it selects the classic per-deployment URLs; unset, the v1 API is used.
  * @property {string} [deployment] Azure OpenAI deployment name for the classic URLs. Defaults to the request's model.
+ * @property {{project?: string, region?: string, credentials?: string | object, accessToken?: string, getToken?: (options: {signal?: AbortSignal}) => string | Promise<string>, metadataServer?: boolean | string}} [vertex] Google Vertex AI settings (see docs/drivers.md). `url` may be left out when `backend` is `"vertex"`: it defaults to the region's host.
  * @property {string} [api] Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"` and `"ollama.chat"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third and `"native"` and `"ollama"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
  * @property {string} [backend] Driver name, or `"auto"` (default) to detect.
  * @property {string[]} [models] Models this upstream serves (routing).
@@ -60,13 +62,38 @@ function baseUrl(url) {
  * @returns {any} Runtime endpoint.
  */
 export function endpoint(entry, index, globalSettings) {
-	const raw = typeof entry === "string" ? { url: entry } : entry;
+	let raw = typeof entry === "string" ? { url: entry } : entry;
+	if (raw && typeof raw === "object" && raw.url === undefined && raw.backend === "vertex") {
+		const region = regionFor({ vertex: raw.vertex });
+		if (region !== undefined) raw = { ...raw, url: `https://${vertexHost(region)}` };
+	}
 	if (!raw || typeof raw !== "object" || typeof raw.url !== "string" || raw.url === "") {
 		throw new TranslatorError(`upstreams[${index}] needs a "url"`, { code: "INVALID_CONFIG", status: 500 });
 	}
 	for (const key of ["apiVersion", "deployment"]) {
 		if (raw[key] !== undefined && (typeof raw[key] !== "string" || raw[key] === "")) {
 			throw new TranslatorError(`upstreams[${index}].${key} must be a non-empty string`, { code: "INVALID_CONFIG", status: 500 });
+		}
+	}
+	if (raw.vertex !== undefined) {
+		const given = raw.vertex;
+		const text = ["project", "region", "accessToken"];
+		if (
+			given === null ||
+			typeof given !== "object" ||
+			Array.isArray(given) ||
+			text.some((key) => given[key] !== undefined && (typeof given[key] !== "string" || given[key] === ""))
+		) {
+			throw new TranslatorError(
+				`upstreams[${index}].vertex must be an object whose project, region and accessToken are non-empty strings`,
+				{
+					code: "INVALID_CONFIG",
+					status: 500
+				}
+			);
+		}
+		if (given.getToken !== undefined && typeof given.getToken !== "function") {
+			throw new TranslatorError(`upstreams[${index}].vertex.getToken must be a function`, { code: "INVALID_CONFIG", status: 500 });
 		}
 	}
 	if (raw.api !== undefined && canonical(raw.api) === undefined) {
@@ -86,6 +113,7 @@ export function endpoint(entry, index, globalSettings) {
 		headers: { ...raw.headers },
 		apiVersion: raw.apiVersion,
 		deployment: raw.deployment,
+		vertex: raw.vertex,
 		api: raw.api === undefined ? "auto" : canonical(raw.api),
 		apiSet: raw.api !== undefined,
 		legacy,

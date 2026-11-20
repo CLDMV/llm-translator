@@ -32,9 +32,10 @@ export function join(base: string, path: string): string;
  * @param {any} endpoint - Runtime endpoint.
  * @param {string} [model] - The upstream's model name for the request.
  * @param {string} [protocol] - The protocol the request goes over.
+ * @param {boolean} [stream] - Whether the request streams (Vertex AI uses a different method for it).
  * @returns {Promise<string>} Path starting with `/`.
  */
-export function pathOf(driver: any, kind: "chat" | "messages" | "responses" | "embeddings" | "models", endpoint: any, model?: string, protocol?: string): Promise<string>;
+export function pathOf(driver: any, kind: "chat" | "messages" | "responses" | "embeddings" | "models", endpoint: any, model?: string, protocol?: string, stream?: boolean): Promise<string>;
 /**
  * Whether a listen address only accepts connections from this machine.
  * @param {string} host - Host or address.
