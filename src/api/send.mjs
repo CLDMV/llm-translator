@@ -127,6 +127,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		clientHeaders: options.clientHeaders,
 		filter: options.filter,
 		cacheSalt: options.cacheSalt,
+		signal: options.signal,
 		usage: true,
 		budget: createBudget(),
 		log: options.log

@@ -56,6 +56,8 @@ export async function expand(block, ctx) {
 		return await expandPdf(block, Buffer.from(source.data, "base64"), name, ctx);
 	if (source.type === "base64" && source.media_type === "text/plain")
 		return [wrap(block, Buffer.from(source.data, "base64").toString("utf8"))];
+	// Set by the fetch step (`documentUrls`) for a URL it could not fetch; the reason is safe to show the model.
+	if (source.type === "fetch_failed") return [note(name, `the document at ${source.url} could not be fetched: ${source.reason}`, ctx)];
 	if (source.type === "url") return [note(name, "documents referenced by URL cannot be fetched by the translator", ctx)];
 	return [
 		note(name, `document sources of type ${source.type}${source.media_type ? ` (${source.media_type})` : ""} are not supported`, ctx)
