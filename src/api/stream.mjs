@@ -21,7 +21,8 @@ import { context, self } from "../lib/runtime.mjs";
 import { capture } from "../lib/capture.mjs";
 import { messages } from "../lib/sse.mjs";
 import * as vllm from "../lib/vllm.mjs";
-import { RESPONSES } from "../lib/protocol.mjs";
+import { RESPONSES, CONVERSE } from "../lib/protocol.mjs";
+import { events } from "../lib/eventstream.mjs";
 
 /**
  * Rewrite the model name carried by a client event back to the name the client asked for.
@@ -65,6 +66,10 @@ export function stream(source, state) {
 	// A driver's chunk normalizer reads Chat Completions chunks, which Responses events are not.
 	const normalize = c.protocol(endpoint, state) === RESPONSES ? undefined : driver.chunk;
 	const ctx = { endpoint, settings, state };
+	// A driver whose server streams binary event stream frames (Amazon Bedrock) has them read into the same `{ event, data }` messages SSE gives.
+	const input = /** @type {any} */ (
+		driver.info.frames === "eventstream" ? events(/** @type {any} */ (source), state.protocol === CONVERSE ? "converse" : "invoke") : source
+	);
 	/**
 	 * Chunks the driver's normalizer was still holding when the stream ended (`flush(ctx)`), as upstream messages.
 	 * @returns {AsyncGenerator<{data: *}>} Messages to emit before the stream closes.
@@ -72,11 +77,11 @@ export function stream(source, state) {
 	async function* flushed() {
 		for (const held of (await driver.flush?.(ctx)) ?? []) yield { data: held };
 	}
-	if (convert && !normalize) return convert.stream(source, state.convert, settings);
+	if (convert && !normalize) return convert.stream(input, state.convert, settings);
 	if (convert) {
 		return convert.stream(
 			(async function* () {
-				for await (const message of messages(source)) {
+				for await (const message of messages(input)) {
 					if (message.data !== "[DONE]") yield await normalize(message.data, ctx);
 				}
 				for await (const message of flushed()) yield message.data;
@@ -91,7 +96,7 @@ export function stream(source, state) {
 	const native = (async function* () {
 		const tail = [];
 		let closed = false;
-		for await (const message of messages(source)) {
+		for await (const message of messages(input)) {
 			if (message.data === "[DONE]") {
 				// Held text goes out before the sentinel.
 				for await (const held of flushed()) yield { data: restore(held.data, state.model) };

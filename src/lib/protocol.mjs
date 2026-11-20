@@ -22,9 +22,10 @@ export const MESSAGES = "anthropic.messages";
 export const CHAT = "openai.chat";
 export const RESPONSES = "openai.responses";
 export const OLLAMA = "ollama.chat";
+export const CONVERSE = "bedrock.converse";
 
 /** The canonical protocol ids, in the order the docs list them. */
-export const IDS = [MESSAGES, CHAT, RESPONSES, OLLAMA];
+export const IDS = [MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE];
 
 /** Every accepted spelling of the `api` setting and the canonical id it stands for. */
 export const ALIASES = Object.freeze({
@@ -42,7 +43,9 @@ export const ALIASES = Object.freeze({
 	codex: RESPONSES,
 	[OLLAMA]: OLLAMA,
 	native: OLLAMA,
-	ollama: OLLAMA
+	ollama: OLLAMA,
+	[CONVERSE]: CONVERSE,
+	converse: CONVERSE
 });
 
 /**

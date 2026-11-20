@@ -23,17 +23,22 @@ import { valid as validCapture } from "./record.mjs";
 import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
 import { ALIASES, canonical } from "./protocol.mjs";
 import { host as vertexHost, regionFor } from "./vertex.mjs";
+import { defaultUrl } from "./bedrock.mjs";
 
 /**
  * @typedef {object} UpstreamConfig
  * @property {string} [name] Display name, defaults to `upstream-<index>`.
- * @property {string} url Base URL of the upstream server (`http://host:8000`).
+ * @property {string} [url] Base URL of the upstream server (`http://host:8000`). Required, except for `backend: "bedrock"`, whose default is `https://bedrock-runtime.<region>.amazonaws.com`.
  * @property {string} [apiKey] Key sent to the upstream.
  * @property {Record<string,string>} [headers] Extra headers sent to the upstream.
  * @property {string} [apiVersion] Azure OpenAI `api-version`. Set, it selects the classic per-deployment URLs; unset, the v1 API is used.
  * @property {string} [deployment] Azure OpenAI deployment name for the classic URLs. Defaults to the request's model.
  * @property {{project?: string, region?: string, credentials?: string | object, accessToken?: string, getToken?: (options: {signal?: AbortSignal}) => string | Promise<string>, metadataServer?: boolean | string}} [vertex] Google Vertex AI settings (see docs/drivers.md). `url` may be left out when `backend` is `"vertex"`: it defaults to the region's host.
- * @property {string} [api] Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"` and `"ollama.chat"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third and `"native"` and `"ollama"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
+ * @property {string} [region] Amazon Bedrock: the AWS region SigV4 signs for. Defaults to the region in the URL's host name, then `AWS_REGION`, then `AWS_DEFAULT_REGION`.
+ * @property {string} [accessKeyId] Amazon Bedrock: access key id for SigV4. Defaults to `AWS_ACCESS_KEY_ID`.
+ * @property {string} [secretAccessKey] Amazon Bedrock: secret access key for SigV4. Defaults to `AWS_SECRET_ACCESS_KEY`.
+ * @property {string} [sessionToken] Amazon Bedrock: session token of temporary credentials. Defaults to `AWS_SESSION_TOKEN`.
+ * @property {string} [api] Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"`, `"ollama.chat"` and `"bedrock.converse"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third, `"native"` and `"ollama"` the fourth and `"converse"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
  * @property {string} [backend] Driver name, or `"auto"` (default) to detect.
  * @property {string[]} [models] Models this upstream serves (routing).
  * @property {boolean} [default] Marks the fallback upstream.
@@ -62,15 +67,18 @@ function baseUrl(url) {
  * @returns {any} Runtime endpoint.
  */
 export function endpoint(entry, index, globalSettings) {
+	/** @type {any} */
 	let raw = typeof entry === "string" ? { url: entry } : entry;
 	if (raw && typeof raw === "object" && raw.url === undefined && raw.backend === "vertex") {
 		const region = regionFor({ vertex: raw.vertex });
 		if (region !== undefined) raw = { ...raw, url: `https://${vertexHost(region)}` };
 	}
+	// An Amazon Bedrock upstream may leave out the URL: it follows from the region.
+	if (raw?.url === undefined && raw?.backend === "bedrock") raw = { ...raw, url: defaultUrl(raw) };
 	if (!raw || typeof raw !== "object" || typeof raw.url !== "string" || raw.url === "") {
 		throw new TranslatorError(`upstreams[${index}] needs a "url"`, { code: "INVALID_CONFIG", status: 500 });
 	}
-	for (const key of ["apiVersion", "deployment"]) {
+	for (const key of ["apiVersion", "deployment", "region", "accessKeyId", "secretAccessKey", "sessionToken"]) {
 		if (raw[key] !== undefined && (typeof raw[key] !== "string" || raw[key] === "")) {
 			throw new TranslatorError(`upstreams[${index}].${key} must be a non-empty string`, { code: "INVALID_CONFIG", status: 500 });
 		}
@@ -114,6 +122,10 @@ export function endpoint(entry, index, globalSettings) {
 		apiVersion: raw.apiVersion,
 		deployment: raw.deployment,
 		vertex: raw.vertex,
+		region: raw.region,
+		accessKeyId: raw.accessKeyId,
+		secretAccessKey: raw.secretAccessKey,
+		sessionToken: raw.sessionToken,
 		api: raw.api === undefined ? "auto" : canonical(raw.api),
 		apiSet: raw.api !== undefined,
 		legacy,
