@@ -103,6 +103,7 @@ test("a translator composed from dist/api converts, streams and serves", async (
 			"sglang",
 			"tgi",
 			"together",
+			"vertex",
 			"vllm",
 			"xai"
 		]);

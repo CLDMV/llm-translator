@@ -37,10 +37,11 @@ export function join(base, path) {
  * @param {any} endpoint - Runtime endpoint.
  * @param {string} [model] - The upstream's model name for the request.
  * @param {string} [protocol] - The protocol the request goes over.
+ * @param {boolean} [stream] - Whether the request streams (Vertex AI uses a different method for it).
  * @returns {Promise<string>} Path starting with `/`.
  */
-export async function pathOf(driver, kind, endpoint, model, protocol) {
-	if (driver.path) return driver.path(kind, { endpoint, model });
+export async function pathOf(driver, kind, endpoint, model, protocol, stream) {
+	if (driver.path) return driver.path(kind, { endpoint, model, stream });
 	// A driver with a native mode (`info().native`) names the paths of that mode, which replace the default ones for an endpoint using it.
 	const native = driver.info.native !== undefined && protocol === driver.info.native.protocol ? driver.info.native.paths : undefined;
 	return native?.[kind] ?? driver.info.paths[kind] ?? DEFAULT_PATHS[kind];
