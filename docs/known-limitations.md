@@ -26,7 +26,7 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 
 ## Content
 
-- `document` blocks with a `url` source are replaced by a text note because conversion does no network I/O (FI-046, [#18](https://github.com/CLDMV/llm-translator/issues/18)). A `documentConverter` hook can fetch them.
+- `document` blocks with a `url` source are a text note unless the `documentUrls` setting is on (FI-046, [#18](https://github.com/CLDMV/llm-translator/issues/18)). With it on, only `application/pdf` and `text/plain` are fetched, only from hosts on its allow-list, and a document that cannot be fetched is a note rather than an error. Nothing is cached, so a retried request downloads the document again. `image` blocks with a `url` source are forwarded to the upstream as URLs and are not fetched.
 - Files API references (`file` image and document sources, `file_id` parts) are not resolved. Tracked in [#17](https://github.com/CLDMV/llm-translator/issues/17).
 - Citations (`citations` on text blocks and documents, citation deltas, OpenAI annotations) are dropped. `search_result` blocks become plain text. Tracked in [#16](https://github.com/CLDMV/llm-translator/issues/16).
 - PDF page images are only produced when the model accepts images, `@napi-rs/canvas` loaded, and the page budget (`pdf.maxImages`) allows. Scanned PDFs without a text layer yield empty page text; there is no OCR.

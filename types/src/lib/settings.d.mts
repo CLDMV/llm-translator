@@ -23,6 +23,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {boolean} toolFallback - Retry a request once without tools when an OpenAI-protocol upstream answers 400 that tool parsing is not enabled (vLLM started without `--enable-auto-tool-choice` and `--tool-call-parser`). Off by default: the request then runs without tools, which silently changes what the model can do.
  * @property {"extract"|"note"|"error"} documents - How `document` blocks are handled.
  * @property {((block: object, ctx: object) => Promise<object[]>|object[])|null} documentConverter - Override for `document` conversion; returns Anthropic content blocks.
+ * @property {null|{ allow: string[], maxBytes: number, timeout: number, maxRedirects: number, maxDocuments: number, allowPrivate: boolean }} documentUrls - Fetch the `url` sources of `document` blocks before conversion; `null` (the default) is off, and an object turns it on (`allow` is required).
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
@@ -118,6 +119,17 @@ export type Settings = {
      * - Override for `document` conversion; returns Anthropic content blocks.
      */
     documentConverter: ((block: object, ctx: object) => Promise<object[]> | object[]) | null;
+    /**
+     * - Fetch the `url` sources of `document` blocks before conversion; `null` (the default) is off, and an object turns it on (`allow` is required).
+     */
+    documentUrls: null | {
+        allow: string[];
+        maxBytes: number;
+        timeout: number;
+        maxRedirects: number;
+        maxDocuments: number;
+        allowPrivate: boolean;
+    };
     /**
      * - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
      */

@@ -34,6 +34,7 @@ import { fit, pinBody } from "../lib/effort.mjs";
 import { relax, strictTools } from "../lib/strict.mjs";
 import { TranslatorError } from "../lib/errors.mjs";
 import * as vllm from "../lib/vllm.mjs";
+import * as documentUrls from "../lib/document-urls.mjs";
 import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
 
 /**
@@ -50,7 +51,7 @@ function producerOf(endpoint, protocol) {
  * Route a client request body (in the configured `front` protocol) to an upstream and convert it to that upstream's
  * protocol. Does no I/O.
  * @param {any} body - Client request body (Anthropic Messages or OpenAI Chat Completions, per `front`).
- * @param {any} [options] - `{ front, headers, clientHeaders, filter, images, usage }`. `front` overrides the configured front for this call, `tokens: true` (used by `token.count`) never picks a native Messages route on a server whose own protocol is another, because the tokenizer reads Chat Completions messages, and sends no credentials (a driver's `auth` leaf is skipped; the count call builds its own headers), `wire: "responses"` says the body is the Chat Completions form of a Responses API request (so the protocol is chosen for a Responses client), `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback), `endpoint` sends to that member of the model's pool (used for failover; default: the first in the pool's order), `hold: true` (used by `send`) advances a round robin and takes the chosen endpoint's in-flight slot, which the caller then releases, `jsonObject: "instruction"` sends a `json_object` response format as a system instruction (used by the JSON fallback, and applied by itself once a refusal is remembered for the endpoint and model), `tools: false` sends the request without tools (used by the tool fallback), `usage: true` (used by `send`) makes a streaming OpenAI-front request always ask the upstream for its final usage chunk, `cacheSalt` (a trusted per-call vLLM `cache_salt`, which replaces the upstream's `cacheSalt` setting), `retry: true` (used by `send` for the same request sent again) keeps the `dropped` event from repeating, `log` is the logger events of this request also go to (used by the server), `budget` (from `createBudget`, one per `send` for all its attempts) limits the cost of decoding reasoning signatures.
+ * @param {any} [options] - `{ front, headers, clientHeaders, filter, images, usage, signal }`. `signal` aborts the fetching of `url` documents (the `documentUrls` setting). `front` overrides the configured front for this call, `tokens: true` (used by `token.count`) never picks a native Messages route on a server whose own protocol is another, because the tokenizer reads Chat Completions messages, and sends no credentials (a driver's `auth` leaf is skipped; the count call builds its own headers), `wire: "responses"` says the body is the Chat Completions form of a Responses API request (so the protocol is chosen for a Responses client), `headers` are extra upstream headers, `clientHeaders` are client headers forwarded only to a native Anthropic upstream, `filter` restricts a forwarded OpenAI body to known fields (default: the `passthroughFilter` setting, off), `images: false` sends the request without images (used by the image fallback), `endpoint` sends to that member of the model's pool (used for failover; default: the first in the pool's order), `hold: true` (used by `send`) advances a round robin and takes the chosen endpoint's in-flight slot, which the caller then releases, `jsonObject: "instruction"` sends a `json_object` response format as a system instruction (used by the JSON fallback, and applied by itself once a refusal is remembered for the endpoint and model), `tools: false` sends the request without tools (used by the tool fallback), `usage: true` (used by `send`) makes a streaming OpenAI-front request always ask the upstream for its final usage chunk, `cacheSalt` (a trusted per-call vLLM `cache_salt`, which replaces the upstream's `cacheSalt` setting), `retry: true` (used by `send` for the same request sent again) keeps the `dropped` event from repeating, `log` is the logger events of this request also go to (used by the server), `budget` (from `createBudget`, one per `send` for all its attempts) limits the cost of decoding reasoning signatures.
  * @returns {Promise<{upstream: string, method: string, url: string, path: string, headers: Record<string,string>, body: any, state: any, pool: string[], more: boolean, images: {sent: boolean, retry: boolean, key: string}, tools: {sent: boolean, retry: boolean}, json: {sent: boolean, retry: boolean, key: string}}>} The upstream request and the state `response`/`stream`/`error` need. `pool` lists the names of the endpoints serving the model in the order they are tried (`upstream` is the first); `more` is true when the upstream is `api: "auto"` and has another protocol to fall back to; `images` tells `send` whether the body carries images, whether a refusal may be retried without them and the key under which a refusal is remembered; `tools` tells it whether the body carries tools and whether a tool-parser refusal may be retried without them; `json` tells it whether the body carries the schema emulation of `json_object`, whether a refusal may be retried with the instruction and the key under which a refusal is remembered.
  */
 export async function request(body, options = {}) {
@@ -148,6 +149,15 @@ async function prepare(c, body, options, picked) {
 	const stream = body.stream === true;
 	// A native pass-through to a server whose own protocol is another: vLLM's `/v1/messages`, which takes an Anthropic body.
 	const viaMessages = protocol === "anthropic.messages" && convert === null && driver.info.protocol !== "anthropic.messages";
+	// The `url` sources of document blocks are fetched here, before conversion, which does no I/O. A request that is forwarded as it is goes to
+	// an Anthropic server that fetches them itself.
+	if (convert && c.front === "anthropic" && documentUrls.wanted(settings)) {
+		body = await documentUrls.resolve(body, {
+			options: settings.documentUrls,
+			signal: options.signal,
+			report: (spec) => emit(c, { type: "document", ...spec, endpoint: endpoint.name, model, log: options.log })
+		});
+	}
 	let upstream;
 	let converted;
 	if (convert) {

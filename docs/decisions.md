@@ -169,8 +169,8 @@ Scope: the library translates between Anthropic Messages and OpenAI Chat Complet
 
 ### D-27 URL documents are not fetched during conversion
 
-- **Decision.** `document` blocks with a `url` source become a note unless `documentConverter` handles them. Tracked as FI-046.
-- **Rationale.** Conversion is pure (D-04); fetching needs allow-lists, limits and SSRF protection that belong in a separate component.
+- **Decision.** `document` blocks with a `url` source become a note unless `documentConverter` handles them or the `documentUrls` setting is on, in which case the root api fetches them before conversion. Tracked as FI-046.
+- **Rationale.** Conversion is pure (D-04); fetching needs allow-lists, limits and SSRF protection that belong in a separate component. That component is `lib/fetch-url.mjs`, called from `api/request`, and it is off by default.
 
 ### D-28 SSE parsing details
 
