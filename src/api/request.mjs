@@ -36,6 +36,7 @@ import { TranslatorError } from "../lib/errors.mjs";
 import * as vllm from "../lib/vllm.mjs";
 import * as documentUrls from "../lib/document-urls.mjs";
 import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
+import { CONVERSE } from "../lib/protocol.mjs";
 
 /**
  * Who produced reasoning data signed for this endpoint: driver, protocol and host, so two upstreams on the generic driver stay apart.
@@ -266,26 +267,29 @@ async function prepare(c, body, options, picked) {
 			log: options.log
 		});
 	}
-	const kind = protocol === "anthropic.messages" ? "messages" : protocol === RESPONSES ? "responses" : "chat";
+	const kind =
+		protocol === "anthropic.messages" ? "messages" : protocol === RESPONSES ? "responses" : protocol === CONVERSE ? "converse" : "chat";
 	const path = await http.pathOf(driver, kind, endpoint, model, protocol, stream);
-	const sending = {
+	const url = http.join(endpoint.url, path);
+	let headers = {
 		"content-type": "application/json",
 		accept: stream ? "text/event-stream" : "application/json",
 		...driver.info.headers,
 		...(convert === null && endpoint.protocol === "anthropic.messages" ? options.clientHeaders : undefined),
 		...http.headers(endpoint, driver.info.auth, options.headers)
 	};
+	// A driver whose credentials are fetched (Google's access tokens) has an `auth` leaf that returns the headers to send; token counting sends none of these headers.
+	if (driver.auth && options.tokens !== true)
+		headers = await driver.auth({ endpoint, headers, transport: c.state.transport, timeout: c.config.detectTimeout });
+	// A driver that signs its calls (Amazon Bedrock's SigV4) sees the finished URL, headers and body, and returns the headers to send.
+	if (driver.sign) headers = await driver.sign({ endpoint, protocol, method: "POST", url, headers, body: upstream, stream });
 	return {
 		upstream: endpoint.name,
 		pool: pool.map((entry) => entry.name),
 		method: "POST",
-		url: http.join(endpoint.url, path),
+		url,
 		path,
-		// A driver whose credentials are fetched (Google's access tokens) has an `auth` leaf that returns the headers to send; token counting sends none of these headers.
-		headers:
-			driver.auth && options.tokens !== true
-				? await driver.auth({ endpoint, headers: sending, transport: c.state.transport, timeout: c.config.detectTimeout })
-				: sending,
+		headers,
 		body: upstream,
 		state: {
 			v: 1,

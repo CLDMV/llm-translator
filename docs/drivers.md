@@ -27,6 +27,7 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `sglang`     | `openai.chat`        | `chat`, `responses`                | 50    | `GET /get_server_info` has `model_path`, or `GET /v1/models` lists `owned_by: "sglang"`                         |
 | `lmstudio`   | `openai.chat`        | `chat`, `responses`                | 55    | `GET /api/v0/models` is LM Studio's model listing (strict shape check)                                          |
 | `ollama`     | `openai.chat`        | `chat`, `responses`, `ollama.chat` | 60    | `GET /api/version` returns a version (its own chat API for an upstream with `api: "ollama.chat"`)               |
+| `bedrock`    | `anthropic.messages` | `messages`, `bedrock.converse`     | 33    | host `bedrock-runtime.<region>.amazonaws.com` (no request of its own; also `backend: "bedrock"`)                |
 | `compatible` | `openai.chat`        | `chat`, `responses`                | 100   | always; the fallback for servers without a driver                                                               |
 
 A driver folder contains these files, all optional except `info`:
@@ -36,8 +37,9 @@ A driver folder contains these files, all optional except `info`:
 - `settings.mjs`: `settings(facts) → partial settings`. A driver for a server that renders `tool_reference` content parts returns `{ toolSearch: "native" }` here (see [tool search](claude-code.md#tool-search)).
 - `probe.mjs`: `probe({ endpoint, transport, facts, ... }) → partial settings`, for checks that need a request (vLLM uses it for inline system messages).
 - `request.mjs`, `response.mjs`, `chunk.mjs`, `flush.mjs`, `error.mjs`: normalizers in the upstream protocol. `request(body, ctx)` and `response(body, ctx)` get the converted body, `chunk(chunk, ctx)` gets each parsed streaming chunk, `flush(ctx) → chunk[]` (needs a `chunk` normalizer) returns chunks the normalizer was still holding when the stream ended, emitted before the final events (on the OpenAI front before `[DONE]`, and before the chunk with the `finish_reason` and the usage-only chunk, which a driver that has `flush` has held back until the stream ends), `error(status, body, ctx)` gets an error body before it is rendered for the client.
-- `path.mjs`: `path(kind, { endpoint, model, stream }) → path`, for a backend whose URLs depend on the upstream or the model. `kind` is `"chat"`, `"messages"`, `"embeddings"` or `"models"`; the result (with any query string) replaces `info().paths[kind]` for that call. The Azure driver builds the deployment path and `api-version` this way.
+- `path.mjs`: `path(kind, { endpoint, model, protocol, stream }) → path`, for a backend whose URLs depend on the upstream or the model. `kind` is `"chat"`, `"messages"`, `"converse"`, `"embeddings"` or `"models"`; the result (with any query string) replaces `info().paths[kind]` for that call. The Azure driver builds the deployment path and `api-version` this way.
 - `auth.mjs`: `auth({ endpoint, headers, transport, timeout }) → headers`, for a backend whose credentials have to be fetched. It gets the headers the request would send and returns the ones to send; it runs for every request except a token count (which builds its own headers) and may be asynchronous. The Vertex AI driver adds a Google access token as the bearer token here.
+- `sign.mjs`: `sign({ endpoint, protocol, method, url, headers, body, stream }) → headers`, for a backend that authenticates each call over its finished URL, headers and body (Amazon Bedrock's SigV4). The result replaces the headers of the upstream request. `info().frames: "eventstream"` marks a server whose streams are binary event stream frames instead of SSE.
 - `token/count.mjs` and `model/list.mjs`: exact token counting and a live model listing.
 
 ## Detection
@@ -216,6 +218,31 @@ The Claude models also have to be enabled for the project in Model Garden, and n
 
 Nothing here has been run against Google: the URL, the body fields, the endpoint hosts and the unsupported feature list are from Anthropic's page on [Claude Models on Google Cloud (Google managed)](https://platform.claude.com/docs/en/build-with-claude/claude-models-on-google-cloud/google-managed), the `count-tokens` method, the environment variable names, the `anthropic-beta` header and the error envelope are written from memory of Anthropic's and Google's SDKs and need checking against the real service, the token flows follow Google's [OAuth 2.0 for service accounts](https://developers.google.com/identity/protocols/oauth2/service-account), and the tests run against a local stand-in. Real-backend validation is tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70).
 
+## Amazon Bedrock
+
+The `bedrock` driver talks to the Bedrock runtime (`bedrock-runtime.<region>.amazonaws.com`). Claude models go through InvokeModel with an Anthropic Messages body, every other model through Converse.
+
+```js
+createTranslator({
+	front: "anthropic",
+	upstreams: [{ backend: "bedrock", region: "us-east-1", accessKeyId: "AKIA...", secretAccessKey: "..." }]
+});
+```
+
+- Binding. A URL whose host is `bedrock-runtime.<region>.amazonaws.com` (also the `-fips` form, an interface VPC endpoint and the China partition) is bound by name, with no request. `backend: "bedrock"` binds any URL, which is how a proxy or a local stand-in is used. With `backend: "bedrock"` the `url` may be left out: it defaults to `https://bedrock-runtime.<region>.amazonaws.com`, and the config is rejected when there is no region either.
+- Region. The upstream's `region`, else the region in the URL's host name, else `AWS_REGION`, else `AWS_DEFAULT_REGION`. It is the region SigV4 signs for.
+- Authentication, most specific first: the upstream's `apiKey` (a Bedrock API key, sent as `Authorization: Bearer`), the upstream's `accessKeyId` and `secretAccessKey` (with `sessionToken` for temporary credentials), then `AWS_BEARER_TOKEN_BEDROCK`, then `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`. A call with no credential fails before it is sent (`missing_credentials`, HTTP 500), as does a SigV4 call with no region (`missing_region`). Access keys sign each call with Signature Version 4 for the service `bedrock` (`lib/sigv4.mjs`, `node:crypto` only; the signature covers the exact JSON text sent, so a retry is signed again). The credential chain of the AWS SDK (profiles, SSO, instance roles, `AWS_CONTAINER_*`) is not implemented ([#180](https://github.com/CLDMV/llm-translator/issues/180)): resolve credentials outside and pass them in.
+- Model ids. Use the id as Bedrock lists it, an inference profile id with a geography prefix (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`, `eu.`, `apac.`, `global.`), or an ARN. Many newer models can only be called through an inference profile, so the bare id is rejected for them by Bedrock itself. The id goes in the URL path as one percent-encoded segment (`:` is `%3A`, `/` is `%2F`) and is signed double-encoded as SigV4 requires. Aliases (`aliases`) work as for any upstream.
+- InvokeModel and Converse. Under `api: "auto"` a Claude id (`anthropic.claude-*`, a prefixed profile id or an ARN of either) goes over `anthropic.messages`: `POST /model/<id>/invoke`, or `/invoke-with-response-stream`, with the Anthropic body, `anthropic_version: "bedrock-2023-05-31"`, and no `model` or `stream` (the URL carries both) and none of the Anthropic API fields Bedrock does not have (`metadata`, `service_tier`, `container`, `mcp_servers`). Every other id, and an application inference profile (its id is opaque), goes over `bedrock.converse`: `POST /model/<id>/converse` or `/converse-stream`. An explicit `api` wins: `api: "converse"` sends a Claude model through Converse, and `api: "anthropic.messages"` on an application inference profile of a Claude model keeps it on InvokeModel. `api: "chat"` is rejected at detection (`unsupported_api`).
+- Streaming. Bedrock streams `application/vnd.amazon.eventstream` frames, not SSE. `lib/eventstream.mjs` parses them (both CRCs are checked, frames may be split across chunks anywhere) and the result is read like an SSE stream: an InvokeModel `chunk` event carries base64 JSON of one Anthropic event (Bedrock's `amazon-bedrock-invocationMetrics` is removed), a ConverseStream event is named by its `:event-type`. An `exception` frame ends the stream with an `error` event or chunk (`throttlingException` is a 429 `rate_limit_error`, `validationException` a 400, `modelStreamErrorException` a 424, `serviceUnavailableException` a 503, `accessDeniedException` a 403, unknown ones a 500); so does a corrupt or cut-off stream.
+- Tools over Converse. Converse needs a `toolConfig` whenever the history has tool calls or results, and has no "none" choice. A request with no tools has its past tool calls and results written as text; `tool_choice: "none"` with tools sends the `toolConfig` and adds a system instruction not to call tools.
+- Converse mapping. See [protocol-support.md](protocol-support.md#11-amazon-bedrock-converse) for the table. The converters build on the Chat Completions ones (`convert/anthropic/messages/to/bedrock/converse`, `convert/openai/chat/to/bedrock/converse`, `convert/bedrock/converse/to/anthropic/messages` and `.../openai/chat`, helpers in `lib/converse.mjs`).
+- Model list. `GET /models` is answered from the control plane: `GET /foundation-models` on `bedrock.<region>.amazonaws.com` (the runtime host with `bedrock-runtime` replaced by `bedrock`; a URL that is not a runtime host is asked itself), signed like every call. Models that do not output text are left out. Inference profiles are not listed, so name the ones you use in the upstream's `models`. When the call fails or there is no credential, the configured `models` are listed.
+- Token counts. Bedrock has a `CountTokens` operation, but the driver does not use it ([#180](https://github.com/CLDMV/llm-translator/issues/180)): counts are the usual estimate of one token per four characters.
+- `anthropic-beta` and other Anthropic request headers are not sent (Bedrock takes betas in the body as `anthropic_beta`, which is not set, [#180](https://github.com/CLDMV/llm-translator/issues/180)). `strict` tool use is not claimed for this driver.
+
+Nothing here has been run against real AWS. The URLs, the double-encoded canonical path, the event stream framing and the Converse shapes come from the AWS documentation, and the SigV4 signer is checked against the published test-suite vectors; real-backend validation is tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70). What is not mapped yet (prompt caching, signed reasoning round trip, structured output, the AWS credential chain, `anthropic_beta`, `CountTokens`) is tracked in [#180](https://github.com/CLDMV/llm-translator/issues/180).
+
 ## OpenRouter
 
 What the `openrouter` driver changes compared with the generic one:
@@ -335,6 +362,7 @@ createTranslator({
 | `openai.chat`        | `chat`, `openai`, `chatgpt`       | `POST /v1/chat/completions`.                                                                                            |
 | `openai.responses`   | `responses`, `codex`              | `POST /v1/responses`.                                                                                                   |
 | `ollama.chat`        | `native`, `ollama`                | Ollama's own `POST /api/chat`, see [Native `/api/chat` mode](#native-apichat-mode).                                     |
+| `bedrock.converse`   | `converse`                        | Amazon Bedrock's `POST /model/<id>/converse`, see [Amazon Bedrock](#amazon-bedrock).                                    |
 
 Names are not case sensitive, and `status()` reports the canonical id. Any other value fails config validation and lists the accepted ones. Each driver declares the protocols its server speaks in `info().protocols` (the Speaks column in the table at the top), and an explicit `api` the driver does not list fails detection with `unsupported_api` and names the drivers that do.
 
@@ -343,6 +371,8 @@ With `api: "auto"` the protocol is chosen per request, from the protocol the cli
 - An Anthropic client (`/v1/messages` on the Anthropic front) goes to `/v1/messages` when the server has it: the Anthropic driver, and vLLM 0.11.1 and later (known from detection or the upstream's `version`; an unknown version stays on Chat Completions, see [Native `/v1/messages` for vLLM](#native-v1messages-for-vllm)). Every other server gets Chat Completions.
 - A Chat Completions client (`/v1/chat/completions`) goes over Chat Completions, or over `/v1/messages` to the Anthropic driver, converted.
 - A Responses client (`/v1/responses` on the OpenAI front) goes to the server's Responses API when the driver lists it, and over Chat Completions otherwise.
+
+Amazon Bedrock is the exception to these rules: its protocol follows the model id (Claude over `anthropic.messages`, everything else over `bedrock.converse`) for every client, and it never falls back.
 
 So an Anthropic client to vLLM 0.11.1 or later uses `/v1/messages`, an OpenAI chat client to vLLM uses Chat Completions, a Responses client to OpenAI or vLLM uses the Responses API, an Anthropic client to Groq uses Chat Completions and an Anthropic client to the Anthropic driver uses Messages. A driver whose server speaks none of the client's protocols nor Chat Completions (the Anthropic driver, for an OpenAI client) gets its own protocol by conversion.
 

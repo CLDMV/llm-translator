@@ -21,7 +21,18 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { closeAll, collect, fakeTransport, make } from "../helpers/translator.mjs";
-import { ALIASES, CHAT, MESSAGES, OLLAMA, RESPONSES, candidates, canonical, frontOf, supported } from "../../src/lib/protocol.mjs";
+import {
+	ALIASES,
+	CHAT,
+	CONVERSE,
+	MESSAGES,
+	OLLAMA,
+	RESPONSES,
+	candidates,
+	canonical,
+	frontOf,
+	supported
+} from "../../src/lib/protocol.mjs";
 
 afterAll(closeAll);
 
@@ -137,6 +148,8 @@ describe("lib/protocol", () => {
 				OLLAMA,
 				"native",
 				"ollama",
+				CONVERSE,
+				"converse",
 				"auto"
 			].sort()
 		);
@@ -151,13 +164,14 @@ describe("lib/protocol", () => {
 			codex: RESPONSES,
 			native: OLLAMA,
 			ollama: OLLAMA,
+			converse: CONVERSE,
 			auto: "auto"
 		};
 		for (const [name, id] of Object.entries(expected)) {
 			expect(canonical(name)).toBe(id);
 			expect(canonical(name.toUpperCase())).toBe(id);
 		}
-		for (const id of [MESSAGES, CHAT, RESPONSES, OLLAMA]) expect(canonical(id)).toBe(id);
+		for (const id of [MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE]) expect(canonical(id)).toBe(id);
 		for (const bad of ["grpc", "", "toString", 3, null, undefined, {}]) expect(canonical(bad)).toBeUndefined();
 	});
 
@@ -196,7 +210,7 @@ describe("the api setting", () => {
 
 	it("accepts every canonical id and alias, and stores the canonical one", async () => {
 		for (const [name, id] of Object.entries(ALIASES)) {
-			const backend = id === OLLAMA ? "ollama" : "vllm";
+			const backend = id === OLLAMA ? "ollama" : id === CONVERSE ? "bedrock" : "vllm";
 			const { api } = await build({ url, backend, models: ["qwen"], api: name });
 			expect(api.status().upstreams[0].api, name).toBe(id);
 		}
@@ -228,6 +242,7 @@ describe("the api setting", () => {
 		expect(speaks.vllm).toEqual([MESSAGES, CHAT, RESPONSES]);
 		expect(speaks.ollama).toEqual([CHAT, RESPONSES, OLLAMA]);
 		expect(speaks.anthropic).toEqual([MESSAGES]);
+		expect(speaks.bedrock).toEqual([MESSAGES, CONVERSE]);
 		for (const name of ["openai", "compatible", "lmstudio", "llamacpp", "sglang", "localai"])
 			expect(speaks[name], name).toEqual([CHAT, RESPONSES]);
 		for (const name of ["azure", "groq", "fireworks", "xai", "openrouter", "deepseek", "gemini", "mistral", "tgi", "together"]) {

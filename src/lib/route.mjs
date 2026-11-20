@@ -83,7 +83,7 @@ export function resolve(c, body, options = {}) {
 				status: 500
 			});
 		}
-		const plan = c.plan(forced, { body, wire: options.wire, tokens: options.tokens });
+		const plan = c.plan(forced, { body, wire: options.wire, tokens: options.tokens, model: picked.model });
 		return {
 			endpoint: forced,
 			model: picked.model,
@@ -97,7 +97,7 @@ export function resolve(c, body, options = {}) {
 		};
 	}
 	const { endpoint, pool } = picked;
-	const plan = c.plan(endpoint, { body, wire: options.wire, tokens: options.tokens });
+	const plan = c.plan(endpoint, { body, wire: options.wire, tokens: options.tokens, model: picked.model });
 	return {
 		endpoint,
 		model: picked.model,

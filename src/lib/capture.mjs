@@ -21,7 +21,8 @@
  */
 import { resolve } from "./settings.mjs";
 import * as vllm from "./vllm.mjs";
-import { MESSAGES, CHAT, RESPONSES, OLLAMA, candidates, frontOf } from "./protocol.mjs";
+import { MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, candidates, frontOf } from "./protocol.mjs";
+import { claude } from "./bedrock.mjs";
 
 /**
  * Collect the mounted drivers, sorted by `info().order`.
@@ -42,6 +43,7 @@ export function collect(driverApi) {
 			path: driver.path,
 			auth: driver.auth,
 			request: driver.request,
+			sign: driver.sign,
 			response: driver.response,
 			chunk: driver.chunk,
 			flush: driver.flush,
@@ -66,6 +68,14 @@ export function capture(self, context, frontOverride) {
 	const toAnthropic = self.convert.openai.chat.to.anthropic.messages;
 	const toOllama = { anthropic: self.convert.anthropic.messages.to.ollama.chat, openai: self.convert.openai.chat.to.ollama.chat };
 	const fromOllama = { anthropic: self.convert.ollama.chat.to.anthropic.messages, openai: self.convert.ollama.chat.to.openai.chat };
+	const toConverse = {
+		anthropic: self.convert.anthropic.messages.to.bedrock.converse,
+		openai: self.convert.openai.chat.to.bedrock.converse
+	};
+	const fromConverse = {
+		anthropic: self.convert.bedrock.converse.to.anthropic.messages,
+		openai: self.convert.bedrock.converse.to.openai.chat
+	};
 	const front = frontOverride ?? config.front;
 	const drivers = collect(self.driver);
 	const nativeProtocol = front === "anthropic" ? MESSAGES : CHAT;
@@ -75,6 +85,8 @@ export function capture(self, context, frontOverride) {
 			: { request: toAnthropic.request, response: toOpenai.response, stream: toOpenai.stream };
 	// An endpoint on Ollama's native chat API: the request is converted to Ollama's body, the reply (a JSON object or NDJSON lines) from it.
 	const ollama = { request: toOllama[front].request, response: fromOllama[front].response, stream: fromOllama[front].stream };
+	// An endpoint on Amazon Bedrock's Converse API: the request is converted to Converse's body, the reply (a JSON object or event stream frames) from it.
+	const converse = { request: toConverse[front].request, response: fromConverse[front].response, stream: fromConverse[front].stream };
 	// An endpoint on the Responses API: the request goes through the front's Responses request converter, the reply (a JSON object or SSE
 	// events) is read as Chat Completions first (and, for the Anthropic front, converted from there).
 	const fromResponses =
@@ -91,6 +103,7 @@ export function capture(self, context, frontOverride) {
 	 */
 	const convertersFor = (protocol) => {
 		if (protocol === OLLAMA) return ollama;
+		if (protocol === CONVERSE) return converse;
 		if (protocol === nativeProtocol) return null;
 		if (protocol === RESPONSES) return responses;
 		return convert;
@@ -112,7 +125,11 @@ export function capture(self, context, frontOverride) {
 			if (settings !== null && vllm.unsuited(ask.body, settings) !== null) return false;
 			return endpoint.api !== "auto" || vllm.eligible(endpoint);
 		};
-		const list = candidates({ api: endpoint.api, front: client, info, missing: state.missing.get(endpoint.name), usable });
+		// Amazon Bedrock under `auto`: the model id decides, Claude models go through InvokeModel (Anthropic Messages) and every other model through Converse.
+		const list =
+			info.name === "bedrock" && endpoint.api === "auto" && ask.model !== undefined
+				? [claude(ask.model) ? MESSAGES : CONVERSE]
+				: candidates({ api: endpoint.api, front: client, info, missing: state.missing.get(endpoint.name), usable });
 		const protocol = list[0];
 		const same = asked === front;
 		return {
@@ -142,7 +159,7 @@ export function capture(self, context, frontOverride) {
 		/**
 		 * Choose the protocol for a request to an endpoint and the converters it needs.
 		 * @param {any} endpoint - Runtime endpoint.
-		 * @param {{body?: any, wire?: string, tokens?: boolean, front?: "anthropic" | "openai"}} [ask] - The client `body` (without it a body-dependent exclusion is not applied), `wire: "responses"` for a request that came in on the Responses API, `tokens: true` for a token count (a tokenizer reads Chat Completions messages, so a native Messages route is left out) and `front` to ask as another front than the call's.
+		 * @param {{body?: any, wire?: string, tokens?: boolean, front?: "anthropic" | "openai", model?: string}} [ask] - The client `body` (without it a body-dependent exclusion is not applied), the `model` sent upstream (Amazon Bedrock chooses its protocol by it), `wire: "responses"` for a request that came in on the Responses API, `tokens: true` for a token count (a tokenizer reads Chat Completions messages, so a native Messages route is left out) and `front` to ask as another front than the call's.
 		 * @returns {{protocol: string, more: boolean, convert: any}} The protocol, whether an `auto` upstream has another to fall back to, and the converters (null when the body goes through as it is).
 		 */
 		plan,

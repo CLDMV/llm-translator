@@ -33,15 +33,15 @@ export function join(base, path) {
  * and the model (Azure OpenAI puts the deployment and `api-version` there); otherwise `info().paths[kind]` is used, with the standard
  * OpenAI path for `responses`, `embeddings` and `models` when the driver does not name one.
  * @param {any} driver - Driver record (`info` and the optional `path` leaf).
- * @param {"chat" | "messages" | "responses" | "embeddings" | "models"} kind - Which call.
+ * @param {"chat" | "messages" | "responses" | "converse" | "embeddings" | "models"} kind - Which call.
  * @param {any} endpoint - Runtime endpoint.
  * @param {string} [model] - The upstream's model name for the request.
  * @param {string} [protocol] - The protocol the request goes over.
- * @param {boolean} [stream] - Whether the request streams (Vertex AI uses a different method for it).
+ * @param {boolean} [stream] - Whether the reply is streamed (Vertex AI and Amazon Bedrock use a different path for it).
  * @returns {Promise<string>} Path starting with `/`.
  */
 export async function pathOf(driver, kind, endpoint, model, protocol, stream) {
-	if (driver.path) return driver.path(kind, { endpoint, model, stream });
+	if (driver.path) return driver.path(kind, { endpoint, model, protocol, stream });
 	// A driver with a native mode (`info().native`) names the paths of that mode, which replace the default ones for an endpoint using it.
 	const native = driver.info.native !== undefined && protocol === driver.info.native.protocol ? driver.info.native.paths : undefined;
 	return native?.[kind] ?? driver.info.paths[kind] ?? DEFAULT_PATHS[kind];

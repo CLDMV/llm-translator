@@ -39,7 +39,7 @@ export async function* stream(source, state, settings) {
 	});
 	const failure = (message, type = "api_error") => ({ data: { error: { message, type, param: null, code: null } } });
 	try {
-		for await (const line of parse(source)) {
+		for await (const line of parse(/** @type {any} */ (source))) {
 			const chunks = chunker.line(line);
 			// Known before the usage chunk goes out, so the usage report and the estimate for a missing side see it.
 			if (state && chunker.usage() !== undefined) state.upstreamUsage = folded(chunker.usage());
