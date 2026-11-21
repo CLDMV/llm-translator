@@ -174,12 +174,15 @@ describe("server (anthropic front)", () => {
 	});
 
 	it("aborts the upstream request when the client disconnects mid-stream", async () => {
-		let upstreamClosed;
+		let upstreamClosed, upstreamStarted;
 		const closed = new Promise((resolve) => (upstreamClosed = resolve));
+		// Resolved once the upstream has the request: aborting earlier would cancel it before the upstream ever saw it.
+		const started = new Promise((resolve) => (upstreamStarted = resolve));
 		const upstream = await fakeVllm({
 			chat: (_req, body, res) => {
 				if (probed(body, res)) return;
 				res.on("close", upstreamClosed);
+				upstreamStarted();
 				res.writeHead(200, { "content-type": "text/event-stream" });
 				res.write(`data: ${JSON.stringify(textChunks(["a"])[0])}\n\n`);
 			}
@@ -191,6 +194,7 @@ describe("server (anthropic front)", () => {
 			const reply = await post(`${server.url}/v1/messages`, { ...hello, stream: true }, {}, controller.signal);
 			const reader = reply.body.getReader();
 			await reader.read();
+			await started;
 			controller.abort();
 			await Promise.race([closed, pause(3000).then(() => Promise.reject(new Error("upstream was not aborted")))]);
 		} finally {
@@ -199,19 +203,23 @@ describe("server (anthropic front)", () => {
 	});
 
 	it("aborts while still waiting for the upstream to answer", async () => {
-		let upstreamClosed;
+		let upstreamClosed, upstreamStarted;
 		const closed = new Promise((resolve) => (upstreamClosed = resolve));
+		// Resolved once the upstream has the request: aborting earlier would cancel it before the upstream ever saw it.
+		const started = new Promise((resolve) => (upstreamStarted = resolve));
 		// Startup probes the model with an image; only the real request is left hanging.
 		const upstream = await fakeVllm({
 			chat: (_req, body, res) =>
-				JSON.stringify(body).includes("image_url") ? json(res, 200, completion("ok")) : void res.on("close", upstreamClosed)
+				JSON.stringify(body).includes("image_url")
+					? json(res, 200, completion("ok"))
+					: void (res.on("close", upstreamClosed), upstreamStarted())
 		});
 		try {
 			const api = await make({ upstreams: [upstream.url] });
 			const server = await api.server.start({ port: 0 });
 			const controller = new AbortController();
 			const pending = post(`${server.url}/v1/messages`, hello, {}, controller.signal).catch((error) => error);
-			await pause(100);
+			await started;
 			controller.abort();
 			expect((await pending).name).toBe("AbortError");
 			await Promise.race([closed, pause(3000).then(() => Promise.reject(new Error("upstream was not aborted")))]);
@@ -221,9 +229,13 @@ describe("server (anthropic front)", () => {
 	});
 
 	it("stays silent when the client leaves while the stream is committed but the upstream has not answered", async () => {
-		let upstreamClosed;
+		let upstreamClosed, upstreamStarted;
 		const closed = new Promise((resolve) => (upstreamClosed = resolve));
-		const upstream = await fakeVllm({ chat: (_req, body, res) => void (probed(body, res) || res.on("close", upstreamClosed)) });
+		// Resolved once the upstream has the request: aborting earlier would cancel it before the upstream ever saw it.
+		const started = new Promise((resolve) => (upstreamStarted = resolve));
+		const upstream = await fakeVllm({
+			chat: (_req, body, res) => void (probed(body, res) || (res.on("close", upstreamClosed), upstreamStarted()))
+		});
 		try {
 			const api = await make({ upstreams: [upstream.url], settings: { pingInterval: 30 } });
 			const server = await api.server.start({ port: 0 });
@@ -231,6 +243,7 @@ describe("server (anthropic front)", () => {
 			const reply = await post(`${server.url}/v1/messages`, { ...hello, stream: true }, {}, controller.signal);
 			const reader = reply.body.getReader();
 			await reader.read();
+			await started;
 			controller.abort();
 			await Promise.race([closed, pause(3000).then(() => Promise.reject(new Error("upstream was not aborted")))]);
 		} finally {
@@ -305,15 +318,19 @@ describe("server (anthropic front)", () => {
 	});
 
 	it("drops a streaming request quietly when the client leaves before the ping interval", async () => {
-		let upstreamClosed;
+		let upstreamClosed, upstreamStarted;
 		const closed = new Promise((resolve) => (upstreamClosed = resolve));
-		const upstream = await fakeVllm({ chat: (_req, body, res) => void (probed(body, res) || res.on("close", upstreamClosed)) });
+		// Resolved once the upstream has the request: aborting earlier would cancel it before the upstream ever saw it.
+		const started = new Promise((resolve) => (upstreamStarted = resolve));
+		const upstream = await fakeVllm({
+			chat: (_req, body, res) => void (probed(body, res) || (res.on("close", upstreamClosed), upstreamStarted()))
+		});
 		try {
 			const api = await make({ upstreams: [upstream.url], settings: { pingInterval: 60000 } });
 			const server = await api.server.start({ port: 0 });
 			const controller = new AbortController();
 			const pending = post(`${server.url}/v1/messages`, { ...hello, stream: true }, {}, controller.signal).catch((error) => error);
-			await pause(100);
+			await started;
 			controller.abort();
 			expect((await pending).name).toBe("AbortError");
 			await Promise.race([closed, pause(3000).then(() => Promise.reject(new Error("upstream was not aborted")))]);
