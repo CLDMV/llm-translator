@@ -82,6 +82,20 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 - Over InvokeModel, client `anthropic-beta` headers are not turned into the body's `anthropic_beta` ([#180](https://github.com/CLDMV/llm-translator/issues/180)), and Anthropic API features Bedrock lacks (`mcp_servers`, `container`, Files) are removed or refused by Bedrock.
 - Raw capture of a Bedrock stream records the binary frames decoded as text; the decoded events are recorded correctly ([#180](https://github.com/CLDMV/llm-translator/issues/180)).
 
+## Cohere
+
+- Nothing has been run against the real Cohere API; the shapes follow the documentation.
+- Over `cohere.chat` the `tool_plan` (the sentence the model writes before a tool call) is not returned, and citations (`citations` in the reply, the `citation-start` and `citation-end` events) are not mapped ([#16](https://github.com/CLDMV/llm-translator/issues/16)).
+- Anthropic `document` blocks are sent as inline text, not as Cohere `documents`, so a Cohere model cites nothing from them.
+- Cohere cannot force one named tool. `tool_choice` naming a tool is sent as `REQUIRED` when it is the only tool and left out (recorded as `tool_choice`) when there are several. `tool_choice` needs Command R7B or newer on Cohere's side.
+- `response_format` is left out when tools are offered (Cohere does not take both), and `logprobs`, `n` above 1, `parallel_tool_calls` and `logit_bias` are not mapped.
+- Cohere's value ranges are not checked: penalties above 1.0, `top_p` outside 0.01 to 0.99 and more than five stop sequences are sent as given and answered by Cohere's own error.
+- Thinking is on or off with an optional token budget; the effort levels collapse to `enabled`. Through the Compatibility API `reasoning_effort` takes `none` and `high` only, so every other level is sent as `high` and a budget is not sent at all.
+- Reasoning sent back in history as a `thinking` block follows Cohere's request schema; the reasoning documentation does not say whether a model requires it.
+- A failed tool result keeps the `toolErrors` marker text; Cohere has no error flag on a tool message.
+- Token counts are estimated: `POST /v1/tokenize` takes one raw string and does not match a chat prompt.
+- Cached token counts (`usage.cached_tokens`) are not reported, and the Compatibility API's streams ask for no usage chunk, so a Chat Completions stream's usage is the translator's estimate unless Cohere sends one.
+
 ## Streaming
 
 - A stream that ends without `finish_reason` and without `[DONE]`, or with no data, becomes an `error` event rather than a completed message.

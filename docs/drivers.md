@@ -27,6 +27,7 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `sglang`     | `openai.chat`        | `chat`, `responses`                | 50    | `GET /get_server_info` has `model_path`, or `GET /v1/models` lists `owned_by: "sglang"`                                                 |
 | `lmstudio`   | `openai.chat`        | `chat`, `responses`                | 55    | `GET /api/v0/models` is LM Studio's model listing (strict shape check)                                                                  |
 | `ollama`     | `openai.chat`        | `chat`, `responses`, `ollama.chat` | 60    | `GET /api/version` returns a version (its own chat API for an upstream with `api: "ollama.chat"`)                                       |
+| `cohere`     | `openai.chat`        | `chat`, `cohere.chat`              | 26    | host `api.cohere.com` or `api.cohere.ai` (no request of its own)                                                                        |
 | `bedrock`    | `anthropic.messages` | `messages`, `bedrock.converse`     | 33    | host `bedrock-runtime.<region>.amazonaws.com` (no request of its own; also `backend: "bedrock"`)                                        |
 | `compatible` | `openai.chat`        | `chat`, `responses`                | 100   | always; the fallback for servers without a driver                                                                                       |
 
@@ -37,7 +38,7 @@ A driver folder contains these files, all optional except `info`:
 - `settings.mjs`: `settings(facts) → partial settings`. A driver for a server that renders `tool_reference` content parts returns `{ toolSearch: "native" }` here (see [tool search](claude-code.md#tool-search)).
 - `probe.mjs`: `probe({ endpoint, transport, facts, ... }) → partial settings`, for checks that need a request (vLLM uses it for inline system messages).
 - `request.mjs`, `response.mjs`, `chunk.mjs`, `flush.mjs`, `error.mjs`: normalizers in the upstream protocol. `request(body, ctx)` and `response(body, ctx)` get the converted body, `chunk(chunk, ctx)` gets each parsed streaming chunk, `flush(ctx) → chunk[]` (needs a `chunk` normalizer) returns chunks the normalizer was still holding when the stream ended, emitted before the final events (on the OpenAI front before `[DONE]`, and before the chunk with the `finish_reason` and the usage-only chunk, which a driver that has `flush` has held back until the stream ends), `error(status, body, ctx)` gets an error body before it is rendered for the client.
-- `path.mjs`: `path(kind, { endpoint, model, protocol, stream }) → path`, for a backend whose URLs depend on the upstream or the model. `kind` is `"chat"`, `"messages"`, `"converse"`, `"embeddings"` or `"models"`; the result (with any query string) replaces `info().paths[kind]` for that call. The Azure driver builds the deployment path and `api-version` this way.
+- `path.mjs`: `path(kind, { endpoint, model, protocol, stream }) → path`, for a backend whose URLs depend on the upstream or the model. `kind` is `"chat"`, `"messages"`, `"converse"`, `"embeddings"` or `"models"` (`protocol` is the one the request goes over, which is how a driver puts a native protocol at its own URL); the result (with any query string) replaces `info().paths[kind]` for that call. The Azure driver builds the deployment path and `api-version` this way.
 - `auth.mjs`: `auth({ endpoint, headers, transport, timeout }) → headers`, for a backend whose credentials have to be fetched. It gets the headers the request would send and returns the ones to send; it runs for every request except a token count (which builds its own headers) and may be asynchronous. The Vertex AI driver adds a Google access token as the bearer token here.
 - `sign.mjs`: `sign({ endpoint, protocol, method, url, headers, body, stream }) → headers`, for a backend that authenticates each call over its finished URL, headers and body (Amazon Bedrock's SigV4). The result replaces the headers of the upstream request. `info().frames: "eventstream"` marks a server whose streams are binary event stream frames instead of SSE.
 - `token/count.mjs` and `model/list.mjs`: exact token counting and a live model listing.
@@ -243,6 +244,26 @@ createTranslator({
 
 Nothing here has been run against real AWS. The URLs, the double-encoded canonical path, the event stream framing and the Converse shapes come from the AWS documentation, and the SigV4 signer is checked against the published test-suite vectors; real-backend validation is tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70). What is not mapped yet (prompt caching, signed reasoning round trip, structured output, the AWS credential chain, `anthropic_beta`, `CountTokens`) is tracked in [#180](https://github.com/CLDMV/llm-translator/issues/180).
 
+## Cohere
+
+The `cohere` driver is bound by host name (`api.cohere.com`, `api.cohere.ai`), with no request, or chosen with `backend: "cohere"`. It speaks two protocols: Chat Completions through Cohere's [Compatibility API](https://docs.cohere.com/docs/compatibility-api), and Cohere's own v2 chat API (`cohere.chat`), which an upstream selects with `api: "cohere"`.
+
+```js
+createTranslator({
+	front: "anthropic",
+	upstreams: [{ url: "https://api.cohere.com", apiKey: process.env.COHERE_API_KEY, api: "cohere", models: ["command-a-03-2025"] }]
+});
+```
+
+- Protocol. Under `api: "auto"` nothing speaks Cohere's own protocol (no client does), so every request goes over Chat Completions: `POST /compatibility/v1/chat/completions` (an upstream URL that already ends in `/compatibility` or `/compatibility/v1` is not doubled). With `api: "cohere"` the request goes to `POST /v2/chat`, converted from either front. Embeddings always use the Compatibility API. The key is sent as `Authorization: Bearer`.
+- Compatibility API. The driver removes the fields the page lists as unsupported (`store`, `metadata`, `logit_bias`, `top_logprobs`, `n`, `modalities`, `prediction`, `audio`, `service_tier`, `parallel_tool_calls`) and `stream_options`, records each in `state.dropped`, and maps `reasoning_effort` to the two values it takes: `none` stays and every other level is sent as `high`. Its settings are `max_tokens`, `thinking: "reasoning_effort"` (disabled thinking is `none`, enabled is `high`), no `top_k`, no usage chunk asked for.
+- Native mapping. See [protocol-support.md](protocol-support.md#13-cohere-v2-chat) for the table. The converters build on the Chat Completions ones (`convert/anthropic/messages/to/cohere/chat`, `convert/openai/chat/to/cohere/chat`, `convert/cohere/chat/to/anthropic/messages` and `.../openai/chat`, helpers in `lib/cohere.mjs`). The upstream's `sampling` setting and an Anthropic request's `metadata.sampling` are Cohere's own top-level fields (`safety_mode`, `citation_options`, `priority`, `strict_tools`, ...) and are sent as given; fields the request names win.
+- Model list. `GET /v1/models?endpoint=chat` (page size 1000, following `next_page_token`, at most 20 pages), mapped to `id` and, when Cohere gives it, `context_length`. A failed first page falls back to the configured `models`; a failed later page keeps what was read.
+- Token counts. `POST /v1/tokenize` is not used: it takes one raw string up to 65,536 characters, not a chat with roles, so it would not count what the chat endpoint bills and would need a request per count. Counts are the usual estimate of one token per four characters.
+- Errors. Cohere's error body (`{ "message": "..." }`) is read like any other, and the HTTP status is the client's status. A reply that ends with `finish_reason` `ERROR` is a 502 and `TIMEOUT` a 504, in a stream an `error` event (Anthropic) or an error chunk plus `[DONE]` (OpenAI).
+
+Nothing here has been run against the real API. The shapes come from the Cohere documentation for [chat](https://docs.cohere.com/reference/chat), [streaming](https://docs.cohere.com/reference/chat-stream), [reasoning](https://docs.cohere.com/docs/reasoning), [tool use](https://docs.cohere.com/docs/tool-use-overview), [list models](https://docs.cohere.com/reference/list-models) and the [Compatibility API](https://docs.cohere.com/docs/compatibility-api). What is not mapped is in [known-limitations.md](known-limitations.md#cohere).
+
 ## OpenRouter
 
 What the `openrouter` driver changes compared with the generic one:
@@ -387,6 +408,7 @@ createTranslator({
 | `ollama.chat`        | `native`, `ollama`                | Ollama's own `POST /api/chat`, see [Native `/api/chat` mode](#native-apichat-mode).                                     |
 | `bedrock.converse`   | `converse`                        | Amazon Bedrock's `POST /model/<id>/converse`, see [Amazon Bedrock](#amazon-bedrock).                                    |
 | `google.gemini`      | `gemini`, `google`                | Google's `POST /v1beta/models/<model>:generateContent`, see [Gemini native API](#gemini-native-api).                    |
+| `cohere.chat`        | `cohere`                          | Cohere's own `POST /v2/chat`, see [Cohere](#cohere).                                                                    |
 
 Names are not case sensitive, and `status()` reports the canonical id. Any other value fails config validation and lists the accepted ones. Each driver declares the protocols its server speaks in `info().protocols` (the Speaks column in the table at the top), and an explicit `api` the driver does not list fails detection with `unsupported_api` and names the drivers that do.
 
@@ -396,7 +418,7 @@ With `api: "auto"` the protocol is chosen per request, from the protocol the cli
 - A Chat Completions client (`/v1/chat/completions`) goes over Chat Completions, or over `/v1/messages` to the Anthropic driver, converted.
 - A Responses client (`/v1/responses` on the OpenAI front) goes to the server's Responses API when the driver lists it, and over Chat Completions otherwise.
 
-Google's native Gemini API is not part of `auto` at all: no client speaks it, so an upstream uses it only with an explicit `api: "gemini"`, and `auto` keeps the OpenAI-compatible endpoint. Amazon Bedrock is the exception to these rules: its protocol follows the model id (Claude over `anthropic.messages`, everything else over `bedrock.converse`) for every client, and it never falls back.
+Google's native Gemini API is not part of `auto` at all: no client speaks it, so an upstream uses it only with an explicit `api: "gemini"`, and `auto` keeps the OpenAI-compatible endpoint. Amazon Bedrock is the exception to these rules: its protocol follows the model id (Claude over `anthropic.messages`, everything else over `bedrock.converse`) for every client, and it never falls back. Cohere's own protocol is only used when named (`api: "cohere"`), like Ollama's.
 
 So an Anthropic client to vLLM 0.11.1 or later uses `/v1/messages`, an OpenAI chat client to vLLM uses Chat Completions, a Responses client to OpenAI or vLLM uses the Responses API, an Anthropic client to Groq uses Chat Completions and an Anthropic client to the Anthropic driver uses Messages. A driver whose server speaks none of the client's protocols nor Chat Completions (the Anthropic driver, for an OpenAI client) gets its own protocol by conversion.
 

@@ -89,6 +89,7 @@ test("a translator composed from dist/api converts, streams and serves", async (
 			"anthropic",
 			"azure",
 			"bedrock",
+			"cohere",
 			"compatible",
 			"deepseek",
 			"fireworks",

@@ -21,7 +21,7 @@
  */
 import { resolve } from "./settings.mjs";
 import * as vllm from "./vllm.mjs";
-import { MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, GEMINI, candidates, frontOf } from "./protocol.mjs";
+import { MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, GEMINI, COHERE, candidates, frontOf } from "./protocol.mjs";
 import { claude } from "./bedrock.mjs";
 
 /**
@@ -84,6 +84,8 @@ export function capture(self, context, frontOverride) {
 		anthropic: self.convert.google.gemini.to.anthropic.messages,
 		openai: self.convert.google.gemini.to.openai.chat
 	};
+	const toCohere = { anthropic: self.convert.anthropic.messages.to.cohere.chat, openai: self.convert.openai.chat.to.cohere.chat };
+	const fromCohere = { anthropic: self.convert.cohere.chat.to.anthropic.messages, openai: self.convert.cohere.chat.to.openai.chat };
 	const front = frontOverride ?? config.front;
 	const drivers = collect(self.driver);
 	const nativeProtocol = front === "anthropic" ? MESSAGES : CHAT;
@@ -97,6 +99,8 @@ export function capture(self, context, frontOverride) {
 	const converse = { request: toConverse[front].request, response: fromConverse[front].response, stream: fromConverse[front].stream };
 	// An endpoint on Google's native Gemini API: the request is converted to a `generateContent` body, the reply (a JSON object or SSE chunks) from it.
 	const gemini = { request: toGemini[front].request, response: fromGemini[front].response, stream: fromGemini[front].stream };
+	// An endpoint on Cohere's v2 chat API: the request is converted to Cohere's body, the reply (a JSON object or Server-Sent Events) from it.
+	const cohere = { request: toCohere[front].request, response: fromCohere[front].response, stream: fromCohere[front].stream };
 	// An endpoint on the Responses API: the request goes through the front's Responses request converter, the reply (a JSON object or SSE
 	// events) is read as Chat Completions first (and, for the Anthropic front, converted from there).
 	const fromResponses =
@@ -115,6 +119,7 @@ export function capture(self, context, frontOverride) {
 		if (protocol === OLLAMA) return ollama;
 		if (protocol === CONVERSE) return converse;
 		if (protocol === GEMINI) return gemini;
+		if (protocol === COHERE) return cohere;
 		if (protocol === nativeProtocol) return null;
 		if (protocol === RESPONSES) return responses;
 		return convert;
