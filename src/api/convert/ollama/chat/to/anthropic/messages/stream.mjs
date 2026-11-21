@@ -35,7 +35,7 @@ export function stream(source, state, settings) {
 	const chunker = createChunker();
 	return fromChat(
 		(async function* () {
-			for await (const line of parse(source)) yield* chunker.line(line);
+			for await (const line of parse(/** @type {any} */ (source))) yield* chunker.line(line);
 			if (chunker.finished()) yield { data: "[DONE]" };
 		})(),
 		state,

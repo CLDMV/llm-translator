@@ -88,6 +88,7 @@ test("a translator composed from dist/api converts, streams and serves", async (
 		assert.deepEqual(Object.keys(api.driver).sort(), [
 			"anthropic",
 			"azure",
+			"bedrock",
 			"compatible",
 			"deepseek",
 			"fireworks",
@@ -103,6 +104,7 @@ test("a translator composed from dist/api converts, streams and serves", async (
 			"sglang",
 			"tgi",
 			"together",
+			"vertex",
 			"vllm",
 			"xai"
 		]);

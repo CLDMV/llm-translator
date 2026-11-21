@@ -18,9 +18,9 @@ export type UpstreamConfig = {
      */
     name?: string;
     /**
-     * Base URL of the upstream server (`http://host:8000`).
+     * Base URL of the upstream server (`http://host:8000`). Required, except for `backend: "bedrock"`, whose default is `https://bedrock-runtime.<region>.amazonaws.com`.
      */
-    url: string;
+    url?: string;
     /**
      * Key sent to the upstream.
      */
@@ -38,7 +38,36 @@ export type UpstreamConfig = {
      */
     deployment?: string;
     /**
-     * Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"` and `"ollama.chat"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third and `"native"` and `"ollama"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
+     * Google Vertex AI settings (see docs/drivers.md). `url` may be left out when `backend` is `"vertex"`: it defaults to the region's host.
+     */
+    vertex?: {
+        project?: string;
+        region?: string;
+        credentials?: string | object;
+        accessToken?: string;
+        getToken?: (options: {
+            signal?: AbortSignal;
+        }) => string | Promise<string>;
+        metadataServer?: boolean | string;
+    };
+    /**
+     * Amazon Bedrock: the AWS region SigV4 signs for. Defaults to the region in the URL's host name, then `AWS_REGION`, then `AWS_DEFAULT_REGION`.
+     */
+    region?: string;
+    /**
+     * Amazon Bedrock: access key id for SigV4. Defaults to `AWS_ACCESS_KEY_ID`.
+     */
+    accessKeyId?: string;
+    /**
+     * Amazon Bedrock: secret access key for SigV4. Defaults to `AWS_SECRET_ACCESS_KEY`.
+     */
+    secretAccessKey?: string;
+    /**
+     * Amazon Bedrock: session token of temporary credentials. Defaults to `AWS_SESSION_TOKEN`.
+     */
+    sessionToken?: string;
+    /**
+     * Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"`, `"ollama.chat"` and `"bedrock.converse"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third, `"native"` and `"ollama"` the fourth and `"converse"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
      */
     api?: string;
     /**
