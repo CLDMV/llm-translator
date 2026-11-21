@@ -214,12 +214,13 @@ describe("the api setting", () => {
 		expect(api.status().upstreams[0]).toMatchObject({ api: "auto", protocols: [MESSAGES, CHAT, RESPONSES] });
 	});
 
-	it("accepts every canonical id and alias, and stores the canonical one", async () => {
-		for (const [name, id] of Object.entries(ALIASES)) {
-			const backend = id === OLLAMA ? "ollama" : id === CONVERSE ? "bedrock" : id === GEMINI ? "gemini" : "vllm";
-			const { api } = await build({ url, backend, models: ["qwen"], api: name });
-			expect(api.status().upstreams[0].api, name).toBe(id);
-		}
+	it.each(Object.entries(ALIASES))("accepts the alias %s and stores the canonical id %s", async (name, id) => {
+		const backend = id === OLLAMA ? "ollama" : id === CONVERSE ? "bedrock" : id === GEMINI ? "gemini" : "vllm";
+		const { api } = await build({ url, backend, models: ["qwen"], api: name });
+		expect(api.status().upstreams[0].api, name).toBe(id);
+	});
+
+	it("accepts an alias in any case", async () => {
 		const { api } = await build(vllm({ api: "Codex" }));
 		expect(api.status().upstreams[0].api).toBe(RESPONSES);
 	});
