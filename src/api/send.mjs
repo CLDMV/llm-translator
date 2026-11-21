@@ -187,6 +187,8 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 				? await driver.count({
 						endpoint,
 						request: sent.body,
+						path: sent.path,
+						state: sent.state,
 						transport,
 						signal: options.signal,
 						timeout: captured.config.detectTimeout

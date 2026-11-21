@@ -17,7 +17,7 @@
  * @fileoverview Vertex AI driver: error normalizer.
  * @module @cldmv/llm-translator/driver/vertex
  */
-import * as upstream from "../../../lib/upstream-error.mjs";
+import { normalize } from "../../../lib/google-error.mjs";
 
 /**
  * Normalize Google's error envelope (`{ error: { code, message, status } }`, sometimes inside a one-element array) and Claude's own
@@ -27,8 +27,5 @@ import * as upstream from "../../../lib/upstream-error.mjs";
  * @returns {{error: {message: string, type: string | undefined, param: *, code: *}}} Nested error body.
  */
 export function error(status, body) {
-	const first = Array.isArray(body) ? body[0] : body;
-	const info = upstream.parse(first, status);
-	const code = typeof first?.error?.status === "string" ? first.error.status : info.code;
-	return { error: { message: info.message, type: info.type, param: info.param ?? null, code: code ?? status } };
+	return normalize(status, body);
 }

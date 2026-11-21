@@ -14,15 +14,16 @@
  */
 
 /**
- * @fileoverview Gemini (OpenAI-compatible endpoint) driver: static facts about the hosted API.
+ * @fileoverview Gemini driver: static facts about the hosted API (the OpenAI-compatible endpoint and the native `generateContent` API).
  * @module @cldmv/llm-translator/driver/gemini
  */
 import { describe } from "../../../lib/presets.mjs";
 
 /**
- * Describe the Gemini (OpenAI-compatible endpoint) driver (see `PRESETS.gemini` in `lib/presets.mjs`).
+ * Describe the Gemini driver (see `PRESETS.gemini` in `lib/presets.mjs`). `protocol` is the OpenAI-compatible endpoint, the default; the native
+ * `generateContent` API (`google.gemini`) is used only by an upstream with an explicit `api`, because no client speaks it.
  * @returns {{name: string, protocol: string, protocols: string[], order: number, auth: string, strict: boolean, fields?: string[], paths: Record<string,string>}} Driver facts.
  */
 export function info() {
-	return describe("gemini");
+	return { ...describe("gemini"), protocols: ["openai.chat", "google.gemini"] };
 }

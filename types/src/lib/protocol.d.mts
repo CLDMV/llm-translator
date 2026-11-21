@@ -63,6 +63,7 @@ export const CHAT: "openai.chat";
 export const RESPONSES: "openai.responses";
 export const OLLAMA: "ollama.chat";
 export const CONVERSE: "bedrock.converse";
+export const GEMINI: "google.gemini";
 /** The canonical protocol ids, in the order the docs list them. */
 export const IDS: string[];
 /** Every accepted spelling of the `api` setting and the canonical id it stands for. */
@@ -84,4 +85,7 @@ export const ALIASES: Readonly<{
     ollama: "ollama.chat";
     "bedrock.converse": "bedrock.converse";
     converse: "bedrock.converse";
+    "google.gemini": "google.gemini";
+    gemini: "google.gemini";
+    google: "google.gemini";
 }>;
