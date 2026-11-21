@@ -25,10 +25,11 @@ import { chatBody } from "../../../../../../../lib/gemini.mjs";
  * Convert a Chat Completions request to a `generateContent` body (see `chatBody`). The upstream's `sampling` setting becomes further `generationConfig` fields.
  * @param {any} body - Chat Completions request body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
+ * @param {any} [context] - `{ model }`, the model the request goes to (the body's `model` is the client's name for it).
  * @returns {{body: any, state: any}} The Gemini body and the conversion state the response converters read.
  * @throws {TranslatorError} `invalid_request` when `messages` is missing.
  */
-export function request(body, settings) {
+export function request(body, settings, context) {
 	const s = resolve(settings);
 	if (body === null || typeof body !== "object" || !Array.isArray(body.messages)) {
 		throw new TranslatorError("messages: Field required", { code: "invalid_request", param: "messages" });
@@ -43,7 +44,12 @@ export function request(body, settings) {
 		includeUsage: body.stream_options?.include_usage === true
 	};
 	return {
-		body: chatBody(body, { dropped: state.dropped, sampling: s.sampling, marker: s.toolErrors ? s.toolErrorMarker : undefined }),
+		body: chatBody(body, {
+			dropped: state.dropped,
+			sampling: s.sampling,
+			marker: s.toolErrors ? s.toolErrorMarker : undefined,
+			model: context?.model
+		}),
 		state
 	};
 }

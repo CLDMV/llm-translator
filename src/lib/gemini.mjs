@@ -60,7 +60,14 @@ const IMAGE_NOTE =
 const NO_OUTPUT = "(no output)";
 
 /** The thinking budget (tokens) sent for each reasoning effort. Gemini 2.5 models take a budget; Gemini 3 models still accept one. */
-const BUDGETS = { minimal: 512, low: 1024, medium: 8192, high: 24576, xhigh: 32768, max: 32768 };
+const BUDGETS = { minimal: 512, low: 1024, medium: 8192, high: 24576, xhigh: 24576, max: 24576 };
+
+/** The thinking levels of Gemini 3 and later models, lowest first, and the effort each effort name asks for. */
+const LEVELS = ["MINIMAL", "LOW", "MEDIUM", "HIGH", "XHIGH"];
+const EFFORT_LEVEL = { minimal: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 4 };
+
+/** The `thoughtSignature` Google documents for a function call part that has no real signature (history written by another model, or a client that dropped them). */
+export const SKIP_SIGNATURE = "skip_thought_signature_validator";
 
 /** Chat Completions `finish_reason` for each Gemini `finishReason`. A reason that is not here (and is not a normal end) is `error`. */
 const FINISH = {
@@ -119,8 +126,8 @@ export function countBody(request, model) {
 }
 
 /**
- * The Gemini parts of a Chat Completions message content: text parts (an empty one is left out), images from base64 data URLs and files
- * from base64 data URLs (a PDF, for example).
+ * The Gemini parts of a Chat Completions message content: text parts (an empty one is left out), images and PDFs from base64 data URLs
+ * (an `image_url` part may carry a PDF: that is how the Anthropic converter hands one over) and files from base64 data URLs.
  * @param {any} content - String, or an array of content parts.
  * @param {string[]} dropped - Collects what was left out.
  * @returns {any[]} Parts.
@@ -133,7 +140,8 @@ function partsOf(content, dropped) {
 			if (typeof part.text === "string" && part.text !== "") out.push({ text: part.text });
 		} else if (part?.type === "image_url") {
 			const match = /^data:([^;,]+);base64,(.*)$/s.exec(String(part.image_url?.url ?? part.image_url ?? ""));
-			if (match && IMAGES.has(match[1])) out.push({ inlineData: { mimeType: match[1], data: match[2] } });
+			if (match && (IMAGES.has(match[1]) || match[1] === "application/pdf"))
+				out.push({ inlineData: { mimeType: match[1], data: match[2] } });
 			else {
 				out.push({ text: IMAGE_NOTE });
 				drop(dropped, "image_url");
@@ -238,22 +246,57 @@ function conversationOf(list, dropped, marker, plain) {
 		if (contents.at(-1)?.role === role) contents.at(-1).parts.push(...parts);
 		else contents.push({ role, parts });
 	}
+	// Gemini 3 models refuse a model turn whose first function call has no signature, so a call without a real one gets the documented placeholder.
+	for (const content of contents) {
+		const first = content.role === "model" ? content.parts.find((part) => part.functionCall) : undefined;
+		if (first && first.thoughtSignature === undefined) first.thoughtSignature = SKIP_SIGNATURE;
+	}
 	return { contents, system };
 }
 
 /**
- * The `thinkingConfig` for a request: an explicit token budget, or a reasoning effort (`none` switches thinking off with a zero budget; the
- * levels are sent as the budgets in `BUDGETS`). Thought summaries are asked for whenever thinking is on.
+ * The thinking levels a model takes. Gemini 3 and later models take levels (`thinkingLevel`) and Gemini 2.5 and earlier take a token budget.
+ * @param {unknown} model - Model id as sent upstream, with or without the `models/` prefix.
+ * @returns {number[] | null} Indexes into `LEVELS`, or null for a model that takes a budget. Gemini 4 has no `MINIMAL` and adds `XHIGH`, `gemini-3-pro` has `LOW` and `HIGH` only, other Pro models no `MINIMAL`, and the Gemini 3 Flash models the four lower levels.
+ */
+function levelsOf(model) {
+	const match = /^(?:models\/)?gemini-(\d+)(?:\.\d+)?-([a-z]+)/.exec(String(model));
+	if (match === null || Number(match[1]) < 3) return null;
+	if (Number(match[1]) >= 4) return [1, 2, 3, 4];
+	if (match[2] === "pro") return /^(?:models\/)?gemini-3-pro/.test(String(model)) ? [1, 3] : [1, 2, 3];
+	return [0, 1, 2, 3];
+}
+
+/**
+ * The `thinkingConfig` for a request. A model that takes a budget gets the explicit one, or one per effort (`BUDGETS`; `none` is a zero
+ * budget). A model that takes levels gets the level of the effort (a budget counts as the effort it is closest to), moved to the nearest level the
+ * model has; `none` is the lowest level, because these models cannot switch thinking off, and sending a budget to them is refused or
+ * deprecated. Thought summaries are asked for whenever thinking is on.
  * @param {any} effort - Chat Completions `reasoning_effort`.
  * @param {number | undefined} budget - Token budget of enabled thinking.
  * @param {string[]} dropped - Collects what was left out.
+ * @param {unknown} model - Model id as sent upstream.
  * @returns {any} `thinkingConfig`, or undefined when the request does not ask for any.
  */
-function thinkingOf(effort, budget, dropped) {
-	if (budget !== undefined) return { includeThoughts: true, thinkingBudget: budget };
-	if (effort === undefined || effort === null) return undefined;
-	if (effort === "none") return { thinkingBudget: 0 };
-	if (Object.hasOwn(BUDGETS, effort)) return { includeThoughts: true, thinkingBudget: BUDGETS[effort] };
+function thinkingOf(effort, budget, dropped, model) {
+	const levels = levelsOf(model);
+	if (levels === null) {
+		if (budget !== undefined) return { includeThoughts: true, thinkingBudget: budget };
+		if (effort === undefined || effort === null) return undefined;
+		if (effort === "none") return { thinkingBudget: 0 };
+		if (Object.hasOwn(BUDGETS, effort)) return { includeThoughts: true, thinkingBudget: BUDGETS[effort] };
+	} else {
+		let want;
+		if (budget !== undefined) want = budget < 1024 ? 0 : budget < 4096 ? 1 : budget < 16384 ? 2 : 3;
+		else if (effort === undefined || effort === null) return undefined;
+		else if (effort === "none") want = -1;
+		else if (Object.hasOwn(EFFORT_LEVEL, effort)) want = EFFORT_LEVEL[effort];
+		if (want !== undefined) {
+			// The nearest level the model has; a tie goes to the lower one, so `none` (below every level) lands on the lowest.
+			const level = levels.reduce((best, entry) => (Math.abs(entry - want) < Math.abs(best - want) ? entry : best));
+			return { ...(effort === "none" ? {} : { includeThoughts: true }), thinkingLevel: LEVELS[level] };
+		}
+	}
 	drop(dropped, "reasoning_effort");
 	return undefined;
 }
@@ -268,7 +311,7 @@ function thinkingOf(effort, budget, dropped) {
  * `parallel_tool_calls`, images given by URL, reasoning text in history, ...) is left out and named in `dropped`. A request without tools has
  * its past tool calls and results written as text.
  * @param {any} body - Chat Completions request body.
- * @param {{ dropped?: string[], sampling?: Record<string, any>, thinkingBudget?: number, marker?: string }} [context] - `dropped` collects the names of what was left out; `sampling` are extension fields for `generationConfig`; `thinkingBudget` is the token budget of enabled thinking; `marker` is the text that marks a failed tool result.
+ * @param {{ dropped?: string[], sampling?: Record<string, any>, thinkingBudget?: number, marker?: string, model?: string }} [context] - `model` is the model the request goes to (default: the body's `model`), which decides between a thinking budget and a thinking level; `dropped` collects the names of what was left out; `sampling` are extension fields for `generationConfig`; `thinkingBudget` is the token budget of enabled thinking; `marker` is the text that marks a failed tool result.
  * @returns {any} `generateContent` request body.
  */
 export function chatBody(body, context = {}) {
@@ -298,7 +341,7 @@ export function chatBody(body, context = {}) {
 		config.responseMimeType = "application/json";
 		if (format.json_schema?.schema !== undefined) config.responseJsonSchema = format.json_schema.schema;
 	} else if (format !== undefined && format !== null && format.type !== "text") drop(dropped, "response_format");
-	const thinking = thinkingOf(body.reasoning_effort, context.thinkingBudget, dropped);
+	const thinking = thinkingOf(body.reasoning_effort, context.thinkingBudget, dropped, context.model ?? body.model);
 	if (thinking !== undefined) config.thinkingConfig = thinking;
 	if (Object.keys(config).length > 0) out.generationConfig = config;
 	if (offered) {

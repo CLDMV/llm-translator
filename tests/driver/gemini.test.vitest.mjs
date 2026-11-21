@@ -365,6 +365,88 @@ describe("Anthropic front", () => {
 		expect(out.body.usage).toMatchObject({ input_tokens: 12, output_tokens: 5 });
 	});
 
+	it("a Gemini 3 model gets a thinking level, chosen by the model sent upstream (an alias too), not a budget", async () => {
+		const flash = "gemini-3-flash-preview";
+		const level = async (extra, model = flash) =>
+			(await run("anthropic", { ...body, model, ...extra }, ok(content([{ text: "x" }])), undefined, "level")).call.body.generationConfig
+				.thinkingConfig;
+		expect(await level({ output_config: { effort: "low" } })).toEqual({ includeThoughts: true, thinkingLevel: "LOW" });
+		expect(await level({ thinking: { type: "enabled", budget_tokens: 8000 } })).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
+		expect(await level({ thinking: { type: "disabled" } })).toEqual({ thinkingLevel: "MINIMAL" });
+		expect(google.seen[0].url).toBe(`/v1beta/models/${flash}:generateContent`);
+		const aliased = await make({
+			front: "anthropic",
+			aliases: { fast: flash },
+			upstreams: [{ url: google.url, backend: "gemini", api: "gemini", apiKey: "key-1" }],
+			detect: false
+		});
+		google.use(ok(content([{ text: "x" }])));
+		await aliased.send({ ...body, model: "fast", output_config: { effort: "high" } });
+		expect(google.seen[0].url).toBe(`/v1beta/models/${flash}:generateContent`);
+		expect(google.seen[0].body.generationConfig.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: "HIGH" });
+	});
+
+	it("a tool call whose signature was lost is sent with Google's placeholder", async () => {
+		const { call } = await run(
+			"anthropic",
+			{
+				...body,
+				messages: [
+					...user,
+					{
+						role: "assistant",
+						content: [
+							{ type: "tool_use", id: "t1", name: "Read", input: { path: "a" } },
+							{ type: "tool_use", id: "t2", name: "Read", input: {} }
+						]
+					},
+					{
+						role: "user",
+						content: [
+							{ type: "tool_result", tool_use_id: "t1", content: "a" },
+							{ type: "tool_result", tool_use_id: "t2", content: "b" }
+						]
+					}
+				]
+			},
+			ok(content([{ text: "x" }]))
+		);
+		expect(call.body.contents[1].parts).toEqual([
+			{ functionCall: { id: "t1", name: "Read", args: { path: "a" } }, thoughtSignature: "skip_thought_signature_validator" },
+			{ functionCall: { id: "t2", name: "Read", args: {} } }
+		]);
+	});
+
+	it("a base64 PDF is sent whole for Gemini to read; other documents are expanded as always", async () => {
+		const pdf = { type: "document", title: "T", source: { type: "base64", media_type: "application/pdf", data: PNG } };
+		const text = {
+			type: "document",
+			source: { type: "base64", media_type: "text/plain", data: Buffer.from("plain words").toString("base64") }
+		};
+		const ask = (extra, id) =>
+			run(
+				"anthropic",
+				{ ...body, messages: [{ role: "user", content: [{ type: "text", text: "read" }, pdf, text] }] },
+				ok(content([{ text: "x" }])),
+				extra,
+				id
+			);
+		const sent = (await ask(undefined, "pdf")).call.body.contents[0].parts;
+		expect(sent).toEqual([
+			{ text: "read" },
+			{ inlineData: { mimeType: "application/pdf", data: PNG } },
+			{ text: "<document>\nplain words\n</document>" }
+		]);
+		const noted = (await ask({ settings: { documents: "note" } }, "pdf-note")).call.body.contents[0].parts;
+		expect(JSON.stringify(noted)).not.toContain("inlineData");
+		expect(JSON.stringify(noted)).toContain("document conversion is disabled");
+		const own = (await ask({ settings: { documentConverter: () => [{ type: "text", text: "converted" }] } }, "pdf-own")).call.body
+			.contents[0].parts;
+		expect(own.map((part) => part.text)).toEqual(["read\n\nconverted\n\nconverted"]);
+		const imageless = (await ask({ settings: { images: false } }, "pdf-noimg")).call.body.contents[0].parts;
+		expect(JSON.stringify(imageless)).not.toContain("inlineData");
+	});
+
 	it("an effort, or thinking switched off, is a budget too, and metadata.sampling is merged", async () => {
 		const asks = async (extra, upstream) =>
 			(await run("anthropic", { ...body, ...extra }, ok(content([{ text: "x" }])), upstream, JSON.stringify(upstream ?? {}))).call.body

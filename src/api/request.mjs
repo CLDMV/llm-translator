@@ -166,6 +166,7 @@ async function prepare(c, body, options, picked) {
 			producer: producerOf(endpoint, protocol),
 			budget: options.budget,
 			listed: levels !== undefined,
+			model,
 			toolCallIds: driver.info.toolCallIds
 		}));
 		if (converted.toolSearch?.capped) {

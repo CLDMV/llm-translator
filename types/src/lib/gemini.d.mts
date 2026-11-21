@@ -28,7 +28,7 @@ export function countBody(request: any, model: string): any;
  * `parallel_tool_calls`, images given by URL, reasoning text in history, ...) is left out and named in `dropped`. A request without tools has
  * its past tool calls and results written as text.
  * @param {any} body - Chat Completions request body.
- * @param {{ dropped?: string[], sampling?: Record<string, any>, thinkingBudget?: number, marker?: string }} [context] - `dropped` collects the names of what was left out; `sampling` are extension fields for `generationConfig`; `thinkingBudget` is the token budget of enabled thinking; `marker` is the text that marks a failed tool result.
+ * @param {{ dropped?: string[], sampling?: Record<string, any>, thinkingBudget?: number, marker?: string, model?: string }} [context] - `model` is the model the request goes to (default: the body's `model`), which decides between a thinking budget and a thinking level; `dropped` collects the names of what was left out; `sampling` are extension fields for `generationConfig`; `thinkingBudget` is the token budget of enabled thinking; `marker` is the text that marks a failed tool result.
  * @returns {any} `generateContent` request body.
  */
 export function chatBody(body: any, context?: {
@@ -36,6 +36,7 @@ export function chatBody(body: any, context?: {
     sampling?: Record<string, any>;
     thinkingBudget?: number;
     marker?: string;
+    model?: string;
 }): any;
 /**
  * Chat Completions `finish_reason` for a Gemini `finishReason`: `STOP` is `stop`, `MAX_TOKENS` is `length`, the safety, recitation, blocklist,
@@ -107,3 +108,5 @@ export function createChunker(options?: {
 };
 /** `format` of the `reasoning_details` items that carry a Gemini `thoughtSignature` (`data`) and the part it belongs to (`for`: `text` or `call`, with the tool call `id` for a call). */
 export const FORMAT: "google-gemini-v1";
+/** The `thoughtSignature` Google documents for a function call part that has no real signature (history written by another model, or a client that dropped them). */
+export const SKIP_SIGNATURE: "skip_thought_signature_validator";

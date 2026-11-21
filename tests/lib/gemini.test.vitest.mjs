@@ -19,6 +19,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	FORMAT,
+	SKIP_SIGNATURE,
 	chatBody,
 	completion,
 	countBody,
@@ -142,6 +143,7 @@ describe("chatBody: messages", () => {
 							{ type: "image_url", image_url: { url: "https://example.com/a.png" } },
 							{ type: "image_url" },
 							{ type: "image_url", image_url: { url: `data:image/gif;base64,${PNG}` } },
+							{ type: "image_url", image_url: { url: `data:application/pdf;base64,${PNG}` } },
 							{ type: "file", file: { file_data: `data:application/pdf;base64,${PNG}` } },
 							{ type: "file", file: { file_id: "f" } },
 							{ type: "input_audio" },
@@ -159,7 +161,8 @@ describe("chatBody: messages", () => {
 		expect(parts[3].text).toMatch(/does not fetch URLs/);
 		expect(parts[4].text).toMatch(/does not fetch URLs/);
 		expect(parts[5]).toEqual({ inlineData: { mimeType: "application/pdf", data: PNG } });
-		expect(parts).toHaveLength(6);
+		expect(parts[6]).toEqual({ inlineData: { mimeType: "application/pdf", data: PNG } });
+		expect(parts).toHaveLength(7);
 		expect(dropped).toEqual(["image_url", "content.file", "content.input_audio", "content.part"]);
 	});
 });
@@ -205,7 +208,7 @@ describe("chatBody: tools", () => {
 				role: "model",
 				parts: [
 					{ text: "ok" },
-					{ functionCall: { id: "c1", name: "Read", args: { path: "a" } } },
+					{ functionCall: { id: "c1", name: "Read", args: { path: "a" } }, thoughtSignature: SKIP_SIGNATURE },
 					{ functionCall: { id: "c2", name: "Read", args: { _raw_arguments: "not json" } } }
 				]
 			},
@@ -302,12 +305,44 @@ describe("chatBody: thinking and structured output", () => {
 		expect(budget("low")).toEqual({ includeThoughts: true, thinkingBudget: 1024 });
 		expect(budget("medium")).toEqual({ includeThoughts: true, thinkingBudget: 8192 });
 		expect(budget("high")).toEqual({ includeThoughts: true, thinkingBudget: 24576 });
-		expect(budget("xhigh")).toEqual({ includeThoughts: true, thinkingBudget: 32768 });
-		expect(budget("max")).toEqual({ includeThoughts: true, thinkingBudget: 32768 });
+		expect(budget("xhigh")).toEqual({ includeThoughts: true, thinkingBudget: 24576 });
+		expect(budget("max")).toEqual({ includeThoughts: true, thinkingBudget: 24576 });
 		expect(budget(null)).toBeUndefined();
 		const dropped = [];
 		expect(ask({ reasoning_effort: "toString" }, {}, dropped).generationConfig).toBeUndefined();
 		expect(dropped).toEqual(["reasoning_effort"]);
+	});
+
+	it("a Gemini 3 model gets a thinking level, moved to one the model has, and never a budget", () => {
+		const level = (model, extra, context) => ask({ model, ...extra }, context).generationConfig?.thinkingConfig;
+		const flash = "gemini-3-flash-preview";
+		expect(level(flash, { reasoning_effort: "minimal" })).toEqual({ includeThoughts: true, thinkingLevel: "MINIMAL" });
+		expect(level(flash, { reasoning_effort: "low" })).toEqual({ includeThoughts: true, thinkingLevel: "LOW" });
+		expect(level(flash, { reasoning_effort: "medium" })).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
+		expect(level(flash, { reasoning_effort: "max" })).toEqual({ includeThoughts: true, thinkingLevel: "HIGH" });
+		expect(level(flash, { reasoning_effort: "none" })).toEqual({ thinkingLevel: "MINIMAL" });
+		expect(level("models/gemini-3.1-pro-preview", { reasoning_effort: "minimal" })).toEqual({
+			includeThoughts: true,
+			thinkingLevel: "LOW"
+		});
+		expect(level("gemini-3.1-pro-preview", { reasoning_effort: "medium" })).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
+		expect(level("gemini-3-pro-preview", { reasoning_effort: "medium" })).toEqual({ includeThoughts: true, thinkingLevel: "LOW" });
+		expect(level("gemini-3-pro-preview", { reasoning_effort: "none" })).toEqual({ thinkingLevel: "LOW" });
+		expect(level("gemini-4-hydrogen", { reasoning_effort: "xhigh" })).toEqual({ includeThoughts: true, thinkingLevel: "XHIGH" });
+		expect(level("gemini-4-hydrogen", { reasoning_effort: "minimal" })).toEqual({ includeThoughts: true, thinkingLevel: "LOW" });
+		expect(level(flash, {}, { thinkingBudget: 512 })).toEqual({ includeThoughts: true, thinkingLevel: "MINIMAL" });
+		expect(level(flash, {}, { thinkingBudget: 2000 })).toEqual({ includeThoughts: true, thinkingLevel: "LOW" });
+		expect(level(flash, {}, { thinkingBudget: 8000 })).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
+		expect(level(flash, {}, { thinkingBudget: 30000 })).toEqual({ includeThoughts: true, thinkingLevel: "HIGH" });
+		expect(level(flash, {})).toBeUndefined();
+		expect(level(flash, { reasoning_effort: null })).toBeUndefined();
+		const dropped = [];
+		expect(ask({ model: flash, reasoning_effort: "toString" }, {}, dropped).generationConfig).toBeUndefined();
+		expect(dropped).toEqual(["reasoning_effort"]);
+		expect(level("gemini-2.5-pro", { reasoning_effort: "high" })).toEqual({ includeThoughts: true, thinkingBudget: 24576 });
+		expect(level("gemini-pro", { reasoning_effort: "high" })).toEqual({ includeThoughts: true, thinkingBudget: 24576 });
+		expect(level("gemma-3", { reasoning_effort: "high" })).toEqual({ includeThoughts: true, thinkingBudget: 24576 });
+		expect(level("alias", { reasoning_effort: "low" }, { model: flash })).toEqual({ includeThoughts: true, thinkingLevel: "LOW" });
 	});
 
 	it("maps response_format to a MIME type and a JSON Schema", () => {
@@ -369,6 +404,29 @@ describe("chatBody: thought signatures", () => {
 		]);
 		expect(out.contents).toHaveLength(2);
 		expect(dropped).toEqual([]);
+	});
+
+	it("a first function call with no signature gets Google's placeholder, once per model turn, and a real signature is kept", () => {
+		const call = (id) => ({ id, type: "function", function: { name: "Read", arguments: "{}" } });
+		const out = chatBody(
+			{
+				messages: [
+					{ role: "user", content: "x" },
+					{ role: "assistant", content: "", tool_calls: [call("a"), call("b")] },
+					{ role: "tool", tool_call_id: "a", content: "1" },
+					{ role: "tool", tool_call_id: "b", content: "2" },
+					{ role: "assistant", content: "", tool_calls: [call("c")], reasoning_details: [detail({ data: "REAL", for: "call", id: "c" })] },
+					{ role: "tool", tool_call_id: "c", content: "3" }
+				],
+				tools: [tool]
+			},
+			{}
+		);
+		const calls = out.contents.filter((entry) => entry.role === "model").map((entry) => entry.parts.map((part) => part.thoughtSignature));
+		expect(calls).toEqual([[SKIP_SIGNATURE, undefined], ["REAL"]]);
+		expect(SKIP_SIGNATURE).toBe("skip_thought_signature_validator");
+		const plain = chatBody({ messages: [{ role: "assistant", content: "", tool_calls: [call("a")] }] });
+		expect(JSON.stringify(plain)).not.toContain(SKIP_SIGNATURE);
 	});
 
 	it("notes reasoning text it has no signature for, and ignores details that are not its own", () => {
