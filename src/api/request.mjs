@@ -36,7 +36,7 @@ import { TranslatorError } from "../lib/errors.mjs";
 import * as vllm from "../lib/vllm.mjs";
 import * as documentUrls from "../lib/document-urls.mjs";
 import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
-import { CONVERSE } from "../lib/protocol.mjs";
+import { CONVERSE, GEMINI } from "../lib/protocol.mjs";
 
 /**
  * Who produced reasoning data signed for this endpoint: driver, protocol and host, so two upstreams on the generic driver stay apart.
@@ -268,7 +268,15 @@ async function prepare(c, body, options, picked) {
 		});
 	}
 	const kind =
-		protocol === "anthropic.messages" ? "messages" : protocol === RESPONSES ? "responses" : protocol === CONVERSE ? "converse" : "chat";
+		protocol === "anthropic.messages"
+			? "messages"
+			: protocol === RESPONSES
+				? "responses"
+				: protocol === CONVERSE
+					? "converse"
+					: protocol === GEMINI
+						? "gemini"
+						: "chat";
 	const path = await http.pathOf(driver, kind, endpoint, model, protocol, stream);
 	const url = http.join(endpoint.url, path);
 	let headers = {

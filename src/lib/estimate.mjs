@@ -36,6 +36,8 @@ export const tokens = (characters) => Math.ceil(characters / CHARS_PER_TOKEN);
 export function estimate(body) {
 	// A Responses body keeps its conversation in `input` and its system text in `instructions`.
 	if (body.input !== undefined) return tokens(JSON.stringify([body.instructions, body.input, body.tools]).length);
+	// A Gemini body keeps its conversation in `contents` and its system text in `systemInstruction`.
+	if (body.contents !== undefined) return tokens(JSON.stringify([body.systemInstruction, body.contents, body.tools]).length);
 	return tokens(JSON.stringify([body.system, body.messages, body.tools]).length);
 }
 
