@@ -8,6 +8,8 @@
  * with an Anthropic `error` event) and closing the iterator early (the upstream source is closed too). Pings are
  * the SSE writer's job, not this converter's.
  *
+ * Citations (`delta.annotations`) are sent as `citations_delta` events on the text block open when they arrive, or on a block of their own at the end when none was (`citations: "none"` leaves them out).
+ *
  * Tool calls follow `settings.toolStreaming`. `buffer` (default) holds every call until the stream finishes and then emits
  * each one, in index order, as a single complete `tool_use` block (start, one `input_json_delta`, stop); text and
  * thinking stream immediately, so they appear before the tool blocks and no argument fragment can arrive too late.

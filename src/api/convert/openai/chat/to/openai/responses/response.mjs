@@ -21,13 +21,14 @@ import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { itemId, pack, usageOf, endOf, envelope } from "../../../../../../../lib/responses.mjs";
 import { reasoningOf } from "../../../../../../../lib/thinking.mjs";
+import { readAll, toResponses } from "../../../../../../../lib/citations.mjs";
 
 /**
  * Convert a (non-streaming) Chat Completions reply into a Responses object.
  *
  * The output holds, in this order, a `reasoning` item (the reply's reasoning text as one summary part, and with `reasoningRoundTrip` its
  * `reasoning_details` as `encrypted_content`), a `message` item with an `output_text` part (or a `refusal` part) and one `function_call`
- * item per tool call. A `length` stop makes the response `incomplete` with reason `max_output_tokens`, a content filter one with reason
+ * item per tool call. The message's `annotations` are the `annotations` of the `output_text` part (`url_citation`, `file_citation`; see `lib/citations.mjs`). A `length` stop makes the response `incomplete` with reason `max_output_tokens`, a content filter one with reason
  * `content_filter`.
  * @param {any} completion - Chat Completions `chat.completion` object.
  * @param {any} state - State from the request converter (`model`, `echo`).
@@ -55,12 +56,13 @@ export function response(completion, state, settings) {
 	const text = typeof message.content === "string" ? message.content : "";
 	const refusal = typeof message.refusal === "string" && message.refusal !== "" ? message.refusal : null;
 	if (text !== "" || refusal !== null) {
+		const annotations = s.citations === "none" ? [] : readAll(message.annotations).map((citation) => toResponses(citation));
 		output.push({
 			type: "message",
 			id: itemId("msg"),
 			status: "completed",
 			role: "assistant",
-			content: text !== "" ? [{ type: "output_text", text, annotations: [], logprobs: [] }] : [{ type: "refusal", refusal }]
+			content: text !== "" ? [{ type: "output_text", text, annotations, logprobs: [] }] : [{ type: "refusal", refusal }]
 		});
 	}
 	for (const call of message.tool_calls ?? []) {

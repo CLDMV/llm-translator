@@ -104,6 +104,13 @@ describe("settings", () => {
 		}
 	});
 
+	test("citations and documentCitations: defaults, and rejects other values", () => {
+		expect(resolve()).toMatchObject({ citations: "auto", documentCitations: false });
+		expect(resolve({ citations: "none", documentCitations: true })).toMatchObject({ citations: "none", documentCitations: true });
+		expect(() => resolve({ citations: "all" })).toThrow(/Invalid setting citations/);
+		expect(() => resolve({ documentCitations: "yes" })).toThrow(/Invalid setting documentCitations/);
+	});
+
 	test("rejects invalid enumerated values", () => {
 		expect(() => resolve({ inlineSystem: "sideways" })).toThrow(/Invalid setting inlineSystem/);
 		try {

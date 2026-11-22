@@ -23,6 +23,7 @@ import { resolve } from "./settings.mjs";
 import { TranslatorError } from "./errors.mjs";
 import { completionId } from "./ids.mjs";
 import { messages } from "./sse.mjs";
+import { fromResponses, readAll, toAnnotation } from "./citations.mjs";
 
 /** Protocol name of an upstream that speaks the Responses API. */
 export const PROTOCOL = "openai.responses";
@@ -424,9 +425,22 @@ function failureOf(response) {
 }
 
 /**
+ * Move the spans of citations that count from the start of an output text part to count from the start of the joined text.
+ * @param {import("./citations.mjs").Citation[]} list - Citations with spans in a part.
+ * @param {number} start - Where the part starts in the joined text.
+ * @returns {import("./citations.mjs").Citation[]} The citations with moved spans (one without a span is the whole part).
+ */
+function moved(list, start) {
+	return list.map((citation) => ({
+		...citation,
+		span: citation.span ? { start: citation.span.start + start, end: citation.span.end + start } : undefined
+	}));
+}
+
+/**
  * Convert a (non-streaming) Responses reply into a Chat Completions reply.
  *
- * Message text becomes `content` (a refusal `refusal`), `function_call` items `tool_calls`, and the summary of reasoning items the
+ * Message text becomes `content` (a refusal `refusal`) with the annotations of its parts (`url_citation`, `file_citation`) as `annotations`, `function_call` items `tool_calls`, and the summary of reasoning items the
  * reasoning field named by `reasoningField`. With `reasoningRoundTrip` every reasoning item that carries `encrypted_content` is also
  * returned as a `reasoning_details` item (format `openai-responses-v1`), which the Anthropic converter signs into the thinking block and the
  * request converter turns back into a `reasoning` item.
@@ -449,6 +463,9 @@ export function response(reply, state, settings) {
 	const reasoning = [];
 	const calls = [];
 	const details = [];
+	// The citations of the output text parts, with their spans moved from their part to the joined text.
+	const cited = [];
+	let length = 0;
 	// A reasoning item records where it sat among what the message shows: the text (all of it is one part), then each tool call.
 	let textSeen = false;
 	for (const item of reply.output) {
@@ -462,6 +479,8 @@ export function response(reply, state, settings) {
 				if (part?.type === "output_text" && typeof part.text === "string") {
 					text.push(part.text);
 					if (part.text !== "") textSeen = true;
+					if (s.citations !== "none") cited.push(...moved(readAll(part.annotations, fromResponses), length));
+					length += part.text.length;
 				} else if (part?.type === "refusal" && typeof part.refusal === "string") refusal.push(part.refusal);
 			}
 		} else if (item?.type === "function_call") {
@@ -474,6 +493,7 @@ export function response(reply, state, settings) {
 	}
 	const message = { role: "assistant", content: text.length === 0 && calls.length > 0 ? null : text.join("") };
 	if (refusal.length > 0) message.refusal = refusal.join("");
+	if (cited.length > 0) message.annotations = cited.map((citation) => toAnnotation(citation));
 	if (reasoning.length > 0) message[s.reasoningField] = reasoning.join("\n\n");
 	if (details.length > 0) message.reasoning_details = details;
 	if (calls.length > 0) message.tool_calls = calls;
@@ -505,7 +525,7 @@ const failureChunk = (message, type = "server_error", code = null) => ({ data: {
  * `source` is SSE text or bytes, parsed events, or bare event payloads (they carry their own `type`). Text, refusal, reasoning summary and
  * argument deltas become the matching `delta` fields; a tool call starts with its `id` and name when its item is added. With
  * `reasoningRoundTrip` the encrypted reasoning arrives as one `reasoning_details` chunk when its item is done. The final usage goes out as a
- * `choices: []` chunk when `state.includeUsage` is not false. A `response.failed` or `error` event, or a stream that ends before a final
+ * `choices: []` chunk when `state.includeUsage` is not false. Annotations (`response.output_text.annotation.added`, or the finished item's when none were streamed) become `annotations` chunks whose spans count from the start of the content. A `response.failed` or `error` event, or a stream that ends before a final
  * event, becomes an `{ error }` chunk followed by `[DONE]`.
  * @param {ReadableStream | AsyncIterable<unknown> | Iterable<unknown> | string | Uint8Array} source - Responses stream.
  * @param {any} [state] - State from the request converter (`model`, `includeUsage`; `upstreamUsage` is written to it).
@@ -523,12 +543,15 @@ export async function* stream(source, state, settings) {
 	let tools = 0;
 	let textSeen = false;
 	let final = null;
+	// Characters of content sent, and where each output text part started in them: annotation indexes count from the start of their part.
+	let length = 0;
+	const starts = new Map();
 
 	const chunk = (delta, finishReason = null) => ({
 		data: { id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finishReason }] }
 	});
 	const entry = (index) => {
-		if (!items.has(index)) items.set(index, { tool: null, streamed: false, parts: 0 });
+		if (!items.has(index)) items.set(index, { tool: null, streamed: false, annotated: false, parts: 0 });
 		return items.get(index);
 	};
 	function* start(index, item) {
@@ -542,7 +565,13 @@ export async function* stream(source, state, settings) {
 	function* text(value) {
 		if (value === "") return;
 		textSeen = true;
+		length += value.length;
 		yield chunk({ content: value });
+	}
+	function* cite(list, start) {
+		if (s.citations === "none") return;
+		const found = moved(readAll(list, fromResponses), start);
+		if (found.length > 0) yield chunk({ annotations: found.map((citation) => toAnnotation(citation)) });
 	}
 
 	try {
@@ -558,7 +587,12 @@ export async function* stream(source, state, settings) {
 				yield* start(index, data.item);
 			} else if (type === "response.output_text.delta") {
 				entry(index).streamed = true;
+				const part = `${index}:${data.content_index ?? 0}`;
+				if (!starts.has(part)) starts.set(part, length);
 				yield* text(data.delta ?? "");
+			} else if (type === "response.output_text.annotation.added") {
+				entry(index).annotated = true;
+				yield* cite([data.annotation], starts.get(`${index}:${data.content_index ?? 0}`) ?? length);
 			} else if (type === "response.refusal.delta") {
 				entry(index).streamed = true;
 				yield chunk({ refusal: data.delta ?? "" });
@@ -582,11 +616,13 @@ export async function* stream(source, state, settings) {
 					const detail = s.reasoningRoundTrip ? detailOf(item, tools + (textSeen ? 1 : 0)) : null;
 					if (detail) yield chunk({ reasoning_details: [detail] });
 				} else if (item.type === "message") {
-					if (!known.streamed) {
-						for (const part of item.content ?? []) {
-							if (part?.type === "output_text") yield* text(part.text ?? "");
-							else if (part?.type === "refusal") yield chunk({ refusal: part.refusal ?? "" });
-						}
+					const parts = item.content ?? [];
+					for (const [at, part] of parts.entries()) {
+						if (part?.type === "output_text") {
+							const start = known.streamed ? (starts.get(`${index}:${at}`) ?? length) : length;
+							if (!known.streamed) yield* text(part.text ?? "");
+							if (!known.annotated) yield* cite(part.annotations, start);
+						} else if (part?.type === "refusal" && !known.streamed) yield chunk({ refusal: part.refusal ?? "" });
 					}
 				} else if (item.type === "function_call") {
 					yield* start(index, item);

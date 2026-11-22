@@ -23,13 +23,14 @@ import { completionId, restoreId, restoreName } from "../../../../../../../lib/i
 import { toOpenAIFinish, toOpenAIUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
 import { detailOf } from "../../../../../../../lib/thinking.mjs";
+import { fromAnthropic, toAnnotation } from "../../../../../../../lib/citations.mjs";
 
 /**
  * Convert an Anthropic Messages event stream into OpenAI `chat.completion.chunk` messages followed by `[DONE]`.
  *
  * `source` is SSE text/bytes, an iterable of `{ event, data }` pairs, or an iterable of bare event payloads. The
  * result yields `{ data }` messages (chunk objects, then the string `"[DONE]"`); encode them with `lib/sse.mjs`.
- * Usage is emitted as a final `choices: []` chunk when `state.includeUsage` is not false. An Anthropic `error`
+ * The citations of a text block (`citations_delta`) go out as one `annotations` chunk when the block stops, each spanning the block's text in the content. Usage is emitted as a final `choices: []` chunk when `state.includeUsage` is not false. An Anthropic `error`
  * event, or a stream that ends before `message_stop`, becomes a `{ error }` chunk followed by `[DONE]`.
  * @param {ReadableStream|AsyncIterable<unknown>|Iterable<unknown>|string|Uint8Array} source - Anthropic stream.
  * @param {any} [state] - State from the request converter (model, `includeUsage`, tool-name map).
@@ -52,6 +53,9 @@ export async function* stream(source, state, settings) {
 	// Position of a reasoning item among what the OpenAI message shows: the text (one part) and then each tool call.
 	let textBlock = false;
 	let toolBlocks = 0;
+	// The text written so far, and the text block being read with its citations: they go out as `annotations` spanning the block when it stops.
+	let textLength = 0;
+	let cited = null;
 
 	const chunk = (delta, finishReason = null, extra = {}) => ({
 		data: {
@@ -80,6 +84,7 @@ export async function* stream(source, state, settings) {
 				if (block.type === "thinking" || block.type === "redacted_thinking") {
 					reasoningBlock = { type: block.type, data: block.data, thinking: "", signature: "", slot: toolBlocks + (textBlock ? 1 : 0) };
 				}
+				if (block.type === "text") cited = { start: textLength, citations: [] };
 				if (block.type === "tool_use") toolBlocks++;
 				if (block.type === "tool_use") {
 					tools.set(data.index, tools.size);
@@ -95,7 +100,11 @@ export async function* stream(source, state, settings) {
 				if (delta.type === "text_delta") {
 					// Only text that reaches the client counts as text for the position of reasoning items.
 					if (delta.text !== "") textBlock = true;
+					textLength += delta.text.length;
 					yield chunk({ content: delta.text });
+				} else if (delta.type === "citations_delta") {
+					const citation = s.citations === "none" || cited === null ? null : fromAnthropic(delta.citation);
+					if (citation !== null) cited.citations.push(citation);
 				} else if (delta.type === "thinking_delta") {
 					if (reasoningBlock) reasoningBlock.thinking += delta.thinking;
 					yield chunk({ [s.reasoningField]: delta.thinking });
@@ -108,6 +117,11 @@ export async function* stream(source, state, settings) {
 				const detail = s.reasoningRoundTrip && reasoningBlock ? detailOf(reasoningBlock, reasoningBlock.slot) : null;
 				if (detail) yield chunk({ reasoning_details: [detail] });
 				reasoningBlock = null;
+				if (cited !== null && cited.citations.length > 0) {
+					const span = { start: cited.start, end: textLength };
+					yield chunk({ annotations: cited.citations.map((citation) => toAnnotation({ ...citation, span })) });
+				}
+				cited = null;
 			} else if (data.type === "message_delta") {
 				for (const [key, value] of Object.entries(data.usage ?? {})) if (value !== null && value !== undefined) usage[key] = value;
 				if (state) state.upstreamUsage = usage;

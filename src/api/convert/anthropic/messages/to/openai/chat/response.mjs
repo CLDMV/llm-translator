@@ -21,11 +21,12 @@ import { resolve } from "../../../../../../../lib/settings.mjs";
 import { restoreId, restoreName } from "../../../../../../../lib/ids.mjs";
 import { detailOf } from "../../../../../../../lib/thinking.mjs";
 import { toOpenAIFinish, toOpenAIUsage } from "../../../../../../../lib/finish.mjs";
+import { join, readAnthropic, toAnnotation } from "../../../../../../../lib/citations.mjs";
 
 /**
  * Convert an Anthropic message into an OpenAI `chat.completion`. Text blocks are concatenated, `thinking` blocks
  * become the reasoning field named by `reasoningField`, `tool_use` blocks become `tool_calls` (tool names restored
- * through `state.toolNames`), and other block types (server tool results) are skipped. With `reasoningRoundTrip`, thinking and redacted thinking
+ * through `state.toolNames`), and other block types (server tool results) are skipped. The `citations` of a text block become `annotations` that span the block's text in the joined content (see `lib/citations.mjs`; `citations: "none"` leaves them out). With `reasoningRoundTrip`, thinking and redacted thinking
  * blocks are also returned as `reasoning_details` items that carry their signatures.
  * @param {any} message - Anthropic message.
  * @param {any} [state] - State from the request converter (original model, tool-name map).
@@ -38,6 +39,8 @@ export function response(message, state, settings) {
 	const toolIds = state?.toolIds ?? {};
 	const text = [];
 	const reasoning = [];
+	// The text blocks with their citations, to give each citation its span in the joined text.
+	const blocks = [];
 	const toolCalls = [];
 	const details = [];
 	// A reasoning item records where its block sat among what the OpenAI message shows: the text (all text blocks make one part) and then each
@@ -52,8 +55,10 @@ export function response(message, state, settings) {
 		// An empty text block adds nothing to the message the client sees, so it does not count as text.
 		if (block.type === "text" && block.text !== "") textSeen = true;
 		if (block.type === "tool_use") slot++;
-		if (block.type === "text") text.push(block.text);
-		else if (block.type === "thinking") reasoning.push(block.thinking);
+		if (block.type === "text") {
+			text.push(block.text);
+			blocks.push({ text: block.text, citations: s.citations === "none" ? [] : readAnthropic(block.citations) });
+		} else if (block.type === "thinking") reasoning.push(block.thinking);
 		else if (block.type === "tool_use") {
 			toolCalls.push({
 				id: restoreId(toolIds, block.id),
@@ -63,6 +68,8 @@ export function response(message, state, settings) {
 		}
 	}
 	const out = { role: "assistant", content: text.length === 0 && toolCalls.length > 0 ? null : text.join("") };
+	const cited = join(blocks).citations;
+	if (cited.length > 0) out.annotations = cited.map((citation) => toAnnotation(citation));
 	if (reasoning.length > 0) out[s.reasoningField] = reasoning.join("");
 	// With `reasoningRoundTrip` the thinking blocks and their signatures go along for the client to replay (Anthropic needs them back with tool use).
 	if (details.length > 0) out.reasoning_details = details;

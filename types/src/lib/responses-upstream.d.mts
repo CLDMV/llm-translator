@@ -23,7 +23,7 @@ export function usageOf(usage: any): object | undefined;
 /**
  * Convert a (non-streaming) Responses reply into a Chat Completions reply.
  *
- * Message text becomes `content` (a refusal `refusal`), `function_call` items `tool_calls`, and the summary of reasoning items the
+ * Message text becomes `content` (a refusal `refusal`) with the annotations of its parts (`url_citation`, `file_citation`) as `annotations`, `function_call` items `tool_calls`, and the summary of reasoning items the
  * reasoning field named by `reasoningField`. With `reasoningRoundTrip` every reasoning item that carries `encrypted_content` is also
  * returned as a `reasoning_details` item (format `openai-responses-v1`), which the Anthropic converter signs into the thinking block and the
  * request converter turns back into a `reasoning` item.
@@ -40,7 +40,7 @@ export function response(reply: any, state?: any, settings?: Partial<import("./s
  * `source` is SSE text or bytes, parsed events, or bare event payloads (they carry their own `type`). Text, refusal, reasoning summary and
  * argument deltas become the matching `delta` fields; a tool call starts with its `id` and name when its item is added. With
  * `reasoningRoundTrip` the encrypted reasoning arrives as one `reasoning_details` chunk when its item is done. The final usage goes out as a
- * `choices: []` chunk when `state.includeUsage` is not false. A `response.failed` or `error` event, or a stream that ends before a final
+ * `choices: []` chunk when `state.includeUsage` is not false. Annotations (`response.output_text.annotation.added`, or the finished item's when none were streamed) become `annotations` chunks whose spans count from the start of the content. A `response.failed` or `error` event, or a stream that ends before a final
  * event, becomes an `{ error }` chunk followed by `[DONE]`.
  * @param {ReadableStream | AsyncIterable<unknown> | Iterable<unknown> | string | Uint8Array} source - Responses stream.
  * @param {any} [state] - State from the request converter (`model`, `includeUsage`; `upstreamUsage` is written to it).
