@@ -107,7 +107,7 @@ export async function request(chatBody, settings, context) {
 				break;
 			}
 			case "user":
-				push("user", userBlocks(message.content, state));
+				push("user", userBlocks(message.content, state, s));
 				break;
 			case "assistant": {
 				// Thinking blocks come first, as Anthropic requires. They exist only when the client replayed `reasoning_details`
@@ -279,9 +279,10 @@ function plainText(content) {
  * Anthropic blocks for a user message.
  * @param {string|any[]} content - OpenAI user content.
  * @param {{ dropped: string[] }} state - Conversion state.
+ * @param {import("../../../../../../../lib/settings.mjs").Settings} s - Resolved settings (`documentCitations`).
  * @returns {any[]} Blocks.
  */
-function userBlocks(content, state) {
+function userBlocks(content, state, s) {
 	if (typeof content === "string") return content === "" ? [] : [{ type: "text", text: content }];
 	const blocks = [];
 	for (const part of content ?? []) {
@@ -294,7 +295,13 @@ function userBlocks(content, state) {
 			});
 		} else if (part.type === "file" && typeof part.file?.file_data === "string" && DATA_URL.test(part.file.file_data)) {
 			const match = DATA_URL.exec(part.file.file_data);
-			blocks.push({ type: "document", source: { type: "base64", media_type: match[1], data: match[2] } });
+			// A `file` part can say `citations: { enabled }` itself (an extension); otherwise the `documentCitations` setting decides.
+			const enabled = typeof part.citations?.enabled === "boolean" ? part.citations.enabled : s.documentCitations;
+			blocks.push({
+				type: "document",
+				source: { type: "base64", media_type: match[1], data: match[2] },
+				...(enabled ? { citations: { enabled: true } } : {})
+			});
 		} else {
 			drop(state, `content:${part.type}`);
 		}

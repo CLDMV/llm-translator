@@ -33,6 +33,8 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {boolean} toolErrors - Prefix `is_error` tool results with `toolErrorMarker` when converting to Chat Completions (which has no error flag) and on vLLM native passthrough. On by default for every driver; set false to send the text unchanged. Upstreams with a native error flag (Anthropic-protocol) never go through this.
  * @property {string} toolErrorMarker - Text that marks a failed tool result when `toolErrors` is on, and the text `toolErrorInference` looks for. Must contain a non-whitespace character.
  * @property {boolean} toolErrorInference - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text. Off by default: a tool that merely prints the marker would be taken for a failure.
+ * @property {"auto"|"none"} citations - Citations in replies (Anthropic `citations`, Chat Completions and Responses `annotations`). `auto` carries them between the protocols, `none` leaves them out of every reply. See [protocol-support.md](protocol-support.md#14-citations).
+ * @property {boolean} documentCitations - OpenAI to Anthropic: ask for citations on the documents made from `file` content parts (`citations: { enabled: true }`). A `file` part can also say so itself with its own `citations: { enabled: true | false }`, which wins.
  * @property {"max_completion_tokens"|"max_tokens"} maxTokensField - Field used for the output cap.
  * @property {boolean} streamUsage - Request `stream_options.include_usage` on streamed requests.
  * @property {boolean} continuousUsage - Also request `stream_options.continuous_usage_stats` (vLLM extension; real OpenAI may reject it).
@@ -172,6 +174,14 @@ export type Settings = {
      * - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text. Off by default: a tool that merely prints the marker would be taken for a failure.
      */
     toolErrorInference: boolean;
+    /**
+     * - Citations in replies (Anthropic `citations`, Chat Completions and Responses `annotations`). `auto` carries them between the protocols, `none` leaves them out of every reply. See [protocol-support.md](protocol-support.md#14-citations).
+     */
+    citations: "auto" | "none";
+    /**
+     * - OpenAI to Anthropic: ask for citations on the documents made from `file` content parts (`citations: { enabled: true }`). A `file` part can also say so itself with its own `citations: { enabled: true | false }`, which wins.
+     */
+    documentCitations: boolean;
     /**
      * - Field used for the output cap.
      */

@@ -28,7 +28,6 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 
 - `document` blocks with a `url` source are a text note unless the `documentUrls` setting is on (FI-046, [#18](https://github.com/CLDMV/llm-translator/issues/18)). With it on, only `application/pdf` and `text/plain` are fetched, only from hosts on its allow-list, and a document that cannot be fetched is a note rather than an error. Nothing is cached, so a retried request downloads the document again. `image` blocks with a `url` source are forwarded to the upstream as URLs and are not fetched.
 - Files API references (`file` image and document sources, `file_id` parts) are not resolved. Tracked in [#17](https://github.com/CLDMV/llm-translator/issues/17).
-- Citations (`citations` on text blocks and documents, citation deltas, OpenAI annotations) are dropped. `search_result` blocks become plain text. Tracked in [#16](https://github.com/CLDMV/llm-translator/issues/16).
 - PDF page images are only produced when the model accepts images, `@napi-rs/canvas` loaded, and the page budget (`pdf.maxImages`) allows. Scanned PDFs without a text layer yield empty page text; there is no OCR.
 - Encrypted or corrupt PDFs fall back to a text note. PDFs over 100 pages or 32 MB are rejected with an Anthropic-shaped error.
 - A text-only model behind a non-vLLM upstream is only discovered on the first request that carries an image: that request is sent twice (the second time without images) and the model is remembered as text-only for the rest of the process. The wording match is deliberately conservative, so a server that refuses images with an unusual message still returns its 400; set `images: false` for it. See `imageFallback` in [settings](settings.md).
@@ -108,7 +107,7 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 - Only function tools, text and image (`image_url`) input are mapped. `input_file`, `input_audio`, file ids and custom tools are refused.
 - Reasoning is returned as a summary part, never as raw `reasoning_text`. A reasoning item is replayed to the upstream only with `reasoningRoundTrip`; otherwise it is dropped.
 - A `<think>` block in the content of an OpenAI-protocol upstream is not split into a reasoning item (the Anthropic-front conversions do that, a pass-through chat reply does not).
-- `top_logprobs`, `max_tool_calls`, `truncation: "auto"` and `context_management` are dropped; `annotations` and `logprobs` on output text are always empty.
+- `top_logprobs`, `max_tool_calls`, `truncation: "auto"` and `context_management` are dropped; `logprobs` on output text is always empty.
 - Upstream-protocol use of the Responses API (calling `/v1/responses` on a backend) is separate work ([#7](https://github.com/CLDMV/llm-translator/issues/7)).
 
 ## Out of scope
