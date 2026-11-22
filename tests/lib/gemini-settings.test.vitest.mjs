@@ -33,7 +33,24 @@ describe("check", () => {
 				responseModalities: ["TEXT", "IMAGE"],
 				imageConfig: { aspectRatio: "1:1" },
 				speechConfig: {},
-				mediaResolution: "MEDIA_RESOLUTION_LOW"
+				mediaResolution: "MEDIA_RESOLUTION_LOW",
+				computerUse: {
+					environment: "ENVIRONMENT_BROWSER",
+					excludedPredefinedFunctions: ["wait"],
+					enablePromptInjectionDetection: true,
+					disabledSafetyPolicies: ["FINANCIAL_TRANSACTIONS"]
+				}
+			})
+		).toBeNull();
+		expect(check({ computerUse: {} })).toBeNull();
+		expect(
+			check({
+				computerUse: {
+					enable_prompt_injection_detection: false,
+					disabled_safety_policies: [],
+					excluded_predefined_functions: [],
+					environment: "ENVIRONMENT_MOBILE"
+				}
 			})
 		).toBeNull();
 	});
@@ -54,6 +71,24 @@ describe("check", () => {
 		expect(check({ imageConfig: [] })).toBe("imageConfig must be an object");
 		expect(check({ speechConfig: null })).toBe("speechConfig must be an object");
 		expect(check({ mediaResolution: 1 })).toBe("mediaResolution must be a string");
+		expect(check({ computerUse: [] })).toBe("computerUse: expected an object");
+		expect(check({ computerUse: null })).toBe("computerUse: expected an object");
+		expect(check({ computerUse: { enviroment: "x" } })).toBe("computerUse: unknown field enviroment");
+		expect(check({ computerUse: { environment: "desktop" } })).toMatch(
+			/^computerUse: environment must be ENVIRONMENT_UNSPECIFIED, ENVIRONMENT_BROWSER/
+		);
+		expect(check({ computerUse: { excludedPredefinedFunctions: [""] } })).toBe(
+			"computerUse: excludedPredefinedFunctions must be a list of action names"
+		);
+		expect(check({ computerUse: { excluded_predefined_functions: "click" } })).toBe(
+			"computerUse: excludedPredefinedFunctions must be a list of action names"
+		);
+		expect(check({ computerUse: { enablePromptInjectionDetection: "yes" } })).toBe(
+			"computerUse: enablePromptInjectionDetection must be true or false"
+		);
+		expect(check({ computerUse: { disabled_safety_policies: ["EVERYTHING"] } })).toMatch(
+			/^computerUse: disabledSafetyPolicies must be a list of SAFETY_POLICY_UNSPECIFIED, FINANCIAL_TRANSACTIONS/
+		);
 	});
 });
 

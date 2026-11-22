@@ -92,11 +92,15 @@ export function ids(base: string, count: number): string[];
  * tool), the computer calls of the history become the Gemini actions they came from (`left_click` is `click` on the grid, the calls one Gemini
  * action was split into are one action again), and each result becomes the result of those calls, with its screenshot set apart to be sent as part of
  * the function response. A past call of an action Gemini has no equivalent of (`cursor_position`, `hold_key`, `zoom`) and its result become plain text.
+ * The questions the translator asked the user about actions Gemini flagged (`lib/gemini-confirm`) are resolved first.
  * @param {any} body - Anthropic Messages body.
- * @returns {{ body: any, shape: "toolset" | "classic", enabled: Set<string>, size: {width: number, height: number} | null, custom: Set<string>, images: Map<string, {mimeType: string, data: string}> } | null} The rewritten body and what the conversion needs, or null when the request has no computer tool.
+ * @param {{ confirmationTool?: string }} [options] - `confirmationTool`: `settings.gemini.confirmationTool`.
+ * @returns {{ body: any, shape: "toolset" | "classic", enabled: Set<string>, size: {width: number, height: number} | null, custom: Set<string>, images: Map<string, {mimeType: string, data: string}>, acknowledged: Set<string>, confirm: { tool: {name: string} | null, pending: Set<string> }, local: { id: string, name: string, args: any } | null } | null} The rewritten body and what the conversion needs, or null when the request has no computer tool.
  * @throws {TranslatorError} `unsupported_computer_action` for an action of the history that Gemini has no equivalent of and that is not one of those.
  */
-export function prepare(body: any): {
+export function prepare(body: any, options?: {
+    confirmationTool?: string;
+}): {
     body: any;
     shape: "toolset" | "classic";
     enabled: Set<string>;
@@ -109,6 +113,18 @@ export function prepare(body: any): {
         mimeType: string;
         data: string;
     }>;
+    acknowledged: Set<string>;
+    confirm: {
+        tool: {
+            name: string;
+        } | null;
+        pending: Set<string>;
+    };
+    local: {
+        id: string;
+        name: string;
+        args: any;
+    } | null;
 } | null;
 /**
  * A `tool_use` block of a reply, with `toolset_name: "computer"` when it is a member of the computer toolset (the client declared the toolset, and the
@@ -121,6 +137,23 @@ export function tagged(block: any, computer: {
     shape?: string;
     custom: Set<string>;
 } | undefined): any;
+/**
+ * What is wrong with a `settings.gemini.computerUse` block.
+ * @param {any} block - The block.
+ * @returns {string | null} The problem, or null when it is fine.
+ */
+export function problemWith(block: any): string | null;
+/**
+ * The `computerUse` tool sent to Gemini: the desktop environment and the actions the client's toolset leaves out, merged with what the operator set in
+ * `settings.gemini.computerUse`. The operator's `environment` replaces the generated one, its `excludedPredefinedFunctions` are added to the
+ * generated ones (a generated exclusion is never taken away), and `enablePromptInjectionDetection` and `disabledSafetyPolicies` are sent as given.
+ * @param {Set<string>} enabled - The members of the client's tool that are on.
+ * @param {any} [block] - The operator's block (already checked).
+ * @returns {{computerUse: Record<string, any>}} The tool.
+ */
+export function toolOf(enabled: Set<string>, block?: any): {
+    computerUse: Record<string, any>;
+};
 /** The actions Gemini's desktop environment offers (`ENVIRONMENT_DESKTOP`). */
 export const DESKTOP: readonly string[];
 /** Every action that is mapped to Anthropic's tool. */
@@ -131,3 +164,7 @@ export const MEMBERS: readonly string[];
 export const UNMAPPED: readonly string[];
 /** Pixels one scroll click moves; Gemini scrolls by pixels and Anthropic by clicks. */
 export const PIXELS_PER_CLICK: 100;
+/** The environments Gemini's computer use tool takes. */
+export const ENVIRONMENTS: readonly string[];
+/** The safety policies that can be disabled for computer use. */
+export const POLICIES: readonly string[];

@@ -63,7 +63,7 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 
 - Nothing has been run against real Google services (the Gemini API or Vertex AI); the shapes follow Google's API reference and the tests use a local stand-in ([#70](https://github.com/CLDMV/llm-translator/issues/70)).
 - Embeddings and the Live API are not served.
-- Citation and grounding metadata (`groundingMetadata`, `citationMetadata`, `urlContextMetadata`) is not read yet; it waits for the shared citation model ([#16](https://github.com/CLDMV/llm-translator/issues/16)).
+- `urlContextMetadata` (which URLs the URL context tool fetched, with a status) is not carried: it says what was retrieved, not which part of the answer it supports, so it has no citation to give.
 
 ## Amazon Bedrock
 

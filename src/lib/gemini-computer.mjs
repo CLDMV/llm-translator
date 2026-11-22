@@ -18,6 +18,7 @@
  * @module @cldmv/llm-translator/lib/gemini-computer
  */
 import { TranslatorError } from "./errors.mjs";
+import { MARK, resolve as resolveAsks, toolOf as confirmationTool } from "./gemini-confirm.mjs";
 
 /** The actions Gemini's desktop environment offers (`ENVIRONMENT_DESKTOP`). */
 export const DESKTOP = Object.freeze([
@@ -536,18 +537,22 @@ function callOf(block, toolset, custom) {
  * tool), the computer calls of the history become the Gemini actions they came from (`left_click` is `click` on the grid, the calls one Gemini
  * action was split into are one action again), and each result becomes the result of those calls, with its screenshot set apart to be sent as part of
  * the function response. A past call of an action Gemini has no equivalent of (`cursor_position`, `hold_key`, `zoom`) and its result become plain text.
+ * The questions the translator asked the user about actions Gemini flagged (`lib/gemini-confirm`) are resolved first.
  * @param {any} body - Anthropic Messages body.
- * @returns {{ body: any, shape: "toolset" | "classic", enabled: Set<string>, size: {width: number, height: number} | null, custom: Set<string>, images: Map<string, {mimeType: string, data: string}> } | null} The rewritten body and what the conversion needs, or null when the request has no computer tool.
+ * @param {{ confirmationTool?: string }} [options] - `confirmationTool`: `settings.gemini.confirmationTool`.
+ * @returns {{ body: any, shape: "toolset" | "classic", enabled: Set<string>, size: {width: number, height: number} | null, custom: Set<string>, images: Map<string, {mimeType: string, data: string}>, acknowledged: Set<string>, confirm: { tool: {name: string} | null, pending: Set<string> }, local: { id: string, name: string, args: any } | null } | null} The rewritten body and what the conversion needs, or null when the request has no computer tool.
  * @throws {TranslatorError} `unsupported_computer_action` for an action of the history that Gemini has no equivalent of and that is not one of those.
  */
-export function prepare(body) {
+export function prepare(body, options = {}) {
 	const tools = Array.isArray(body?.tools) ? body.tools : [];
 	if (!tools.some(isTool)) return null;
 	const toolset = tools.some(isToolset);
 	const custom = new Set(
 		tools.filter((tool) => !isTool(tool) && (tool.type === undefined || tool.type === "custom")).map((tool) => tool.name)
 	);
-	const messages = Array.isArray(body.messages) ? body.messages : [];
+	const asked = resolveAsks(Array.isArray(body.messages) ? body.messages : [], new Set(["computer", ...MEMBERS]));
+	const messages = asked.messages;
+	const acknowledged = new Set();
 	const zooms = new Set();
 	for (const message of messages) {
 		for (const block of message?.role === "assistant" ? blocks(message.content) : []) {
@@ -572,6 +577,7 @@ export function prepare(body) {
 			else if (group === undefined) content.push(block);
 			else if (!done.has(group)) {
 				done.add(group);
+				if (MARK.test(group.names.at(-1).replace(/__\d+of\d+$/, ""))) acknowledged.add(group.names.at(-1));
 				content.push(...results(group, message.content, images));
 			}
 		}
@@ -589,7 +595,10 @@ export function prepare(body) {
 		enabled: enabledOf(tools),
 		size,
 		custom,
-		images
+		images,
+		acknowledged,
+		confirm: { tool: confirmationTool(tools, options.confirmationTool), pending: asked.pending },
+		local: asked.local
 	};
 }
 
@@ -715,4 +724,86 @@ function results(group, content, images) {
 export function tagged(block, computer) {
 	if (computer?.shape !== "toolset" || block?.type !== "tool_use") return block;
 	return MEMBERS.includes(block.name) && !computer.custom.has(block.name) ? { ...block, toolset_name: "computer" } : block;
+}
+
+/** The environments Gemini's computer use tool takes. */
+export const ENVIRONMENTS = Object.freeze(["ENVIRONMENT_UNSPECIFIED", "ENVIRONMENT_BROWSER", "ENVIRONMENT_MOBILE", "ENVIRONMENT_DESKTOP"]);
+
+/** The safety policies that can be disabled for computer use. */
+export const POLICIES = Object.freeze([
+	"SAFETY_POLICY_UNSPECIFIED",
+	"FINANCIAL_TRANSACTIONS",
+	"SENSITIVE_DATA_MODIFICATION",
+	"COMMUNICATION_TOOL",
+	"ACCOUNT_CREATION",
+	"DATA_MODIFICATION",
+	"USER_CONSENT_MANAGEMENT",
+	"LEGAL_TERMS_AND_AGREEMENTS"
+]);
+
+/** The fields of the `computerUse` tool an operator can set, with the spelling Google's REST examples use as well as the one its reference uses; the first is what is sent. */
+const FIELDS = [
+	["environment", "environment"],
+	["excludedPredefinedFunctions", "excluded_predefined_functions"],
+	["enablePromptInjectionDetection", "enable_prompt_injection_detection"],
+	["disabledSafetyPolicies", "disabled_safety_policies"]
+];
+
+/** The check each field's value has to pass. */
+const VALID = {
+	environment: (value) => ENVIRONMENTS.includes(value),
+	excludedPredefinedFunctions: (value) => Array.isArray(value) && value.every((name) => typeof name === "string" && name !== ""),
+	enablePromptInjectionDetection: (value) => typeof value === "boolean",
+	disabledSafetyPolicies: (value) => Array.isArray(value) && value.every((name) => POLICIES.includes(name))
+};
+
+/**
+ * The fields set in a `settings.gemini.computerUse` block, under their camelCase names (the camelCase spelling wins when both are given).
+ * @param {any} block - The block.
+ * @returns {Record<string, any>} The fields that are set.
+ */
+function fieldsOf(block) {
+	const out = {};
+	for (const [camel, snake] of FIELDS) {
+		const value = block[camel] ?? block[snake];
+		if (value !== undefined) out[camel] = value;
+	}
+	return out;
+}
+
+/**
+ * What is wrong with a `settings.gemini.computerUse` block.
+ * @param {any} block - The block.
+ * @returns {string | null} The problem, or null when it is fine.
+ */
+export function problemWith(block) {
+	if (block === null || typeof block !== "object" || Array.isArray(block)) return "expected an object";
+	const known = FIELDS.flat();
+	const unknown = Object.keys(block).find((key) => !known.includes(key));
+	if (unknown !== undefined) return `unknown field ${unknown}`;
+	for (const [name, value] of Object.entries(fieldsOf(block))) {
+		if (!VALID[name](value)) {
+			return `${name} must be ${name === "environment" ? ENVIRONMENTS.join(", ") : name === "enablePromptInjectionDetection" ? "true or false" : name === "excludedPredefinedFunctions" ? "a list of action names" : `a list of ${POLICIES.join(", ")}`}`;
+		}
+	}
+	return null;
+}
+
+/**
+ * The `computerUse` tool sent to Gemini: the desktop environment and the actions the client's toolset leaves out, merged with what the operator set in
+ * `settings.gemini.computerUse`. The operator's `environment` replaces the generated one, its `excludedPredefinedFunctions` are added to the
+ * generated ones (a generated exclusion is never taken away), and `enablePromptInjectionDetection` and `disabledSafetyPolicies` are sent as given.
+ * @param {Set<string>} enabled - The members of the client's tool that are on.
+ * @param {any} [block] - The operator's block (already checked).
+ * @returns {{computerUse: Record<string, any>}} The tool.
+ */
+export function toolOf(enabled, block = {}) {
+	const set = fieldsOf(block);
+	const out = {
+		environment: set.environment ?? "ENVIRONMENT_DESKTOP",
+		excludedPredefinedFunctions: [...new Set([...excluded(enabled), ...(set.excludedPredefinedFunctions ?? [])])]
+	};
+	if (set.enablePromptInjectionDetection !== undefined) out.enablePromptInjectionDetection = set.enablePromptInjectionDetection;
+	if (set.disabledSafetyPolicies !== undefined) out.disabledSafetyPolicies = [...new Set(set.disabledSafetyPolicies)];
+	return { computerUse: out };
 }

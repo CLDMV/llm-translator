@@ -889,6 +889,68 @@ describe("computer use in the conversion", () => {
 	});
 });
 
+describe("grounding and citations in the conversion", () => {
+	const metadata = {
+		groundingMetadata: {
+			groundingChunks: [{ web: { uri: "https://a.example", title: "A" } }],
+			groundingSupports: [{ segment: { startIndex: 6, endIndex: 11 }, groundingChunkIndices: [0] }]
+		}
+	};
+	const reply = (parts, extra = {}) => ({ candidates: [{ index: 0, content: { parts }, finishReason: "STOP", ...metadata, ...extra }] });
+
+	it("a completion carries the annotations, over text parts that follow each other and across a code block", () => {
+		const out = completion(reply([{ text: "Hello " }, { text: "world" }]));
+		expect(out.choices[0].message.annotations).toEqual([
+			{
+				type: "url_citation",
+				url_citation: { start_index: 6, end_index: 11, title: "A", url: "https://a.example" },
+				citation: { kind: "web", url: "https://a.example", title: "A", span: { start: 6, end: 11 } }
+			}
+		]);
+		const code = completion(
+			reply([{ text: "Hi" }, { executableCode: { language: "PYTHON", code: "x" } }, { text: " yes there" }], {
+				groundingMetadata: {
+					...metadata.groundingMetadata,
+					groundingSupports: [{ segment: { startIndex: 1, endIndex: 4, partIndex: 1 }, groundingChunkIndices: [0] }]
+				}
+			})
+		);
+		const content = code.choices[0].message.content;
+		const span = code.choices[0].message.annotations[0].citation.span;
+		expect(content.slice(span.start, span.end)).toBe("yes");
+		expect(completion(reply([{ text: "x", thought: true }, { text: "Hello world" }])).choices[0].message.annotations).toHaveLength(1);
+		expect(completion(reply([{ text: "Hello world" }], { groundingMetadata: undefined })).choices[0].message.annotations).toBeUndefined();
+	});
+
+	it("the citations setting none leaves them out", () => {
+		expect(completion(reply([{ text: "Hello world" }]), { citations: "none" }).choices[0].message.annotations).toBeUndefined();
+		expect(completion(reply([{ text: "Hello world" }]), { citations: "auto" }).choices[0].message.annotations).toHaveLength(1);
+		const chunker = createChunker({ citations: "none" });
+		expect(chunker.event(reply([{ text: "Hello world" }])).some((entry) => entry.choices[0]?.delta?.annotations)).toBe(false);
+	});
+
+	it("a stream gives them in one chunk before the finish, from the latest metadata seen, spans in the streamed content", () => {
+		const chunker = createChunker({});
+		const first = chunker.event({
+			candidates: [{ index: 0, content: { parts: [{ text: "Hello " }] }, groundingMetadata: { groundingChunks: [] } }]
+		});
+		const second = chunker.event({
+			candidates: [{ index: 0, content: { parts: [{ text: "world" }] }, finishReason: "STOP", ...metadata }]
+		});
+		expect(first.some((entry) => entry.choices[0]?.delta?.annotations)).toBe(false);
+		const chunk = second.find((entry) => entry.choices[0]?.delta?.annotations);
+		expect(chunk.choices[0].delta.annotations[0].citation.span).toEqual({ start: 6, end: 11 });
+		const at = second.indexOf(chunk);
+		expect(second[at + 1].choices[0].finish_reason).toBe("stop");
+		const none = createChunker({});
+		expect(
+			none
+				.event({ candidates: [{ index: 0, content: { parts: [{ text: "x" }] }, finishReason: "STOP" }] })
+				.some((entry) => entry.choices[0]?.delta?.annotations)
+		).toBe(false);
+	});
+});
+
 describe("generated audio as a link", () => {
 	const audio = { inlineData: { mimeType: "audio/L16;codec=pcm;rate=24000", data: Buffer.from([1, 2]).toString("base64") } };
 	const reply = { candidates: [{ index: 0, content: { parts: [audio] }, finishReason: "STOP" }] };

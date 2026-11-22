@@ -17,6 +17,7 @@
  * @fileoverview Google Gemini `generateContent` reply to an Anthropic Messages response.
  * @module @cldmv/llm-translator/convert
  */
+import { resolve } from "../../../../../../../lib/settings.mjs";
 import { completion } from "../../../../../../../lib/gemini.mjs";
 import { tagged } from "../../../../../../../lib/gemini-computer.mjs";
 import { response as fromChat } from "../../../../../openai/chat/to/anthropic/messages/response.mjs";
@@ -33,7 +34,14 @@ import { response as fromChat } from "../../../../../openai/chat/to/anthropic/me
 export function response(reply, state, settings) {
 	// Generated images have no place in an Anthropic message, so they are written into the text as markdown images.
 	const message = fromChat(
-		completion(reply, { parallel: state?.parallel, images: "text", cacheCreated: state?.cache?.created, computer: state?.computer }),
+		completion(reply, {
+			citations: resolve(settings).citations,
+			parallel: state?.parallel,
+			images: "text",
+			cacheCreated: state?.cache?.created,
+			computer: state?.computer,
+			confirm: state?.confirm
+		}),
 		state,
 		settings
 	);

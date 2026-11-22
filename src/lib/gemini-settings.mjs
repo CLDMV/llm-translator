@@ -18,6 +18,8 @@
  * @module @cldmv/llm-translator/lib/gemini-settings
  */
 
+import { problemWith } from "./gemini-computer.mjs";
+
 /** The keys of the `gemini` setting and the check each value has to pass. */
 const CHECKS = {
 	safetySettings: (value) =>
@@ -30,7 +32,9 @@ const CHECKS = {
 	responseModalities: (value) => Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry !== ""),
 	imageConfig: isObject,
 	speechConfig: isObject,
-	mediaResolution: (value) => typeof value === "string" && value !== ""
+	mediaResolution: (value) => typeof value === "string" && value !== "",
+	computerUse: (value) => problemWith(value) === null,
+	confirmationTool: (value) => typeof value === "string" && value !== ""
 };
 
 /** What each key expects, for the error message. */
@@ -43,7 +47,9 @@ const EXPECTED = {
 	responseModalities: 'a list such as ["TEXT", "IMAGE"]',
 	imageConfig: "an object",
 	speechConfig: "an object",
-	mediaResolution: "a string"
+	mediaResolution: "a string",
+	computerUse: "an object of computer use tool fields",
+	confirmationTool: "the name of a tool the request declares"
 };
 
 /**
@@ -64,7 +70,7 @@ export function check(value) {
 	if (!isObject(value)) return "expected an object";
 	for (const [key, entry] of Object.entries(value)) {
 		if (!Object.hasOwn(CHECKS, key)) return `unknown key ${key}`;
-		if (!CHECKS[key](entry)) return `${key} must be ${EXPECTED[key]}`;
+		if (!CHECKS[key](entry)) return key === "computerUse" ? `computerUse: ${problemWith(entry)}` : `${key} must be ${EXPECTED[key]}`;
 	}
 	return null;
 }

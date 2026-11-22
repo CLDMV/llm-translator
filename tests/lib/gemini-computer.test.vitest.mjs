@@ -20,8 +20,10 @@ import { describe, expect, it } from "vitest";
 import {
 	ACTIONS,
 	DESKTOP,
+	ENVIRONMENTS,
 	MEMBERS,
 	PIXELS_PER_CLICK,
+	POLICIES,
 	UNMAPPED,
 	converter,
 	dimensions,
@@ -30,6 +32,8 @@ import {
 	gemini,
 	ids,
 	inverse,
+	problemWith,
+	toolOf,
 	isTool,
 	isToolset,
 	prepare,
@@ -786,5 +790,59 @@ describe("past calls of actions Gemini has no equivalent of", () => {
 				messages: [{ role: "assistant", content: [{ type: "tool_use", id: "x", name: "computer", input: { action: "hold_key" } }] }]
 			}).body.messages[0].content[0].text
 		).toBe("[Computer action hold_key]");
+	});
+});
+
+describe("the operator's computerUse block", () => {
+	const all = new Set(MEMBERS);
+	const some = new Set(MEMBERS.slice(0, 3));
+	const generated = excluded(some);
+
+	it("builds the tool from the client's tool alone when the operator sets nothing", () => {
+		expect(generated.length).toBeGreaterThan(0);
+		expect(toolOf(all)).toEqual({ computerUse: { environment: "ENVIRONMENT_DESKTOP", excludedPredefinedFunctions: excluded(all) } });
+		expect(toolOf(some, {})).toEqual({ computerUse: { environment: "ENVIRONMENT_DESKTOP", excludedPredefinedFunctions: generated } });
+	});
+
+	it("adds the injection check and the disabled policies as given, once each, under Google's names", () => {
+		expect(
+			toolOf(all, {
+				enablePromptInjectionDetection: false,
+				disabledSafetyPolicies: ["FINANCIAL_TRANSACTIONS", "FINANCIAL_TRANSACTIONS", "ACCOUNT_CREATION"]
+			}).computerUse
+		).toMatchObject({
+			enablePromptInjectionDetection: false,
+			disabledSafetyPolicies: ["FINANCIAL_TRANSACTIONS", "ACCOUNT_CREATION"]
+		});
+		expect(toolOf(all, { enable_prompt_injection_detection: true, disabled_safety_policies: [] }).computerUse).toMatchObject({
+			enablePromptInjectionDetection: true,
+			disabledSafetyPolicies: []
+		});
+		expect(toolOf(all).computerUse).not.toHaveProperty("enablePromptInjectionDetection");
+		expect(toolOf(all).computerUse).not.toHaveProperty("disabledSafetyPolicies");
+	});
+
+	it("the operator's environment wins, and its exclusions are added to the generated ones, never replacing them", () => {
+		const merged = toolOf(some, {
+			environment: "ENVIRONMENT_BROWSER",
+			excludedPredefinedFunctions: ["wait_5_seconds", generated[0]]
+		}).computerUse;
+		expect(merged.environment).toBe("ENVIRONMENT_BROWSER");
+		expect(merged.excludedPredefinedFunctions).toEqual([...generated, "wait_5_seconds"]);
+		expect(toolOf(all, { excluded_predefined_functions: ["scroll_at"] }).computerUse.excludedPredefinedFunctions).toEqual([
+			...excluded(all),
+			"scroll_at"
+		]);
+	});
+
+	it("the camelCase spelling wins when both are given, and the lists of names are the ones Google has", () => {
+		expect(
+			toolOf(all, { environment: "ENVIRONMENT_MOBILE", enablePromptInjectionDetection: true, enable_prompt_injection_detection: false })
+				.computerUse
+		).toMatchObject({ environment: "ENVIRONMENT_MOBILE", enablePromptInjectionDetection: true });
+		expect(ENVIRONMENTS).toHaveLength(4);
+		expect(POLICIES).toHaveLength(8);
+		expect(problemWith({})).toBeNull();
+		expect(problemWith("x")).toBe("expected an object");
 	});
 });

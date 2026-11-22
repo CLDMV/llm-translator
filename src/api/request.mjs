@@ -295,7 +295,7 @@ async function prepare(c, body, options, picked) {
 	// A driver that signs its calls (Amazon Bedrock's SigV4) sees the finished URL, headers and body, and returns the headers to send.
 	if (driver.sign) headers = await driver.sign({ endpoint, protocol, method: "POST", url, headers, body: upstream, stream });
 	// A driver whose server caches (Gemini's cached contents) turns the conversation up to a `cache_control` breakpoint into a cache and sends only what follows it; a token count sends the whole prompt.
-	if (driver.cache && converted?.cache && options.tokens !== true) {
+	if (driver.cache && converted?.cache && converted.local === undefined && options.tokens !== true) {
 		upstream = await driver.cache({
 			endpoint,
 			model,

@@ -38,6 +38,7 @@ export async function* stream(source, state, settings) {
 		includeUsage: state?.includeUsage ?? true,
 		candidates: state?.candidates ?? 1,
 		parallel: state?.parallel,
+		citations: resolve(settings).citations,
 		audio: state?.audio,
 		cacheCreated: state?.cache?.created
 	});

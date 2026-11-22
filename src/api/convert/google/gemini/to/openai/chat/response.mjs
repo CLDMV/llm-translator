@@ -34,6 +34,7 @@ export function response(reply, state, settings) {
 		reasoningField: resolve(settings).reasoningField,
 		model: state?.model,
 		parallel: state?.parallel,
+		citations: resolve(settings).citations,
 		audio: state?.audio,
 		cacheCreated: state?.cache?.created
 	});

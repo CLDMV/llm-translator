@@ -37,8 +37,10 @@ export function stream(source, state, settings) {
 	const chunker = createChunker({
 		reasoningField: resolve(settings).reasoningField,
 		parallel: state?.parallel,
+		citations: resolve(settings).citations,
 		images: "text",
 		computer: state?.computer,
+		confirm: state?.confirm,
 		cacheCreated: state?.cache?.created
 	});
 	return (async function* () {

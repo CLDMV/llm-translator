@@ -22,7 +22,7 @@ import { chatBody } from "../../../../../../../lib/gemini.mjs";
 import { breakpoint, planOf, upTo } from "../../../../../../../lib/gemini-cache.mjs";
 import { prepare } from "../../../../../../../lib/gemini-images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
-import { enabledOf, excluded, isTool, prepare as prepareComputer } from "../../../../../../../lib/gemini-computer.mjs";
+import { enabledOf, isTool, prepare as prepareComputer, toolOf } from "../../../../../../../lib/gemini-computer.mjs";
 import { request as toChat } from "../../openai/chat/request.mjs";
 
 /**
@@ -71,9 +71,10 @@ async function document(block, ctx) {
  * The Gemini built-in tools the Anthropic server tools of a request stand for: `web_search` is Google Search, `web_fetch` is URL context and
  * `code_execution` is code execution.
  * @param {any[] | undefined} tools - The request's `tools`.
+ * @param {any} [computerUse] - The operator's `settings.gemini.computerUse`, merged into the computer use tool.
  * @returns {{ tools: any[], names: Set<string> }} The built-in tools (one of each) and the names of the server tools they replace.
  */
-function builtin(tools) {
+function builtin(tools, computerUse) {
 	const found = [];
 	const names = new Set();
 	const list = Array.isArray(tools) ? tools : [];
@@ -84,8 +85,7 @@ function builtin(tools) {
 		if (!found.includes(match.tool)) found.push(match.tool);
 	}
 	// Anthropic's computer tool is a client tool, but Gemini's side of it is a built-in tool: the desktop environment, without the actions the client switched off.
-	if (list.some(isTool))
-		found.push({ computerUse: { environment: "ENVIRONMENT_DESKTOP", excludedPredefinedFunctions: excluded(enabledOf(list)) } });
+	if (list.some(isTool)) found.push(toolOf(enabledOf(list), computerUse));
 	return { tools: found, names };
 }
 
@@ -104,7 +104,7 @@ function builtin(tools) {
 export async function request(body, settings, context) {
 	const s = resolve(settings);
 	// The computer tool: its history is rewritten into Gemini's actions and its results carry the screenshots (`lib/gemini-computer`).
-	const computer = prepareComputer(body);
+	const computer = prepareComputer(body, { confirmationTool: s.gemini.confirmationTool });
 	const tools = body.tools;
 	if (computer !== null) body = computer.body;
 	// With `documents: "extract"` and images on, and no converter of the upstream's own, PDFs go through whole.
@@ -112,15 +112,24 @@ export async function request(body, settings, context) {
 	const { body: chat, state } = await toChat(body, { ...s, ...NATIVE, ...(raw ? { documentConverter: document } : {}) }, context);
 	const asked = body.metadata?.sampling;
 	const sampling = { ...s.sampling, ...(asked !== null && typeof asked === "object" && !Array.isArray(asked) ? asked : {}) };
-	const server = builtin(tools);
+	const server = builtin(tools, s.gemini.computerUse);
 	// A computer-use tool the operator named in the setting is the one that is sent.
 	if (s.gemini.tools?.some((entry) => Object.hasOwn(entry, "computerUse")))
 		server.tools = server.tools.filter((entry) => !Object.hasOwn(entry, "computerUse"));
 	state.dropped = state.dropped.filter((name) => !server.names.has(name));
 	state.parallel = chat.parallel_tool_calls !== false;
 	state.candidates = 1;
-	if (computer !== null)
+	if (computer !== null) {
 		state.computer = { size: computer.size, custom: computer.custom, shape: computer.shape, enabled: computer.enabled };
+		state.confirm = computer.confirm;
+		// The user allowed an action Gemini flagged: the reply is that action, made here (see `call` in `api/send`), not another request.
+		if (computer.local !== null) {
+			const { id, name, args } = computer.local;
+			state.local = {
+				candidates: [{ index: 0, content: { role: "model", parts: [{ functionCall: { id, name, args } }] }, finishReason: "STOP" }]
+			};
+		}
+	}
 	const make = async (input, dropped) =>
 		chatBody(await prepare(input, { options: s.documentUrls, report: context?.report, signal: context?.signal }), {
 			dropped,
@@ -130,7 +139,7 @@ export async function request(body, settings, context) {
 			marker: s.toolErrors ? s.toolErrorMarker : undefined,
 			model: context?.model,
 			gemini: { ...s.gemini, builtin: server.tools },
-			...(computer === null ? {} : { computer: { images: computer.images } })
+			...(computer === null ? {} : { computer: { images: computer.images, acknowledged: computer.acknowledged } })
 		});
 	const out = await make(chat, state.dropped);
 	// A `cache_control` breakpoint: the request up to it is converted on its own to see what a cached content would hold.

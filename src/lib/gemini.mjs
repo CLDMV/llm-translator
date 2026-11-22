@@ -24,6 +24,8 @@ import { reasoningOf } from "./thinking.mjs";
 import { gemini as schemaOf } from "./gemini-schema.mjs";
 import { FORMATS as ENCODED, encode } from "./gemini-audio.mjs";
 import { ACTIONS, converter, ids } from "./gemini-computer.mjs";
+import { annotationsOf } from "./gemini-grounding.mjs";
+import { hashOf, idOf, inputOf, lineOf, plainText } from "./gemini-confirm.mjs";
 
 /** `format` of the `reasoning_details` items that carry a Gemini `thoughtSignature` (`data`) and the part it belongs to (`for`: `text`, `thought` or `call`, with the tool call `id` for a call, and `rest` for text and thought: the characters of the text that follow the part). */
 export const FORMAT = "google-gemini-v1";
@@ -359,9 +361,10 @@ function assistantParts(message, dropped, plain, names) {
  * @param {string | undefined} marker - Text that marks a failed tool result.
  * @param {boolean} plain - Write tool calls and results as text.
  * @param {Map<string, {mimeType: string, data: string}>} [shots] - Screenshots to send as the parts of the function response of the call with that id (computer use).
+ * @param {Set<string>} [acknowledged] - Ids of the calls whose action Gemini flagged and the user confirmed: their function response says `safety_acknowledgement`.
  * @returns {{contents: any[], system: any[]}} Gemini contents and system parts.
  */
-function conversationOf(list, dropped, marker, plain, shots) {
+function conversationOf(list, dropped, marker, plain, shots, acknowledged) {
 	const contents = [];
 	const system = [];
 	const names = new Map();
@@ -385,6 +388,7 @@ function conversationOf(list, dropped, marker, plain, shots) {
 				response: failed ? { error: output } : { output }
 			};
 			const shot = shots?.get(message.tool_call_id);
+			if (acknowledged?.has(message.tool_call_id)) result.response = { ...result.response, safety_acknowledgement: true };
 			if (shot !== undefined) result.parts = [{ inlineData: { mimeType: shot.mimeType, data: shot.data } }];
 			parts = [plain ? { text: textOfResult(result) } : { functionResponse: result }, ...found.filter((part) => part.text === undefined)];
 		} else if (message?.role === "user") parts = partsOf(message.content, dropped);
@@ -547,7 +551,7 @@ function toolsOf(body, builtin, dropped) {
  * `responseModalities` and `speechConfig`. What Gemini has no field for (`logit_bias`, reasoning text in history that has no signature, ...) is left out and named
  * in `dropped`. A request without tools has its past tool calls and results written as text.
  * @param {any} body - Chat Completions request body.
- * @param {{ dropped?: string[], sampling?: Record<string, any>, thinkingBudget?: number, thinkingDynamic?: boolean, marker?: string, model?: string, gemini?: any, computer?: {images: Map<string, {mimeType: string, data: string}>} }} [context] - `computer` is set for a request that uses the computer tool: its history is function calls even when no function tool is declared, and `images` are the screenshots of the results;  `model` is the model the request goes to (default: the body's `model`), which decides between a thinking budget and a level; `dropped` collects the names of what was left out; `sampling` are extension fields for `generationConfig`; `thinkingBudget` is the token budget of enabled thinking and `thinkingDynamic` says the client asked for the model to decide; `marker` is the text that marks a failed tool result; `gemini` is the `gemini` setting (safety settings, built-in tools, a cached content, output modalities and the thinking control) with `builtin`, the built-in tools the request itself asked for.
+ * @param {{ dropped?: string[], sampling?: Record<string, any>, thinkingBudget?: number, thinkingDynamic?: boolean, marker?: string, model?: string, gemini?: any, computer?: {images: Map<string, {mimeType: string, data: string}>, acknowledged?: Set<string>} }} [context] - `computer` is set for a request that uses the computer tool: its history is function calls even when no function tool is declared, and `images` are the screenshots of the results;  `model` is the model the request goes to (default: the body's `model`), which decides between a thinking budget and a level; `dropped` collects the names of what was left out; `sampling` are extension fields for `generationConfig`; `thinkingBudget` is the token budget of enabled thinking and `thinkingDynamic` says the client asked for the model to decide; `marker` is the text that marks a failed tool result; `gemini` is the `gemini` setting (safety settings, built-in tools, a cached content, output modalities and the thinking control) with `builtin`, the built-in tools the request itself asked for.
  * @returns {any} `generateContent` request body.
  * @throws {TranslatorError} `invalid_request` for an audio output format Gemini cannot produce.
  */
@@ -560,7 +564,8 @@ export function chatBody(body, context = {}) {
 		dropped,
 		context.marker,
 		!offered,
-		context.computer?.images
+		context.computer?.images,
+		context.computer?.acknowledged
 	);
 	const out = { contents };
 	if (system.length > 0) out.systemInstruction = { parts: system };
@@ -805,8 +810,8 @@ function codeText(part) {
 /**
  * Walks the parts of one candidate and gathers what a Chat Completions message holds. Shared by the JSON and the streamed conversion: a streamed
  * reply feeds it part by part and asks for the signatures at the end, when the length of the text is known.
- * @param {{ field?: string, parallel?: boolean, images?: "images" | "text", computer?: {size: {width: number, height: number} | null, custom: Set<string>, shape?: "toolset" | "classic", enabled?: Set<string>} }} [options] - `computer` turns Gemini's computer actions into Anthropic's calls (`size` is the size of the latest screenshot, `custom` the names of the request's own tools); `parallel` false keeps only the first function call; `images` says whether generated images go in `images` or as markdown in the text.
- * @returns {{ add: (part: any) => any, finish: () => any }} `add` takes a part and returns what it contributed (`text`, `thought`, `call`, `image`, `audio`, `signature`); `finish` gives the signature items.
+ * @param {{ field?: string, parallel?: boolean, images?: "images" | "text", computer?: {size: {width: number, height: number} | null, custom: Set<string>, shape?: "toolset" | "classic", enabled?: Set<string>}, confirm?: {tool: {name: string} | null, pending: Set<string>} }} [options] - `computer` turns Gemini's computer actions into Anthropic's calls (`size` is the size of the latest screenshot, `custom` the names of the request's own tools); `parallel` false keeps only the first function call; `images` says whether generated images go in `images` or as markdown in the text.
+ * @returns {{ add: (part: any) => any, citations: (metadata: {groundingMetadata?: any, citationMetadata?: any}) => any[], finish: () => any }} `add` takes a part and returns what it contributed (`text`, `thought`, `call`, `image`, `audio`, `signature`); `finish` gives the signature items.
  */
 function gatherer(options = {}) {
 	let text = 0;
@@ -814,37 +819,75 @@ function gatherer(options = {}) {
 	let calls = 0;
 	let seen = 0;
 	let carried;
+	// The text parts, adjacent ones merged, with where each starts in the content: the spans of grounding and citation metadata are in them.
+	const parts = [];
+	let follows = false;
+	// Set when a call Gemini flagged for confirmation was asked about: the calls after it are not passed on.
+	let held = false;
 	const pending = [];
 	// With the computer tool, Gemini's actions become Anthropic's `computer` calls (`lib/gemini-computer`).
 	const computer = options.computer ? converter(options.computer.size, options.computer.enabled) : null;
 	return {
 		add(part) {
 			const got = {};
+			const wasText = follows;
+			follows = false;
 			let own = text;
 			let kind = "text";
 			if (part?.functionCall) {
-				if (options.parallel === false && seen > 0) return got;
+				if ((options.parallel === false && seen > 0) || held) return got;
 				seen++;
 				const given = part.functionCall.id;
-				const base = typeof given === "string" && given !== "" ? given : callId();
+				let base = typeof given === "string" && given !== "" ? given : callId();
 				const name = part.functionCall.name;
-				const args = part.functionCall.args ?? {};
+				let args = part.functionCall.args ?? {};
+				// An action Gemini flagged (`safety_decision`) is asked about first (`lib/gemini-confirm`), unless the user already agreed to this very call.
+				let asked = false;
+				if (options.confirm !== undefined && args.safety_decision !== undefined) {
+					const { safety_decision: decision, ...rest } = args;
+					args = rest;
+					if (decision?.decision === "require_confirmation") {
+						if (options.confirm.pending.has(hashOf(name, args))) base = idOf(base, name, args);
+						else {
+							asked = held = true;
+							const gap = text > 0 ? "\n\n" : "";
+							if (options.confirm.tool === null) {
+								got.text = gap + plainText(name, args, decision.explanation);
+								got.calls = [];
+							} else {
+								base = idOf(base, name, args);
+								got.text = gap + lineOf(name, args);
+								got.calls = [
+									{
+										index: calls++,
+										id: base,
+										type: "function",
+										function: { name: options.confirm.tool.name, arguments: JSON.stringify(inputOf(name, args, decision.explanation)) }
+									}
+								];
+								got.base = base;
+							}
+						}
+					}
+				}
 				let made = [{ name, args }];
-				if (computer !== null && ACTIONS.has(name) && !options.computer.custom.has(name)) {
+				if (!asked && computer !== null && ACTIONS.has(name) && !options.computer.custom.has(name)) {
 					made = computer.push(name, args).map((input) => {
 						// The toolset's calls are named by the member, with no `action` in the input; the older tool's are `computer` with `input.action`.
 						const { action, ...rest } = input;
 						return options.computer.shape === "toolset" ? { name: action, args: rest } : { name: "computer", args: input };
 					});
 				}
-				const named = ids(base, made.length);
-				got.calls = made.map((call, at) => ({
-					index: calls++,
-					id: named[at],
-					type: "function",
-					function: { name: call.name, arguments: JSON.stringify(call.args) }
-				}));
-				got.base = base;
+				if (!asked) {
+					const named = ids(base, made.length);
+					got.calls = made.map((call, at) => ({
+						index: calls++,
+						id: named[at],
+						type: "function",
+						function: { name: call.name, arguments: JSON.stringify(call.args) }
+					}));
+					got.base = base;
+				}
 			} else if (part?.thought === true && typeof part.text === "string") {
 				got.thought = part.text;
 				thought += part.text.length;
@@ -852,6 +895,9 @@ function gatherer(options = {}) {
 				kind = "thought";
 			} else if (typeof part?.text === "string") {
 				got.text = part.text;
+				follows = true;
+				if (wasText) parts.at(-1).text += part.text;
+				else parts.push({ text: part.text, at: text });
 				text += part.text.length;
 				own = text;
 			} else if (part?.executableCode || part?.codeExecutionResult) {
@@ -876,6 +922,12 @@ function gatherer(options = {}) {
 			} else if (signature !== undefined) pending.push({ data: signature, kind, end: own });
 			return got;
 		},
+		/**
+		 * The citations of a candidate's metadata as annotations.
+		 * @param {{groundingMetadata?: any, citationMetadata?: any}} metadata - The candidate's metadata.
+		 * @returns {any[]} Annotations.
+		 */
+		citations: (metadata) => annotationsOf(metadata, parts),
 		finish() {
 			computer?.finish();
 			return {
@@ -932,7 +984,7 @@ function audioLink(pieces, format) {
  * One candidate as a Chat Completions choice.
  * @param {any} candidate - Gemini candidate.
  * @param {number} index - Choice index.
- * @param {{ field: string, parallel?: boolean, images?: "images" | "text", audio?: string, computer?: any }} options - Where the reasoning goes, whether parallel calls are kept, where generated images go and the audio format asked for.
+ * @param {{ field: string, citations?: "auto" | "none", parallel?: boolean, images?: "images" | "text", audio?: string, computer?: any }} options - Where the reasoning goes, whether parallel calls are kept, where generated images go and the audio format asked for.
  * @returns {any} Choice.
  */
 function choiceOf(candidate, index, options) {
@@ -959,6 +1011,8 @@ function choiceOf(candidate, index, options) {
 	}
 	const message = { role: "assistant", content: text };
 	if (thought !== "") message[options.field] = thought;
+	const cited = options.citations === "none" ? [] : gather.citations(candidate ?? {});
+	if (cited.length > 0) message.annotations = cited;
 	const { signatures } = gather.finish();
 	if (signatures.length > 0) message.reasoning_details = signatures;
 	if (calls.length > 0) message.tool_calls = calls;
@@ -980,17 +1034,19 @@ function choiceOf(candidate, index, options) {
  * audio is `audio`, code and its output are fenced blocks in the text, `logprobsResult` is `logprobs`, `finishReason` becomes `finish_reason` and
  * `usageMetadata` becomes `usage`. A prompt Gemini blocked (`promptFeedback.blockReason`, no candidates) is an empty reply that was filtered.
  * @param {any} reply - Parsed `generateContent` reply.
- * @param {{ reasoningField?: string, model?: string, cacheCreated?: number, parallel?: boolean, images?: "images" | "text", audio?: string, computer?: {size: {width: number, height: number} | null, custom: Set<string>, shape?: "toolset" | "classic", enabled?: Set<string>} }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `cacheCreated` is the tokens this request wrote to a cached content; `parallel` false keeps only the first function call; `images` says where generated images and audio go (default `images` and `audio`; `text` writes them into the text as data URI links); `audio` is the format asked for; `computer` turns Gemini's computer actions into Anthropic's calls.
+ * @param {{ reasoningField?: string, model?: string, cacheCreated?: number, citations?: "auto" | "none", parallel?: boolean, images?: "images" | "text", audio?: string, computer?: {size: {width: number, height: number} | null, custom: Set<string>, shape?: "toolset" | "classic", enabled?: Set<string>}, confirm?: {tool: {name: string} | null, pending: Set<string>} }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `cacheCreated` is the tokens this request wrote to a cached content; `parallel` false keeps only the first function call; `images` says where generated images and audio go (default `images` and `audio`; `text` writes them into the text as data URI links); `audio` is the format asked for; `computer` turns Gemini's computer actions into Anthropic's calls; `confirm` says how an action Gemini flagged is asked about (`tool` is the tool that asks, null for plain text) and which calls the user already agreed to (`pending`, hashes).
  * @returns {any} `chat.completion` object.
  * @throws {TranslatorError} `invalid_upstream_response` (502) when the reply has no candidate and no block reason.
  */
 export function completion(reply, options = {}) {
 	const spec = {
+		citations: options.citations,
 		field: options.reasoningField ?? "reasoning",
 		parallel: options.parallel,
 		images: options.images,
 		audio: options.audio?.toLowerCase(),
-		computer: options.computer
+		computer: options.computer,
+		confirm: options.confirm
 	};
 	let choices;
 	if (Array.isArray(reply?.candidates) && reply.candidates.length > 0) {
@@ -1022,7 +1078,7 @@ export function completion(reply, options = {}) {
  * ends that candidate. One chunker is for one reply: it keeps the completion id (so every chunk carries the same one) and the numbering of tool
  * calls of each candidate. The signatures of text and thought are given at the end of a candidate, when the length of its text is known. An
  * `error` object in the stream gives one `{ error }` chunk.
- * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, cacheCreated?: number, candidates?: number, parallel?: boolean, images?: "images" | "text", audio?: string, computer?: {size: {width: number, height: number} | null, custom: Set<string>, shape?: "toolset" | "classic", enabled?: Set<string>} }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `cacheCreated` is the tokens this request wrote to a cached content; `candidates` is how many candidates are streamed (default 1; the others are ignored); `parallel` false keeps only the first function call of a candidate; `images` says where generated images go; `audio` is the format asked for.
+ * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, cacheCreated?: number, citations?: "auto" | "none", candidates?: number, parallel?: boolean, images?: "images" | "text", audio?: string, computer?: {size: {width: number, height: number} | null, custom: Set<string>, shape?: "toolset" | "classic", enabled?: Set<string>}, confirm?: {tool: {name: string} | null, pending: Set<string>} }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `cacheCreated` is the tokens this request wrote to a cached content; `candidates` is how many candidates are streamed (default 1; the others are ignored); `parallel` false keeps only the first function call of a candidate; `images` says where generated images go; `audio` is the format asked for.
  * @returns {{ event: (data: any) => any[], finished: () => boolean, usage: () => any }} `event` gives the chunks one stream chunk produces, `finished` says whether every candidate ended (a `finishReason`, a blocked prompt, or a failure) and `usage` is the latest `usageMetadata`.
  */
 export function createChunker(options = {}) {
@@ -1037,7 +1093,8 @@ export function createChunker(options = {}) {
 	let counted = false;
 	let usage;
 	const state = (index) => {
-		if (!states.has(index)) states.set(index, { started: false, done: false, text: "", gather: gatherer(options), audio: [], calls: 0 });
+		if (!states.has(index))
+			states.set(index, { started: false, done: false, text: "", gather: gatherer(options), audio: [], calls: 0, meta: {} });
 		return states.get(index);
 	};
 	const make = (index, delta, finish = null, extra = {}) => ({
@@ -1111,12 +1168,16 @@ export function createChunker(options = {}) {
 					}
 					if (got.audio !== undefined) own.audio.push(got.audio);
 				}
+				// Grounding and citation metadata usually comes with the last chunk; the latest of each is kept.
+				for (const key of ["groundingMetadata", "citationMetadata"]) if (candidate[key] !== undefined) own.meta[key] = candidate[key];
 				const logprobs = logprobsOf(candidate.logprobsResult);
 				if (logprobs !== undefined) out.push(...first(index), make(index, {}, null, { logprobs }));
 				if (typeof candidate.finishReason === "string") {
 					own.done = true;
 					const note = noteOf(candidate);
 					if (note !== "") out.push(...first(index), make(index, { content: `${own.text === "" ? "" : "\n\n"}${note}` }));
+					const cited = options.citations === "none" ? [] : own.gather.citations(own.meta);
+					if (cited.length > 0) out.push(...first(index), make(index, { annotations: cited }));
 					const { signatures } = own.gather.finish();
 					if (signatures.length > 0) out.push(...first(index), make(index, { reasoning_details: signatures }));
 					if (own.audio.length > 0) {
