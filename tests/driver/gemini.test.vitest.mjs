@@ -1180,3 +1180,179 @@ describe("cached contents for a cache_control breakpoint", () => {
 		expect(named.call.body.cachedContent).toBe("cachedContents/mine");
 	});
 });
+
+describe("computer use: an Anthropic client and a Gemini model", () => {
+	/** A PNG header of 2000 by 1000 pixels. */
+	const header = Buffer.alloc(33);
+	Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header);
+	header.writeUInt32BE(13, 8);
+	header.write("IHDR", 12);
+	header.writeUInt32BE(2000, 16);
+	header.writeUInt32BE(1000, 20);
+	const SHOT = header.toString("base64");
+	const computer = { type: "computer_20250124", name: "computer", display_width_px: 2000, display_height_px: 1000 };
+	const image = { type: "image", source: { type: "base64", media_type: "image/png", data: SHOT } };
+	const ask = (messages, extra = {}) => ({ model: MODEL, max_tokens: 64, tools: [computer], messages, ...extra });
+	const first = [{ role: "user", content: "open the settings" }];
+	const call = (name, args, id = "g1", signature) => ({
+		functionCall: { id, name, args },
+		...(signature === undefined ? {} : { thoughtSignature: signature })
+	});
+	const toolUses = (out) => out.body.content.filter((block) => block.type === "tool_use");
+
+	it("offers Gemini's computer tool for the desktop, not as a function, and takes the screenshot as part of the response", async () => {
+		const messages = [
+			...first,
+			{ role: "assistant", content: [{ type: "tool_use", id: "t1", name: "computer", input: { action: "screenshot" } }] },
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [image] }] }
+		];
+		const { call: sent } = await run("anthropic", ask(messages), ok(content([call("click", { x: 500, y: 500 })])), undefined, "computer");
+		expect(sent.body.tools).toEqual([{ computerUse: { environment: "ENVIRONMENT_DESKTOP", excludedPredefinedFunctions: [] } }]);
+		expect(sent.body.contents[1]).toEqual({
+			role: "model",
+			parts: [{ functionCall: { id: "t1", name: "take_screenshot", args: {} }, thoughtSignature: "skip_thought_signature_validator" }]
+		});
+		expect(sent.body.contents[2]).toEqual({
+			role: "user",
+			parts: [
+				{
+					functionResponse: {
+						id: "t1",
+						name: "take_screenshot",
+						response: { output: "OK" },
+						parts: [{ inlineData: { mimeType: "image/png", data: SHOT } }]
+					}
+				}
+			]
+		});
+	});
+
+	it("turns a click into a pixel click on the latest screenshot, and an action of several calls into one turn", async () => {
+		const messages = [
+			...first,
+			{ role: "assistant", content: [{ type: "tool_use", id: "t1", name: "computer", input: { action: "screenshot" } }] },
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [image] }] }
+		];
+		const clicked = await run(
+			"anthropic",
+			ask(messages),
+			ok(content([call("click", { x: 500, y: 250, intent: "x" }, "g1", "SIG")])),
+			undefined,
+			"computer"
+		);
+		expect(toolUses(clicked.out)).toEqual([
+			{ type: "tool_use", id: "g1", name: "computer", input: { action: "left_click", coordinate: [1000, 250] } }
+		]);
+		expect(clicked.out.body.stop_reason).toBe("tool_use");
+		const typed = await run(
+			"anthropic",
+			ask(messages),
+			ok(content([call("type", { text: "hello", press_enter: true }, "g2", "SIG2")])),
+			undefined,
+			"computer"
+		);
+		expect(toolUses(typed.out).map((block) => [block.id, block.input])).toEqual([
+			["g2__0of2", { action: "type", text: "hello" }],
+			["g2__1of2", { action: "key", text: "Return" }]
+		]);
+		// The client does both and answers both; Gemini sees one `type` call and one response, with the screenshot of the last.
+		const answered = [
+			...messages,
+			{ role: "assistant", content: typed.out.body.content },
+			{
+				role: "user",
+				content: [
+					{ type: "tool_result", tool_use_id: "g2__0of2", content: "OK" },
+					{ type: "tool_result", tool_use_id: "g2__1of2", content: [image] }
+				]
+			}
+		];
+		const next = await run("anthropic", ask(answered), ok(content([{ text: "done" }])), undefined, "computer");
+		expect(next.call.body.contents.slice(3)).toEqual([
+			{
+				role: "model",
+				parts: [{ functionCall: { id: "g2", name: "type", args: { text: "hello", press_enter: true } }, thoughtSignature: "SIG2" }]
+			},
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "g2",
+							name: "type",
+							response: { output: "OK" },
+							parts: [{ inlineData: { mimeType: "image/png", data: SHOT } }]
+						}
+					}
+				]
+			}
+		]);
+	});
+
+	it("a Gemini turn with no screenshot to scale by is an error, and a screenshot action is not", async () => {
+		const none = await run("anthropic", ask(first), ok(content([call("click", { x: 1, y: 1 })])), undefined, "computer");
+		expect(none.out.status).toBe(502);
+		expect(none.out.body.error.message).toMatch(/no screenshot yet/);
+		const shot = await run("anthropic", ask(first), ok(content([call("take_screenshot", {})])), undefined, "computer");
+		expect(toolUses(shot.out)[0].input).toEqual({ action: "screenshot" });
+	});
+
+	it("streams a key held for a click as one click with a modifier, even when the calls come in separate chunks, and ends the turn on a key that is never closed", async () => {
+		const messages = [{ role: "user", content: [{ type: "text", text: "go" }, image] }];
+		const frames = [
+			content([call("key_down", { key: "Control" }, "k1", "SIG")], { finishReason: undefined }, null),
+			content([call("click", { x: 500, y: 500 }, "k2")], { finishReason: undefined }, null),
+			content([call("key_up", { key: "Control" }, "k3")], {}, { promptTokenCount: 3, candidatesTokenCount: 2 })
+		];
+		const { out } = await run("anthropic", ask(messages, { stream: true }), streamOf(frames), undefined, "computer");
+		const events = await collect(out.stream);
+		const start = events.find((entry) => entry.event === "content_block_start" && entry.data.content_block.type === "tool_use");
+		expect(start.data.content_block).toMatchObject({ id: "k2", name: "computer" });
+		expect(JSON.parse(delta(events, "input_json_delta", "partial_json"))).toEqual({
+			action: "left_click",
+			coordinate: [1000, 500],
+			text: "ctrl"
+		});
+		const open = await run(
+			"anthropic",
+			ask(messages, { stream: true }),
+			streamOf([content([call("key_down", { key: "Control" })], {}, null)]),
+			undefined,
+			"computer"
+		);
+		expect((await collect(open.out.stream)).at(-1)).toMatchObject({
+			event: "error",
+			data: { error: { message: expect.stringMatching(/never closes it/) } }
+		});
+	});
+
+	it("the operator's own computerUse tool in the settings replaces the one made from the client's tool", async () => {
+		const settings = { gemini: { tools: [{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }] } };
+		const { call: sent } = await run("anthropic", ask(first), ok(content([{ text: "x" }])), { settings }, "computer-setting");
+		expect(sent.body.tools).toEqual([{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }]);
+	});
+
+	it("generated audio is a data URI link in the text of an Anthropic reply, as generated images are", async () => {
+		const reply = content([
+			{ text: "Listen" },
+			{ inlineData: { mimeType: "audio/L16;codec=pcm;rate=24000", data: Buffer.from([1, 2, 3, 4]).toString("base64") } }
+		]);
+		const { out } = await run(
+			"anthropic",
+			{ model: MODEL, max_tokens: 8, messages: first },
+			ok(reply),
+			{ settings: { gemini: { responseModalities: ["TEXT", "AUDIO"] } } },
+			"audio-text"
+		);
+		const text = out.body.content[0].text;
+		expect(text).toMatch(/^Listen\n\n\[audio\]\(data:audio\/wav;base64,UklGR/);
+		const streamed = await run(
+			"anthropic",
+			{ model: MODEL, max_tokens: 8, stream: true, messages: first },
+			streamOf([reply]),
+			{ settings: { gemini: { responseModalities: ["TEXT", "AUDIO"] } } },
+			"audio-text"
+		);
+		expect(delta(await collect(streamed.out.stream), "text_delta", "text")).toMatch(/\[audio\]\(data:audio\/wav;base64,UklGR/);
+	});
+});

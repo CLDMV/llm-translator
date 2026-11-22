@@ -14,7 +14,7 @@
  */
 
 /**
- * @fileoverview Audio encoders for Gemini's audio output: Gemini returns raw 16-bit PCM, and this turns it into MP3 (`wasm-media-encoders`), Opus in an Ogg container (`opusscript` and a small Ogg writer) or FLAC (`libflacjs`). The encoder packages are optional and loaded lazily, like `@napi-rs/canvas` in `lib/pdf.mjs`: `load` is awaited when a request asks for a format, so an encoder that is missing is a clear error before anything is sent, and `encode` itself is synchronous.
+ * @fileoverview Audio encoders for Gemini's audio output: Gemini returns raw 16-bit PCM, and this turns it into MP3 (`wasm-media-encoders`), Opus in an Ogg container (`opusscript` and a small Ogg writer) or FLAC (`libflacjs`). The encoder packages are optional peer dependencies and loaded lazily, like `@napi-rs/canvas` in `lib/pdf.mjs`: `load` is awaited when a request asks for a format, so an encoder that is missing is a clear error before anything is sent, and `encode` itself is synchronous.
  * @module @cldmv/llm-translator/lib/gemini-audio
  */
 import { TranslatorError } from "./errors.mjs";

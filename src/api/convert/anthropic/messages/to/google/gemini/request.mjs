@@ -22,6 +22,7 @@ import { chatBody } from "../../../../../../../lib/gemini.mjs";
 import { breakpoint, planOf, upTo } from "../../../../../../../lib/gemini-cache.mjs";
 import { prepare } from "../../../../../../../lib/gemini-images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
+import { EXCLUDED, prepare as prepareComputer } from "../../../../../../../lib/gemini-computer.mjs";
 import { request as toChat } from "../../openai/chat/request.mjs";
 
 /**
@@ -47,7 +48,9 @@ const NATIVE = {
 const SERVER = [
 	{ pattern: /^web_search/, tool: { googleSearch: {} } },
 	{ pattern: /^web_fetch/, tool: { urlContext: {} } },
-	{ pattern: /^code_execution/, tool: { codeExecution: {} } }
+	{ pattern: /^code_execution/, tool: { codeExecution: {} } },
+	// Anthropic's computer tool is a client tool, but Gemini's side of it is a built-in tool: the desktop environment, with the actions that cannot be mapped left out.
+	{ pattern: /^computer_/, tool: { computerUse: { environment: "ENVIRONMENT_DESKTOP", excludedPredefinedFunctions: EXCLUDED } } }
 ];
 
 /**
@@ -98,15 +101,23 @@ function builtin(tools) {
  */
 export async function request(body, settings, context) {
 	const s = resolve(settings);
+	// The computer tool: its history is rewritten into Gemini's actions and its results carry the screenshots (`lib/gemini-computer`).
+	const computer = prepareComputer(body);
+	const tools = body.tools;
+	if (computer !== null) body = computer.body;
 	// With `documents: "extract"` and images on, and no converter of the upstream's own, PDFs go through whole.
 	const raw = s.documents === "extract" && s.images && !s.documentConverter;
 	const { body: chat, state } = await toChat(body, { ...s, ...NATIVE, ...(raw ? { documentConverter: document } : {}) }, context);
 	const asked = body.metadata?.sampling;
 	const sampling = { ...s.sampling, ...(asked !== null && typeof asked === "object" && !Array.isArray(asked) ? asked : {}) };
-	const server = builtin(body.tools);
+	const server = builtin(tools);
+	// A computer-use tool the operator named in the setting is the one that is sent.
+	if (s.gemini.tools?.some((entry) => Object.hasOwn(entry, "computerUse")))
+		server.tools = server.tools.filter((entry) => !Object.hasOwn(entry, "computerUse"));
 	state.dropped = state.dropped.filter((name) => !server.names.has(name));
 	state.parallel = chat.parallel_tool_calls !== false;
 	state.candidates = 1;
+	if (computer !== null) state.computer = { size: computer.size, custom: computer.custom };
 	const make = async (input, dropped) =>
 		chatBody(await prepare(input, { options: s.documentUrls, report: context?.report, signal: context?.signal }), {
 			dropped,
@@ -115,7 +126,8 @@ export async function request(body, settings, context) {
 			thinkingDynamic: state.thinking === "adaptive",
 			marker: s.toolErrors ? s.toolErrorMarker : undefined,
 			model: context?.model,
-			gemini: { ...s.gemini, builtin: server.tools }
+			gemini: { ...s.gemini, builtin: server.tools },
+			...(computer === null ? {} : { computer: { images: computer.images } })
 		});
 	const out = await make(chat, state.dropped);
 	// A `cache_control` breakpoint: the request up to it is converted on its own to see what a cached content would hold.

@@ -68,12 +68,16 @@ Lines, statements, functions and branches are all at 100% and enforced on every 
 - Node.js 22.15 or newer. Node.js 26 is fastest: PDF.js (through `unpdf`) uses newer built-ins such as `Promise.try`, `Float16Array` and `Map.prototype.getOrInsert`, which Node.js 22 and 24 run through PDF.js' own polyfills. npm warns on Node.js 22 because `unpdf` 2 declares Node.js 24; text extraction and page rendering work on 22.15.
 - Developing the package needs Node.js 22.22 or newer (`devEngines` enforces it on install and `npm run`)
 - Fastify 5, only for the server and the Fastify plugin (an optional peer dependency)
+- `wasm-media-encoders`, `opusscript` and `libflacjs`, only to return Gemini audio as MP3, Opus or FLAC (optional peer dependencies, one per format)
 
 ### Install
 
 ```bash
 npm install @cldmv/llm-translator
 npm install fastify   # only for the server and the Fastify plugin
+npm install wasm-media-encoders   # only for audio.format "mp3" from a Gemini upstream
+npm install opusscript            # only for audio.format "opus"
+npm install libflacjs             # only for audio.format "flac"
 ```
 
 ---

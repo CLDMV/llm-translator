@@ -770,6 +770,125 @@ describe("cache creation tokens", () => {
 	});
 });
 
+describe("computer use in the conversion", () => {
+	const size = { width: 2000, height: 1000 };
+	const reply = (parts) => ({ candidates: [{ index: 0, content: { parts }, finishReason: "STOP" }] });
+	const fn = (name, args, id, thoughtSignature) => ({
+		functionCall: { id, name, args },
+		...(thoughtSignature === undefined ? {} : { thoughtSignature })
+	});
+	const computer = { size, custom: new Set(["click"]) };
+
+	it("writes the history as function calls when the only tool is the computer tool, with the screenshot in the response", () => {
+		const shots = new Map([["a", { mimeType: "image/png", data: "AAAA" }]]);
+		const body = {
+			messages: [
+				{ role: "user", content: "go" },
+				{
+					role: "assistant",
+					content: "",
+					tool_calls: [{ id: "a", type: "function", function: { name: "take_screenshot", arguments: "{}" } }]
+				},
+				{ role: "tool", tool_call_id: "a", content: "OK" }
+			]
+		};
+		const out = chatBody(body, { computer: { images: shots } });
+		expect(out.contents[1].parts[0].functionCall).toMatchObject({ id: "a", name: "take_screenshot" });
+		expect(out.contents[2].parts[0].functionResponse).toEqual({
+			id: "a",
+			name: "take_screenshot",
+			response: { output: "OK" },
+			parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }]
+		});
+		expect(JSON.stringify(chatBody(body).contents)).toContain("[Called tool take_screenshot");
+	});
+
+	it("turns Gemini's actions into computer calls with the ids of one Gemini call, and signs the call it came from", () => {
+		const out = completion(
+			reply([fn("type", { text: "hi", press_enter: true }, "g1", "SIG"), fn("click", { x: 1, y: 1 }, "own"), fn("wait", {}, "g3")]),
+			{ computer }
+		);
+		const calls = out.choices[0].message.tool_calls;
+		expect(calls.map((call) => [call.id, call.function.name, JSON.parse(call.function.arguments)])).toEqual([
+			["g1__0of2", "computer", { action: "type", text: "hi" }],
+			["g1__1of2", "computer", { action: "key", text: "Return" }],
+			["own", "click", { x: 1, y: 1 }],
+			["g3", "computer", { action: "wait", duration: 1 }]
+		]);
+		expect(out.choices[0].message.reasoning_details).toEqual([
+			{ type: "reasoning.encrypted", format: FORMAT, index: 0, data: "SIG", for: "call", id: "g1" }
+		]);
+	});
+
+	it("gives the signature of a key held for a click to the click, and keeps a signature the click has itself", () => {
+		const held = completion(
+			reply([
+				fn("key_down", { key: "Control" }, "d", "SIG-D"),
+				fn("click", { x: 500, y: 500 }, "c"),
+				fn("key_up", { key: "Control" }, "u")
+			]),
+			{
+				computer: { size, custom: new Set() }
+			}
+		).choices[0].message;
+		expect(held.tool_calls.map((call) => call.id)).toEqual(["c"]);
+		expect(held.reasoning_details).toEqual([
+			{ type: "reasoning.encrypted", format: FORMAT, index: 0, data: "SIG-D", for: "call", id: "c" }
+		]);
+		const own = completion(
+			reply([
+				fn("key_down", { key: "Control" }, "d", "SIG-D"),
+				fn("click", { x: 500, y: 500 }, "c", "SIG-C"),
+				fn("key_up", { key: "Control" }, "u")
+			]),
+			{
+				computer: { size, custom: new Set() }
+			}
+		).choices[0].message;
+		expect(own.reasoning_details.map((item) => item.data)).toEqual(["SIG-C"]);
+		expect(() => completion(reply([fn("key_down", { key: "Control" }, "d")]), { computer: { size, custom: new Set() } })).toThrow(
+			/never closes it/
+		);
+	});
+
+	it("keeps only the first action without parallel calls, and leaves a reply alone without the computer option", () => {
+		const two = reply([fn("take_screenshot", {}, "a"), fn("wait", {}, "b")]);
+		expect(completion(two, { computer, parallel: false }).choices[0].message.tool_calls).toHaveLength(1);
+		expect(completion(two).choices[0].message.tool_calls.map((call) => call.function.name)).toEqual(["take_screenshot", "wait"]);
+	});
+
+	it("streams the same calls, one chunk each", () => {
+		const chunker = createChunker({ computer });
+		const out = chunker.event({
+			candidates: [{ index: 0, content: { parts: [fn("type", { text: "hi", press_enter: true }, "g1", "SIG")] }, finishReason: "STOP" }]
+		});
+		const calls = out.flatMap((entry) => entry.choices[0]?.delta?.tool_calls ?? []);
+		expect(calls.map((call) => [call.index, call.id])).toEqual([
+			[0, "g1__0of2"],
+			[1, "g1__1of2"]
+		]);
+		expect(out.find((entry) => entry.choices[0]?.delta?.reasoning_details).choices[0].delta.reasoning_details[0]).toMatchObject({
+			for: "call",
+			id: "g1"
+		});
+	});
+});
+
+describe("generated audio as a link", () => {
+	const audio = { inlineData: { mimeType: "audio/L16;codec=pcm;rate=24000", data: Buffer.from([1, 2]).toString("base64") } };
+	const reply = { candidates: [{ index: 0, content: { parts: [audio] }, finishReason: "STOP" }] };
+
+	it("is a data URI in the text for a front with no place for audio, in the format's MIME type", () => {
+		expect(completion(reply, { images: "text" }).choices[0].message.content).toMatch(/^\[audio\]\(data:audio\/wav;base64,UklGR/);
+		const pcm = completion(reply, { images: "text", audio: "pcm16" }).choices[0].message;
+		expect(pcm.content).toBe(`[audio](data:audio/L16;base64,${Buffer.from([1, 2]).toString("base64")})`);
+		expect(pcm.audio).toBeUndefined();
+		const chunker = createChunker({ images: "text", audio: "pcm" });
+		const out = chunker.event({ candidates: [{ index: 0, content: { parts: [{ text: "x" }, audio] }, finishReason: "STOP" }] });
+		expect(out.map((entry) => entry.choices[0]?.delta?.content).filter(Boolean)).toEqual(["x", "\n\n[audio](data:audio/L16;base64,AQI=)"]);
+	});
+});
+
 describe("completion", () => {
 	const reply = (parts, extra = {}) => ({
 		candidates: [{ index: 0, content: { role: "model", parts }, finishReason: "STOP", ...extra }],
@@ -1109,7 +1228,10 @@ describe("createChunker", () => {
 		expect(second.find((entry) => entry.choices[0].delta.content?.includes("![image]")).choices[0].delta.content).toBe(
 			"![image](data:image/png;base64,AAAA)"
 		);
-		expect([...Buffer.from(second.find((entry) => entry.choices[0].delta.audio).choices[0].delta.audio.data, "base64")]).toEqual([1, 2]);
+		expect(second.some((entry) => entry.choices[0].delta.audio)).toBe(false);
+		expect(second.find((entry) => entry.choices[0].delta.content?.includes("[audio]")).choices[0].delta.content).toBe(
+			`[audio](data:audio/L16;base64,AQI=)`
+		);
 	});
 
 	it("a blocked prompt ends the reply, and an error object in the stream is one error chunk", () => {

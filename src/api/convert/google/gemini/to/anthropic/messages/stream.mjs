@@ -37,6 +37,7 @@ export function stream(source, state, settings) {
 		reasoningField: resolve(settings).reasoningField,
 		parallel: state?.parallel,
 		images: "text",
+		computer: state?.computer,
 		cacheCreated: state?.cache?.created
 	});
 	return fromChat(
