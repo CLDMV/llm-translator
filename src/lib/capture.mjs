@@ -23,6 +23,7 @@ import { resolve } from "./settings.mjs";
 import * as vllm from "./vllm.mjs";
 import { MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, GEMINI, COHERE, candidates, frontOf } from "./protocol.mjs";
 import { claude } from "./bedrock.mjs";
+import { gemini as geminiModel } from "./vertex.mjs";
 
 /**
  * Collect the mounted drivers, sorted by `info().order`.
@@ -142,10 +143,13 @@ export function capture(self, context, frontOverride) {
 			return endpoint.api !== "auto" || vllm.eligible(endpoint);
 		};
 		// Amazon Bedrock under `auto`: the model id decides, Claude models go through InvokeModel (Anthropic Messages) and every other model through Converse.
+		// Google Vertex AI the same way: a Gemini model goes through generateContent, every other model (Claude) through rawPredict.
 		const list =
 			info.name === "bedrock" && endpoint.api === "auto" && ask.model !== undefined
 				? [claude(ask.model) ? MESSAGES : CONVERSE]
-				: candidates({ api: endpoint.api, front: client, info, missing: state.missing.get(endpoint.name), usable });
+				: info.name === "vertex" && endpoint.api === "auto" && ask.model !== undefined
+					? [geminiModel(ask.model) ? GEMINI : MESSAGES]
+					: candidates({ api: endpoint.api, front: client, info, missing: state.missing.get(endpoint.name), usable });
 		const protocol = list[0];
 		const same = asked === front;
 		return {

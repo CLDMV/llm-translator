@@ -20,7 +20,7 @@ Drivers are slothlet leaves under `api/driver/<name>/`, mounted at `api.driver.<
 | `mistral`    | `openai.chat`        | `chat`                             | 36    | host `api.mistral.ai` (no request of its own)                                                                                           |
 | `openrouter` | `openai.chat`        | `chat`                             | 37    | host `openrouter.ai` (no request of its own)                                                                                            |
 | `anthropic`  | `anthropic.messages` | `messages`                         | 38    | host `api.anthropic.com` (no request), or `GET /v1/models` answers with an Anthropic model list                                         |
-| `vertex`     | `anthropic.messages` | `messages`                         | 39    | host `aiplatform.googleapis.com` or `<region>-aiplatform.googleapis.com` (no request of its own)                                        |
+| `vertex`     | `anthropic.messages` | `messages`, `google.gemini`        | 39    | host `aiplatform.googleapis.com` or `<region>-aiplatform.googleapis.com` (no request of its own)                                        |
 | `llamacpp`   | `openai.chat`        | `chat`, `responses`                | 40    | `GET /props` has llama-server fields, or `GET /v1/models` lists `owned_by: "llamacpp"`                                                  |
 | `tgi`        | `openai.chat`        | `chat`                             | 45    | `GET /info` is Text Generation Inference's router description (strict shape check)                                                      |
 | `localai`    | `openai.chat`        | `chat`, `responses`                | 52    | `GET /version` is `<version> (<commit>)`, or `GET /.well-known/localai.json` is LocalAI's discovery document                            |
@@ -139,9 +139,9 @@ What the `azure` driver changes compared with the generic one:
 
 Nothing here has been run against the real API: the URL forms, the `api-key` header and the content filter shapes are from the Microsoft Learn pages on the [v1 API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/api-version-lifecycle) and [content filtering](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/concepts/content-filter), and real-backend validation is tracked in [#70](https://github.com/CLDMV/llm-translator/issues/70). Microsoft Entra ID (bearer token) authentication, sovereign cloud hosts such as `openai.azure.us`, and the preview features behind `api-version=preview` on the v1 path are not handled.
 
-## Google Vertex AI (Claude)
+## Google Vertex AI (Claude and Gemini)
 
-What the `vertex` driver changes compared with the native Anthropic one. It serves Anthropic's Claude models through Vertex AI's raw endpoint, so it speaks only the Messages protocol (`anthropic.messages`).
+What the `vertex` driver changes compared with the native Anthropic one. It serves Anthropic's Claude models through Vertex AI's raw endpoint over the Messages protocol (`anthropic.messages`), and Google's Gemini models through `generateContent` over `google.gemini` (see [Gemini on Vertex AI](#gemini-on-vertex-ai) below). Under `api: "auto"` the model id chooses: `gemini-...` goes over `google.gemini`, every other id over `anthropic.messages`.
 
 - Bound by host name (`aiplatform.googleapis.com`, `<region>-aiplatform.googleapis.com`, `aiplatform.us.rep.googleapis.com` and `aiplatform.eu.rep.googleapis.com`) with no request, or by `backend: "vertex"`, which is needed behind a proxy. An Anthropic client's request is forwarded as it is, and an OpenAI client's request is converted to a Messages body first, exactly as for the Anthropic driver.
 - The URL is `POST https://<region>-aiplatform.googleapis.com/v1/projects/<project>/locations/<region>/publishers/anthropic/models/<model>:rawPredict`, and `:streamRawPredict` for a streaming request. For the region `global` the host is `aiplatform.googleapis.com`, and the multi-region endpoints `us` and `eu` use `aiplatform.us.rep.googleapis.com` and `aiplatform.eu.rep.googleapis.com` (the region in the path is `us` or `eu`). A model id is used as given, so older models keep the `@` before their date (`claude-sonnet-4-5@20250929`) and newer ones have none (`claude-sonnet-5-5`).
@@ -150,6 +150,18 @@ What the `vertex` driver changes compared with the native Anthropic one. It serv
 - Errors are read from Google's envelope (`{ "error": { "code", "message", "status" } }`, also when it comes wrapped in an array) and from Claude's own (`{ "type": "error", "error": { "type", "message" } }`), and answered in the client's protocol with the HTTP status kept. For an OpenAI client Google's `status` (`NOT_FOUND`, `PERMISSION_DENIED`) is the error `code`.
 - Vertex AI has no Models API (Anthropic lists it among the unsupported endpoints), so the driver has no live model list: the model list is the upstream's `models`, and the models are not detected. Set `models` to the ids the project has enabled.
 - Anthropic lists what Claude on Vertex AI does not support: URL sources for images and documents, the Files API, the code execution, web fetch and advisor server tools, Agent Skills, the MCP connector, programmatic tool calling, Message Batches and server-side `fallbacks`. The driver forwards a request that uses one and Vertex AI refuses it; nothing is removed from the body.
+
+### Gemini on Vertex AI
+
+A Google-published model (`gemini-2.5-flash`, `gemini-3-pro-preview`, with or without a `models/` or `publishers/google/models/` prefix) is served through the Google publisher: `POST https://<region>-aiplatform.googleapis.com/v1/projects/<project>/locations/<region>/publishers/google/models/<model>:generateContent`, and `:streamGenerateContent?alt=sse` for a stream (the host, region and project rules are the ones above). Everything about the body and the reply is the Gemini API's `google.gemini` protocol, which is what `lib/gemini.mjs` and the converters build ([Gemini native API](#gemini-native-api), [protocol-support.md](protocol-support.md#12-google-gemini-generatecontent)); only the transport differs.
+
+- Choosing it. Under `api: "auto"` a model id that starts with `gemini-` goes over `google.gemini`, and any other id keeps `anthropic.messages`. An explicit `api` wins for every model: `api: "gemini"` sends a tuned or otherwise named model through `generateContent`, and `api: "messages"` keeps `rawPredict`. Both fronts reach it.
+- Authentication. The same Google credentials as for Claude (see Authentication below): a bearer access token, never `x-goog-api-key`. The body has no `anthropic_version`, and `model` and `stream` are left out of it (the URL carries both).
+- Token counts. `POST .../publishers/google/models/<model>:countTokens` with the prompt as `contents`, `systemInstruction`, `tools` and `toolConfig`; any other answer gives the usual estimate of one token per four characters.
+- Thought signatures, thinking budgets and levels, PDFs and every other mapping are the Gemini API's, unchanged. The `v1` API version is used for every call.
+- Model list. The driver has no live list (as for Claude): the upstream's `models` are listed.
+
+Nothing here has been run against real Vertex AI; the paths and fields come from Google's API reference and the tests use a local stand-in ([#70](https://github.com/CLDMV/llm-translator/issues/70)).
 
 ### Upstream fields
 
@@ -399,16 +411,16 @@ createTranslator({
 });
 ```
 
-| Canonical id         | Also accepted                     | Speaks to                                                                                                               |
-| -------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `auto` (default)     |                                   | The client's own protocol when the driver's server speaks it, Chat Completions otherwise, with a fall back (see below). |
-| `anthropic.messages` | `messages`, `anthropic`, `claude` | `POST /v1/messages`.                                                                                                    |
-| `openai.chat`        | `chat`, `openai`, `chatgpt`       | `POST /v1/chat/completions`.                                                                                            |
-| `openai.responses`   | `responses`, `codex`              | `POST /v1/responses`.                                                                                                   |
-| `ollama.chat`        | `native`, `ollama`                | Ollama's own `POST /api/chat`, see [Native `/api/chat` mode](#native-apichat-mode).                                     |
-| `bedrock.converse`   | `converse`                        | Amazon Bedrock's `POST /model/<id>/converse`, see [Amazon Bedrock](#amazon-bedrock).                                    |
-| `google.gemini`      | `gemini`, `google`                | Google's `POST /v1beta/models/<model>:generateContent`, see [Gemini native API](#gemini-native-api).                    |
-| `cohere.chat`        | `cohere`                          | Cohere's own `POST /v2/chat`, see [Cohere](#cohere).                                                                    |
+| Canonical id         | Also accepted                     | Speaks to                                                                                                                                                                                                                              |
+| -------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto` (default)     |                                   | The client's own protocol when the driver's server speaks it, Chat Completions otherwise, with a fall back (see below).                                                                                                                |
+| `anthropic.messages` | `messages`, `anthropic`, `claude` | `POST /v1/messages`.                                                                                                                                                                                                                   |
+| `openai.chat`        | `chat`, `openai`, `chatgpt`       | `POST /v1/chat/completions`.                                                                                                                                                                                                           |
+| `openai.responses`   | `responses`, `codex`              | `POST /v1/responses`.                                                                                                                                                                                                                  |
+| `ollama.chat`        | `native`, `ollama`                | Ollama's own `POST /api/chat`, see [Native `/api/chat` mode](#native-apichat-mode).                                                                                                                                                    |
+| `bedrock.converse`   | `converse`                        | Amazon Bedrock's `POST /model/<id>/converse`, see [Amazon Bedrock](#amazon-bedrock).                                                                                                                                                   |
+| `google.gemini`      | `gemini`, `google`                | Google's `POST /v1beta/models/<model>:generateContent` (on the Gemini API host) or the Google publisher's `generateContent` on Vertex AI, see [Gemini native API](#gemini-native-api) and [Gemini on Vertex AI](#gemini-on-vertex-ai). |
+| `cohere.chat`        | `cohere`                          | Cohere's own `POST /v2/chat`, see [Cohere](#cohere).                                                                                                                                                                                   |
 
 Names are not case sensitive, and `status()` reports the canonical id. Any other value fails config validation and lists the accepted ones. Each driver declares the protocols its server speaks in `info().protocols` (the Speaks column in the table at the top), and an explicit `api` the driver does not list fails detection with `unsupported_api` and names the drivers that do.
 

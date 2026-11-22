@@ -17,14 +17,17 @@
  * @fileoverview Vertex AI driver: URL path of each call.
  * @module @cldmv/llm-translator/driver/vertex
  */
-import { route } from "../../../lib/vertex.mjs";
+import { GEMINI } from "../../../lib/protocol.mjs";
+import { geminiRoute, route } from "../../../lib/vertex.mjs";
 
 /**
- * Build the `rawPredict` path (`streamRawPredict` when `stream` is true) from the upstream's project and region and the request's model.
- * @param {"messages" | "count"} kind - Which call.
- * @param {any} context - `{ endpoint, model, stream }`.
+ * Build the `rawPredict` path (`streamRawPredict` when `stream` is true) from the upstream's project and region and the request's model. A
+ * request on the `google.gemini` protocol goes to the Google publisher's `generateContent` (`streamGenerateContent?alt=sse`) instead.
+ * @param {"messages" | "count" | "gemini"} kind - Which call.
+ * @param {any} context - `{ endpoint, model, protocol, stream }`.
  * @returns {string} Path starting with `/v1/projects/`.
  */
-export function path(kind, { endpoint, model, stream }) {
-	return route(kind, endpoint, model, { stream });
+export function path(kind, { endpoint, model, protocol, stream }) {
+	if (protocol === GEMINI) return geminiRoute(endpoint, model, { stream });
+	return route(/** @type {"messages" | "count"} */ (kind), endpoint, model, { stream });
 }

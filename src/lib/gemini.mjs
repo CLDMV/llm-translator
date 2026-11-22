@@ -114,6 +114,16 @@ export function route(endpoint, rest) {
 }
 
 /**
+ * The path of the `countTokens` call that goes with the path of a `generateContent` or `streamGenerateContent` call. A model id has its colons
+ * encoded, so the first colon is the method's.
+ * @param {string} path - Path of a native call, `.../models/<model>:<method>`.
+ * @returns {string} The same path with the `countTokens` method.
+ */
+export function countPath(path) {
+	return `${path.slice(0, path.indexOf(":"))}:countTokens`;
+}
+
+/**
  * The body of a `countTokens` call for a `generateContent` body: the same prompt, as a `generateContentRequest` (which names the model).
  * @param {any} request - `generateContent` body.
  * @param {string} model - Model id.
