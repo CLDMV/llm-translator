@@ -42,5 +42,14 @@ export function request(body, settings) {
 		dropped: [],
 		includeUsage: body.stream_options?.include_usage === true
 	};
-	return { body: chatBody(body, { dropped: state.dropped, sampling: s.sampling }), state };
+	const clamped = [];
+	const out = chatBody(body, {
+		dropped: state.dropped,
+		clamped,
+		sampling: s.sampling,
+		marker: s.toolErrorInference ? s.toolErrorMarker : undefined,
+		state
+	});
+	if (clamped.length > 0) state.clamped = clamped;
+	return { body: out, state };
 }

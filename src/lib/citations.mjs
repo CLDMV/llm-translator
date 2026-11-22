@@ -45,6 +45,7 @@ export const SOURCE = Symbol.for("llmt.source");
  * @property {string} [source] - A search result's `source`.
  * @property {boolean} citations - Whether the block asked for citations (`citations.enabled`).
  * @property {number} [blocks] - How many content blocks a search result has.
+ * @property {string} [text] - A search result's own text (its content blocks joined), without the heading the part has.
  */
 
 /**
