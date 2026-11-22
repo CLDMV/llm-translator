@@ -24,6 +24,7 @@ import { closeAll, collect, fakeTransport, make } from "../helpers/translator.mj
 import {
 	ALIASES,
 	CHAT,
+	COHERE,
 	CONVERSE,
 	GEMINI,
 	MESSAGES,
@@ -154,6 +155,8 @@ describe("lib/protocol", () => {
 				GEMINI,
 				"gemini",
 				"google",
+				COHERE,
+				"cohere",
 				"auto"
 			].sort()
 		);
@@ -171,13 +174,14 @@ describe("lib/protocol", () => {
 			converse: CONVERSE,
 			gemini: GEMINI,
 			google: GEMINI,
+			cohere: COHERE,
 			auto: "auto"
 		};
 		for (const [name, id] of Object.entries(expected)) {
 			expect(canonical(name)).toBe(id);
 			expect(canonical(name.toUpperCase())).toBe(id);
 		}
-		for (const id of [MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, GEMINI]) expect(canonical(id)).toBe(id);
+		for (const id of [MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, GEMINI, COHERE]) expect(canonical(id)).toBe(id);
 		for (const bad of ["grpc", "", "toString", 3, null, undefined, {}]) expect(canonical(bad)).toBeUndefined();
 	});
 
@@ -215,7 +219,7 @@ describe("the api setting", () => {
 	});
 
 	it.each(Object.entries(ALIASES))("accepts the alias %s and stores the canonical id %s", async (name, id) => {
-		const backend = id === OLLAMA ? "ollama" : id === CONVERSE ? "bedrock" : id === GEMINI ? "gemini" : "vllm";
+		const backend = id === OLLAMA ? "ollama" : id === CONVERSE ? "bedrock" : id === GEMINI ? "gemini" : id === COHERE ? "cohere" : "vllm";
 		const { api } = await build({ url, backend, models: ["qwen"], api: name });
 		expect(api.status().upstreams[0].api, name).toBe(id);
 	});
@@ -251,6 +255,7 @@ describe("the api setting", () => {
 		expect(speaks.anthropic).toEqual([MESSAGES]);
 		expect(speaks.bedrock).toEqual([MESSAGES, CONVERSE]);
 		expect(speaks.gemini).toEqual([CHAT, GEMINI]);
+		expect(speaks.cohere).toEqual([CHAT, COHERE]);
 		for (const name of ["openai", "compatible", "lmstudio", "llamacpp", "sglang", "localai"])
 			expect(speaks[name], name).toEqual([CHAT, RESPONSES]);
 		for (const name of ["azure", "groq", "fireworks", "xai", "openrouter", "deepseek", "mistral", "tgi", "together"]) {
