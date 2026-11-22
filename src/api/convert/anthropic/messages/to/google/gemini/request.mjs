@@ -22,7 +22,7 @@ import { chatBody } from "../../../../../../../lib/gemini.mjs";
 import { breakpoint, planOf, upTo } from "../../../../../../../lib/gemini-cache.mjs";
 import { prepare } from "../../../../../../../lib/gemini-images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
-import { EXCLUDED, prepare as prepareComputer } from "../../../../../../../lib/gemini-computer.mjs";
+import { enabledOf, excluded, isTool, prepare as prepareComputer } from "../../../../../../../lib/gemini-computer.mjs";
 import { request as toChat } from "../../openai/chat/request.mjs";
 
 /**
@@ -48,9 +48,7 @@ const NATIVE = {
 const SERVER = [
 	{ pattern: /^web_search/, tool: { googleSearch: {} } },
 	{ pattern: /^web_fetch/, tool: { urlContext: {} } },
-	{ pattern: /^code_execution/, tool: { codeExecution: {} } },
-	// Anthropic's computer tool is a client tool, but Gemini's side of it is a built-in tool: the desktop environment, with the actions that cannot be mapped left out.
-	{ pattern: /^computer_/, tool: { computerUse: { environment: "ENVIRONMENT_DESKTOP", excludedPredefinedFunctions: EXCLUDED } } }
+	{ pattern: /^code_execution/, tool: { codeExecution: {} } }
 ];
 
 /**
@@ -78,12 +76,16 @@ async function document(block, ctx) {
 function builtin(tools) {
 	const found = [];
 	const names = new Set();
-	for (const tool of Array.isArray(tools) ? tools : []) {
+	const list = Array.isArray(tools) ? tools : [];
+	for (const tool of list) {
 		const match = typeof tool?.type === "string" ? SERVER.find((entry) => entry.pattern.test(tool.type)) : undefined;
 		if (match === undefined) continue;
 		names.add(`tool:${tool.name}`);
 		if (!found.includes(match.tool)) found.push(match.tool);
 	}
+	// Anthropic's computer tool is a client tool, but Gemini's side of it is a built-in tool: the desktop environment, without the actions the client switched off.
+	if (list.some(isTool))
+		found.push({ computerUse: { environment: "ENVIRONMENT_DESKTOP", excludedPredefinedFunctions: excluded(enabledOf(list)) } });
 	return { tools: found, names };
 }
 
@@ -117,7 +119,8 @@ export async function request(body, settings, context) {
 	state.dropped = state.dropped.filter((name) => !server.names.has(name));
 	state.parallel = chat.parallel_tool_calls !== false;
 	state.candidates = 1;
-	if (computer !== null) state.computer = { size: computer.size, custom: computer.custom };
+	if (computer !== null)
+		state.computer = { size: computer.size, custom: computer.custom, shape: computer.shape, enabled: computer.enabled };
 	const make = async (input, dropped) =>
 		chatBody(await prepare(input, { options: s.documentUrls, report: context?.report, signal: context?.signal }), {
 			dropped,

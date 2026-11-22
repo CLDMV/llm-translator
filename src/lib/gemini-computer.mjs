@@ -46,8 +46,72 @@ const BROWSER = ["navigate", "go_back", "go_forward"];
 /** Every action that is mapped to Anthropic's tool. */
 export const ACTIONS = new Set([...DESKTOP, ...BROWSER]);
 
-/** The desktop actions that cannot be mapped, which are left out of what the model is offered (`excludedPredefinedFunctions`). */
-export const EXCLUDED = DESKTOP.filter((name) => !ACTIONS.has(name));
+/** The 17 members of Anthropic's computer toolset (`computer_toolset_20260801`); the older `computer` tool takes the same names as `input.action`. */
+export const MEMBERS = Object.freeze([
+	"screenshot",
+	"zoom",
+	"left_click",
+	"right_click",
+	"middle_click",
+	"double_click",
+	"triple_click",
+	"left_click_drag",
+	"mouse_move",
+	"left_mouse_down",
+	"left_mouse_up",
+	"cursor_position",
+	"scroll",
+	"type",
+	"key",
+	"hold_key",
+	"wait"
+]);
+
+/** The members Gemini has no action for: a past call of one is written into the history as text. */
+export const UNMAPPED = Object.freeze(["cursor_position", "hold_key", "zoom"]);
+
+/** The toolset members each Gemini action is carried out with; an action is not offered when one of them is switched off. */
+const REQUIRES = {
+	take_screenshot: ["screenshot"],
+	click: ["left_click"],
+	double_click: ["double_click"],
+	triple_click: ["triple_click"],
+	middle_click: ["middle_click"],
+	right_click: ["right_click"],
+	mouse_down: ["mouse_move", "left_mouse_down"],
+	mouse_up: ["mouse_move", "left_mouse_up"],
+	move: ["mouse_move"],
+	type: ["type"],
+	drag_and_drop: ["left_click_drag"],
+	wait: ["wait"],
+	press_key: ["key"],
+	key_down: [],
+	key_up: [],
+	hotkey: ["key"],
+	scroll: ["scroll"]
+};
+
+/**
+ * The members of the computer tool the client left on: all of them for the older tools, and for the toolset all but the ones its `configs` switch off.
+ * @param {any[]} tools - The request's `tools`.
+ * @returns {Set<string>} Member names.
+ */
+export function enabledOf(tools) {
+	const off = new Set();
+	for (const tool of tools.filter(isToolset)) {
+		for (const [name, config] of Object.entries(tool.configs ?? {})) if (config?.enabled === false) off.add(name);
+	}
+	return new Set(MEMBERS.filter((name) => !off.has(name)));
+}
+
+/**
+ * The desktop actions that are left out of what the model is offered (`excludedPredefinedFunctions`): the ones that need a member the client switched off.
+ * @param {Set<string>} enabled - The members that are on.
+ * @returns {string[]} Gemini action names.
+ */
+export function excluded(enabled) {
+	return DESKTOP.filter((name) => REQUIRES[name].some((member) => !enabled.has(member)));
+}
 
 /** Pixels one scroll click moves; Gemini scrolls by pixels and Anthropic by clicks. */
 export const PIXELS_PER_CLICK = 100;
@@ -159,6 +223,15 @@ export function isTool(tool) {
 }
 
 /**
+ * Whether a tool of the request is the computer toolset (`computer_toolset_20260801`), whose calls are named by the member and carry `toolset_name`.
+ * @param {any} tool - Tool definition.
+ * @returns {boolean} True for the toolset.
+ */
+export function isToolset(tool) {
+	return typeof tool?.type === "string" && /^computer_toolset_/.test(tool.type);
+}
+
+/**
  * The size of a PNG or JPEG image, from its header.
  * @param {string} base64 - The image, base64.
  * @returns {{width: number, height: number} | null} The size, or null when it is neither or cannot be read.
@@ -190,15 +263,17 @@ const blocks = (content) => (Array.isArray(content) ? content : []);
 /**
  * The size of the most recent screenshot of the conversation: the last image in a `tool_result` (or, failing that, in a user message) whose header can be read.
  * @param {any[]} messages - Anthropic messages.
+ * @param {Set<string>} [skip] - Ids of calls whose result image is not a screenshot (a zoom shows a part of the screen).
  * @returns {{width: number, height: number} | null} The size, or null when there is no screenshot yet.
  */
-export function sizeOf(messages) {
+export function sizeOf(messages, skip = new Set()) {
 	for (let at = messages.length - 1; at >= 0; at--) {
 		if (messages[at]?.role !== "user") continue;
 		const found = [];
 		for (const block of blocks(messages[at].content)) {
-			if (block?.type === "tool_result") found.push(...blocks(block.content));
-			else found.push(block);
+			if (block?.type === "tool_result") {
+				if (!skip.has(block.tool_use_id)) found.push(...blocks(block.content));
+			} else found.push(block);
 		}
 		for (const block of found.reverse()) {
 			if (block?.type !== "image" || block.source?.type !== "base64") continue;
@@ -228,9 +303,10 @@ const grid = (value, extent) => Math.min(999, Math.max(0, Math.round((Number(val
 /**
  * The converter of the actions of one Gemini reply into Anthropic's computer calls. One action can be several calls (a mouse button press is a move and a press, `type` with `press_enter` is the text and a `Return`, `navigate` is the address bar, the address and a `Return`) and `key_down` and `key_up` around a click are folded into the click's `text` modifier, so it keeps what it still holds between actions.
  * @param {{width: number, height: number} | null} size - The size of the latest screenshot, for the coordinates.
+ * @param {Set<string>} [enabled] - The members of the tool that are on; an action that needs another is an error.
  * @returns {{ push: (name: string, args: any) => any[], finish: () => void }} `push` gives the Anthropic inputs of one action (none while a modifier is held), `finish` throws when the reply ends with a key held.
  */
-export function converter(size) {
+export function converter(size, enabled = new Set(MEMBERS)) {
 	let held = [];
 	let clicked = false;
 	const point = (args, x = "x", y = "y") => {
@@ -238,69 +314,77 @@ export function converter(size) {
 		return [pixel(args?.[x], size.width), pixel(args?.[y], size.height)];
 	};
 	const press = (keys) => [{ action: "key", text: keys.map(xdotool).join("+") }];
+	const map = (name, args = {}) => {
+		if (name === "key_down") {
+			if (clicked) throw refused("key_down after the click it should wrap");
+			held.push(xdotool(args.key));
+			return [];
+		}
+		if (name === "key_up") {
+			const key = xdotool(args.key);
+			if (!clicked || !held.includes(key))
+				throw refused(
+					`key_up of ${args.key} does not close a key held for a click; only key_down, a click and key_up together can be carried over`
+				);
+			held = held.filter((entry) => entry !== key);
+			if (held.length === 0) clicked = false;
+			return [];
+		}
+		if (held.length > 0) {
+			if (clicked || !Object.hasOwn(CLICKS, name))
+				throw refused(`${name} while a key is held; only a click can be wrapped in key_down and key_up`);
+			clicked = true;
+			return [{ action: CLICKS[name], coordinate: point(args), text: held.join("+") }];
+		}
+		if (Object.hasOwn(CLICKS, name)) return [{ action: CLICKS[name], coordinate: point(args) }];
+		switch (name) {
+			case "take_screenshot":
+				return [{ action: "screenshot" }];
+			case "move":
+				return [{ action: "mouse_move", coordinate: point(args) }];
+			case "mouse_down":
+				return [{ action: "mouse_move", coordinate: point(args) }, { action: "left_mouse_down" }];
+			case "mouse_up":
+				return [{ action: "mouse_move", coordinate: point(args) }, { action: "left_mouse_up" }];
+			case "drag_and_drop":
+				return [
+					{ action: "left_click_drag", start_coordinate: point(args, "start_x", "start_y"), coordinate: point(args, "end_x", "end_y") }
+				];
+			case "type":
+				return [{ action: "type", text: String(args.text ?? "") }, ...(args.press_enter === true ? press(["Enter"]) : [])];
+			case "press_key":
+				return press([args.key]);
+			case "hotkey":
+				return press(Array.isArray(args.keys) ? args.keys : []);
+			case "wait":
+				return [{ action: "wait", duration: Number.isFinite(args.seconds) ? args.seconds : 1 }];
+			case "scroll": {
+				const amount = Number.isFinite(args.magnitude_in_pixels) ? args.magnitude_in_pixels : 300;
+				return [
+					{
+						action: "scroll",
+						coordinate: point(args),
+						scroll_direction: String(args.direction ?? "down"),
+						scroll_amount: Math.max(1, Math.round(amount / PIXELS_PER_CLICK))
+					}
+				];
+			}
+			case "navigate":
+				return [...press(["Control", "l"]), { action: "type", text: String(args.url ?? "") }, ...press(["Enter"])];
+			case "go_back":
+				return press(["Alt", "ArrowLeft"]);
+			default:
+				return press(["Alt", "ArrowRight"]);
+		}
+	};
 	return {
 		push(name, args = {}) {
-			if (name === "key_down") {
-				if (clicked) throw refused("key_down after the click it should wrap");
-				held.push(xdotool(args.key));
-				return [];
+			const out = map(name, args);
+			for (const input of out) {
+				if (!enabled.has(input.action))
+					throw refused(`${name} needs ${input.action}, which the client switched off in the computer toolset`);
 			}
-			if (name === "key_up") {
-				const key = xdotool(args.key);
-				if (!clicked || !held.includes(key))
-					throw refused(
-						`key_up of ${args.key} does not close a key held for a click; only key_down, a click and key_up together can be carried over`
-					);
-				held = held.filter((entry) => entry !== key);
-				if (held.length === 0) clicked = false;
-				return [];
-			}
-			if (held.length > 0) {
-				if (clicked || !Object.hasOwn(CLICKS, name))
-					throw refused(`${name} while a key is held; only a click can be wrapped in key_down and key_up`);
-				clicked = true;
-				return [{ action: CLICKS[name], coordinate: point(args), text: held.join("+") }];
-			}
-			if (Object.hasOwn(CLICKS, name)) return [{ action: CLICKS[name], coordinate: point(args) }];
-			switch (name) {
-				case "take_screenshot":
-					return [{ action: "screenshot" }];
-				case "move":
-					return [{ action: "mouse_move", coordinate: point(args) }];
-				case "mouse_down":
-					return [{ action: "mouse_move", coordinate: point(args) }, { action: "left_mouse_down" }];
-				case "mouse_up":
-					return [{ action: "mouse_move", coordinate: point(args) }, { action: "left_mouse_up" }];
-				case "drag_and_drop":
-					return [
-						{ action: "left_click_drag", start_coordinate: point(args, "start_x", "start_y"), coordinate: point(args, "end_x", "end_y") }
-					];
-				case "type":
-					return [{ action: "type", text: String(args.text ?? "") }, ...(args.press_enter === true ? press(["Enter"]) : [])];
-				case "press_key":
-					return press([args.key]);
-				case "hotkey":
-					return press(Array.isArray(args.keys) ? args.keys : []);
-				case "wait":
-					return [{ action: "wait", duration: Number.isFinite(args.seconds) ? args.seconds : 1 }];
-				case "scroll": {
-					const amount = Number.isFinite(args.magnitude_in_pixels) ? args.magnitude_in_pixels : 300;
-					return [
-						{
-							action: "scroll",
-							coordinate: point(args),
-							scroll_direction: String(args.direction ?? "down"),
-							scroll_amount: Math.max(1, Math.round(amount / PIXELS_PER_CLICK))
-						}
-					];
-				}
-				case "navigate":
-					return [...press(["Control", "l"]), { action: "type", text: String(args.url ?? "") }, ...press(["Enter"])];
-				case "go_back":
-					return press(["Alt", "ArrowLeft"]);
-				default:
-					return press(["Alt", "ArrowRight"]);
-			}
+			return out;
 		},
 		finish() {
 			if (held.length > 0) throw refused(`the reply holds ${held.join("+")} with key_down and never closes it around a click`);
@@ -358,8 +442,10 @@ export function inverse(inputs, size, last) {
  */
 function single(input, size, last, at) {
 	const action = input?.action;
+	// The toolset's `coordinate` is optional: a click without one is at the pointer.
+	const where = (coordinate) => (Array.isArray(coordinate) ? at(coordinate) : [...last]);
 	if (Object.hasOwn(BACK, action)) {
-		const [x, y] = at(input.coordinate);
+		const [x, y] = where(input.coordinate);
 		const click = { name: BACK[action], args: { x, y } };
 		const keys = typeof input.text === "string" && input.text !== "" ? input.text.split("+").map(gemini) : [];
 		return [
@@ -372,7 +458,7 @@ function single(input, size, last, at) {
 		case "screenshot":
 			return [{ name: "take_screenshot", args: {} }];
 		case "mouse_move": {
-			const [x, y] = at(input.coordinate);
+			const [x, y] = where(input.coordinate);
 			return [{ name: "move", args: { x, y } }];
 		}
 		case "left_mouse_down":
@@ -389,7 +475,9 @@ function single(input, size, last, at) {
 			const keys = String(input.text ?? "")
 				.split("+")
 				.map(gemini);
-			return [keys.length > 1 ? { name: "hotkey", args: { keys } } : { name: "press_key", args: { key: keys[0] } }];
+			const call = keys.length > 1 ? { name: "hotkey", args: { keys } } : { name: "press_key", args: { key: keys[0] } };
+			// The toolset's `key` can repeat the press.
+			return Array.from({ length: Math.min(100, Math.max(1, Math.round(Number(input.repeat) || 1))) }, () => ({ ...call }));
 		}
 		case "wait":
 			return [{ name: "wait", args: { seconds: Math.max(1, Math.round(Number(input.duration) || 1)) } }];
@@ -427,30 +515,61 @@ export function ids(base, count) {
 }
 
 /**
+ * The computer call a `tool_use` block of the history is, if it is one: the older tool's `computer` block (the action is `input.action`), or a
+ * member of the toolset (the action is the block's `name`, and it carries `toolset_name`). Either shape is read in either kind of conversation.
+ * @param {any} block - Content block.
+ * @param {boolean} toolset - Whether the request declared the toolset (its members are then recognized by name even without `toolset_name`).
+ * @param {Set<string>} custom - Names of the request's own tools, which are never computer calls.
+ * @returns {{action: any, input: any} | null} The action and the input with `action` in it, or null for any other block.
+ */
+function callOf(block, toolset, custom) {
+	if (block?.type !== "tool_use") return null;
+	if (block.name === "computer") return { action: block.input?.action, input: block.input ?? {} };
+	if (MEMBERS.includes(block.name) && !custom.has(block.name) && (toolset || block.toolset_name === "computer")) {
+		return { action: block.name, input: { ...block.input, action: block.name } };
+	}
+	return null;
+}
+
+/**
  * Rewrite an Anthropic request that uses the computer tool into one Gemini can take: the tool is removed (the caller adds Gemini's `computer_use`
- * tool), the `computer` calls of the history become the Gemini actions they came from (`left_click` is `click` on the grid, the calls one Gemini
+ * tool), the computer calls of the history become the Gemini actions they came from (`left_click` is `click` on the grid, the calls one Gemini
  * action was split into are one action again), and each result becomes the result of those calls, with its screenshot set apart to be sent as part of
- * the function response.
+ * the function response. A past call of an action Gemini has no equivalent of (`cursor_position`, `hold_key`, `zoom`) and its result become plain text.
  * @param {any} body - Anthropic Messages body.
- * @returns {{ body: any, size: {width: number, height: number} | null, custom: Set<string>, images: Map<string, {mimeType: string, data: string}> } | null} The rewritten body and what the conversion needs, or null when the request has no computer tool.
- * @throws {TranslatorError} `unsupported_computer_action` for an action of the history that Gemini has no equivalent of.
+ * @returns {{ body: any, shape: "toolset" | "classic", enabled: Set<string>, size: {width: number, height: number} | null, custom: Set<string>, images: Map<string, {mimeType: string, data: string}> } | null} The rewritten body and what the conversion needs, or null when the request has no computer tool.
+ * @throws {TranslatorError} `unsupported_computer_action` for an action of the history that Gemini has no equivalent of and that is not one of those.
  */
 export function prepare(body) {
 	const tools = Array.isArray(body?.tools) ? body.tools : [];
 	if (!tools.some(isTool)) return null;
+	const toolset = tools.some(isToolset);
+	const custom = new Set(
+		tools.filter((tool) => !isTool(tool) && (tool.type === undefined || tool.type === "custom")).map((tool) => tool.name)
+	);
 	const messages = Array.isArray(body.messages) ? body.messages : [];
-	const size = sizeOf(messages);
+	const zooms = new Set();
+	for (const message of messages) {
+		for (const block of message?.role === "assistant" ? blocks(message.content) : []) {
+			if (callOf(block, toolset, custom)?.action === "zoom") zooms.add(block.id);
+		}
+	}
+	const size = sizeOf(messages, zooms);
 	const images = new Map();
 	const groups = new Map();
+	const plain = new Map();
 	const last = [500, 500];
 	const rewritten = messages.map((message) => {
 		if (!Array.isArray(message?.content)) return message;
-		if (message.role === "assistant") return { ...message, content: assistant(message.content, groups, size, last) };
+		if (message.role === "assistant")
+			return { ...message, content: assistant(message.content, { groups, plain, size, last, toolset, custom }) };
 		const content = [];
 		const done = new Set();
 		for (const block of message.content) {
 			const group = block?.type === "tool_result" ? groups.get(block.tool_use_id) : undefined;
-			if (group === undefined) content.push(block);
+			const action = block?.type === "tool_result" ? plain.get(block.tool_use_id) : undefined;
+			if (action !== undefined) content.push(...described(block, action));
+			else if (group === undefined) content.push(block);
 			else if (!done.has(group)) {
 				done.add(group);
 				content.push(...results(group, message.content, images));
@@ -458,9 +577,6 @@ export function prepare(body) {
 		}
 		return { ...message, content };
 	});
-	const custom = new Set(
-		tools.filter((tool) => !isTool(tool) && (tool.type === undefined || tool.type === "custom")).map((tool) => tool.name)
-	);
 	const choice = body.tool_choice?.type === "tool" && body.tool_choice.name === "computer" ? { type: "any" } : body.tool_choice;
 	return {
 		body: {
@@ -469,6 +585,8 @@ export function prepare(body) {
 			messages: rewritten,
 			...(choice === undefined ? {} : { tool_choice: choice })
 		},
+		shape: toolset ? "toolset" : "classic",
+		enabled: enabledOf(tools),
 		size,
 		custom,
 		images
@@ -476,43 +594,83 @@ export function prepare(body) {
 }
 
 /**
+ * A past call of an action Gemini has no equivalent of, as the text that stands for it in the model turn.
+ * @param {string} action - The action.
+ * @param {any} input - The call's input.
+ * @returns {string} For example `[Computer action zoom {"region":[0,0,10,10]}]`.
+ */
+function describe(action, input) {
+	const { action: ___action, ...rest } = input;
+	return `[Computer action ${action}${Object.keys(rest).length === 0 ? "" : ` ${JSON.stringify(rest)}`}]`;
+}
+
+/**
+ * The result of such a call as blocks of the user turn: the text that stands for it, and the images it returned (a zoom).
+ * @param {any} block - The `tool_result` block.
+ * @param {string} action - The action.
+ * @returns {any[]} Text and image blocks.
+ */
+function described(block, action) {
+	const parts = typeof block.content === "string" ? [{ type: "text", text: block.content }] : blocks(block.content);
+	const text = parts
+		.filter((part) => part?.type === "text" && part.text !== "")
+		.map((part) => part.text)
+		.join("\n");
+	const label =
+		block.is_error === true
+			? `[Computer action ${action} failed${text === "" ? "" : `: ${text}`}]`
+			: `[Result of computer action ${action}${text === "" ? "" : `: ${text}`}]`;
+	return [{ type: "text", text: label }, ...parts.filter((part) => part?.type === "image")];
+}
+
+/**
  * Rewrite the computer calls of an assistant message into the Gemini actions they stand for.
  * @param {any[]} content - The message's blocks.
- * @param {Map<string, any>} groups - Records, by the id of each call, what became of it (filled here, read when the results come).
- * @param {{width: number, height: number} | null} size - The size of the latest screenshot.
- * @param {number[]} last - The last grid position of the pointer.
+ * @param {{groups: Map<string, any>, plain: Map<string, string>, size: {width: number, height: number} | null, last: number[], toolset: boolean, custom: Set<string>}} context - `groups` and `plain` record, by the id of each call, what became of it (filled here, read when the results come).
  * @returns {any[]} The blocks.
  */
-function assistant(content, groups, size, last) {
+function assistant(content, { groups, plain, size, last, toolset, custom }) {
 	const out = [];
 	const members = new Map();
-	for (const block of content) {
-		if (block?.type !== "tool_use" || block.name !== "computer") continue;
+	const keyOf = (block) => {
 		const match = MEMBER.exec(block.id);
-		const key = match === null ? block.id : match[1];
+		return match === null ? block.id : match[1];
+	};
+	const mapped = (block) => {
+		const call = callOf(block, toolset, custom);
+		return call !== null && !UNMAPPED.includes(call.action) ? call : null;
+	};
+	for (const block of content) {
+		if (mapped(block) === null) continue;
+		const key = keyOf(block);
 		if (!members.has(key)) members.set(key, []);
 		members.get(key).push(block);
 	}
 	const placed = new Set();
 	for (const block of content) {
-		if (block?.type !== "tool_use" || block.name !== "computer") {
+		const call = callOf(block, toolset, custom);
+		if (call !== null && UNMAPPED.includes(call.action)) {
+			plain.set(block.id, call.action);
+			out.push({ type: "text", text: describe(call.action, call.input) });
+			continue;
+		}
+		if (call === null) {
 			out.push(block);
 			continue;
 		}
-		const match = MEMBER.exec(block.id);
-		const key = match === null ? block.id : match[1];
+		const key = keyOf(block);
 		if (placed.has(key)) continue;
 		placed.add(key);
 		const list = members.get(key);
 		const calls = inverse(
-			list.map((entry) => entry.input ?? {}),
+			list.map((entry) => callOf(entry, toolset, custom).input),
 			size,
 			last
 		);
-		const names = calls.map((call, at) => (calls.length === 1 ? key : `${key}__${at}of${calls.length}`));
-		const group = { names, ids: list.map((entry) => entry.id), parts: [] };
+		const names = calls.map((_, at) => (calls.length === 1 ? key : `${key}__${at}of${calls.length}`));
+		const group = { names, ids: list.map((entry) => entry.id) };
 		for (const id of group.ids) groups.set(id, group);
-		calls.forEach((call, at) => out.push({ type: "tool_use", id: names[at], name: call.name, input: call.args }));
+		calls.forEach((made, at) => out.push({ type: "tool_use", id: names[at], name: made.name, input: made.args }));
 	}
 	return out;
 }
@@ -545,4 +703,16 @@ function results(group, content, images) {
 		content: at === group.names.length - 1 ? text || "OK" : "OK",
 		...(failed && at === group.names.length - 1 ? { is_error: true } : {})
 	}));
+}
+
+/**
+ * A `tool_use` block of a reply, with `toolset_name: "computer"` when it is a member of the computer toolset (the client declared the toolset, and the
+ * block is named by one of its members and is not one of the request's own tools).
+ * @param {any} block - Content block.
+ * @param {{shape?: string, custom: Set<string>} | undefined} computer - The conversion state of the request, if it used the computer tool.
+ * @returns {any} The block, with `toolset_name` when it is a member.
+ */
+export function tagged(block, computer) {
+	if (computer?.shape !== "toolset" || block?.type !== "tool_use") return block;
+	return MEMBERS.includes(block.name) && !computer.custom.has(block.name) ? { ...block, toolset_name: "computer" } : block;
 }

@@ -18,6 +18,7 @@
  * @module @cldmv/llm-translator/convert
  */
 import { completion } from "../../../../../../../lib/gemini.mjs";
+import { tagged } from "../../../../../../../lib/gemini-computer.mjs";
 import { response as fromChat } from "../../../../../openai/chat/to/anthropic/messages/response.mjs";
 
 /**
@@ -31,9 +32,11 @@ import { response as fromChat } from "../../../../../openai/chat/to/anthropic/me
  */
 export function response(reply, state, settings) {
 	// Generated images have no place in an Anthropic message, so they are written into the text as markdown images.
-	return fromChat(
+	const message = fromChat(
 		completion(reply, { parallel: state?.parallel, images: "text", cacheCreated: state?.cache?.created, computer: state?.computer }),
 		state,
 		settings
 	);
+	// The computer toolset's calls carry `toolset_name`.
+	return { ...message, content: message.content.map((block) => tagged(block, state?.computer)) };
 }

@@ -20,16 +20,21 @@ import { describe, expect, it } from "vitest";
 import {
 	ACTIONS,
 	DESKTOP,
-	EXCLUDED,
+	MEMBERS,
 	PIXELS_PER_CLICK,
+	UNMAPPED,
 	converter,
 	dimensions,
+	enabledOf,
+	excluded,
 	gemini,
 	ids,
 	inverse,
 	isTool,
+	isToolset,
 	prepare,
 	sizeOf,
+	tagged,
 	xdotool
 } from "../../src/lib/gemini-computer.mjs";
 
@@ -69,6 +74,13 @@ describe("images and the tool", () => {
 	it("reads the size of a PNG and of a JPEG from the header, and gives up on anything else", () => {
 		expect(dimensions(png(1280, 800))).toEqual({ width: 1280, height: 800 });
 		expect(dimensions(jpeg(1024, 768))).toEqual({ width: 1024, height: 768 });
+		// Segments that are not a frame, including the markers just below, inside and just after the frame range, are skipped.
+		const frame = Buffer.from(jpeg(640, 480), "base64").subarray(-19);
+		const skipped = [0x01, 0xc8, 0xcc, 0xcf + 1].map((marker) => Buffer.from([0xff, marker, 0, 4, 0, 0]));
+		expect(dimensions(Buffer.concat([Buffer.from([0xff, 0xd8]), ...skipped, frame]).toString("base64"))).toEqual({
+			width: 640,
+			height: 480
+		});
 		expect(dimensions("AAAA")).toBeNull();
 		expect(dimensions(Buffer.from([0xff, 0xd8, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]).toString("base64"))).toBeNull();
 		expect(dimensions(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 2, 0, 0]).toString("base64"))).toBeNull();
@@ -115,12 +127,16 @@ describe("images and the tool", () => {
 	it("knows the computer tool by its type, and maps every desktop action", () => {
 		for (const type of ["computer_20250124", "computer_20251124", "computer_toolset_20260801"])
 			expect(isTool({ type, name: "computer" })).toBe(true);
+		expect(isToolset({ type: "computer_toolset_20260801" })).toBe(true);
+		expect(isToolset({ type: "computer_20251124" })).toBe(false);
+		expect(isToolset(null)).toBe(false);
+		expect(MEMBERS).toHaveLength(17);
 		expect(isTool({ type: "custom", name: "computer" })).toBe(false);
 		expect(isTool({ name: "computer" })).toBe(false);
 		expect(isTool(null)).toBe(false);
 		expect(DESKTOP).toHaveLength(17);
 		expect(DESKTOP.every((name) => ACTIONS.has(name))).toBe(true);
-		expect(EXCLUDED).toEqual([]);
+		expect(excluded(new Set(MEMBERS))).toEqual([]);
 		expect(ids("a", 1)).toEqual(["a"]);
 		expect(ids("a", 3)).toEqual(["a__0of3", "a__1of3", "a__2of3"]);
 	});
@@ -566,8 +582,209 @@ describe("prepare: a request that uses the computer tool", () => {
 	it("says so when the history has an action Gemini does not have", () => {
 		const body = {
 			tools,
-			messages: [{ role: "assistant", content: [{ type: "tool_use", id: "a", name: "computer", input: { action: "zoom" } }] }]
+			messages: [{ role: "assistant", content: [{ type: "tool_use", id: "a", name: "computer", input: { action: "bogus" } }] }]
 		};
 		expect(() => prepare(body)).toThrow(/no Gemini equivalent/);
+	});
+});
+
+describe("the computer toolset", () => {
+	const shot = (data) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+	const toolset = { type: "computer_toolset_20260801", configs: { zoom: { enabled: false } } };
+	const member = (id, name, input = {}) => ({ type: "tool_use", id, name, toolset_name: "computer", input });
+	const result = (id, content) => ({ type: "tool_result", tool_use_id: id, toolset_name: "computer", content });
+
+	it("knows which members are on, and offers only the Gemini actions whose members are all on", () => {
+		expect(enabledOf([{ type: "computer_20251124", name: "computer" }])).toEqual(new Set(MEMBERS));
+		expect(enabledOf([{ type: "computer_toolset_20260801" }])).toEqual(new Set(MEMBERS));
+		expect(enabledOf([toolset]).has("zoom")).toBe(false);
+		const configs = { type: { enabled: true }, key: null, wait: { enabled: false } };
+		expect(enabledOf([{ type: "computer_toolset_20260801", configs }]).has("wait")).toBe(false);
+		const without = (...names) => excluded(new Set(MEMBERS.filter((name) => !names.includes(name))));
+		expect(without("zoom", "cursor_position", "hold_key")).toEqual([]);
+		expect(without("screenshot")).toEqual(["take_screenshot"]);
+		expect(without("left_click")).toEqual(["click"]);
+		expect(without("mouse_move")).toEqual(["mouse_down", "mouse_up", "move"]);
+		expect(without("left_mouse_down")).toEqual(["mouse_down"]);
+		expect(without("left_mouse_up")).toEqual(["mouse_up"]);
+		expect(without("key")).toEqual(["press_key", "hotkey"]);
+		expect(without("type", "wait", "scroll", "left_click_drag")).toEqual(["type", "drag_and_drop", "wait", "scroll"]);
+		expect(without("double_click", "triple_click", "middle_click", "right_click")).toEqual([
+			"double_click",
+			"triple_click",
+			"middle_click",
+			"right_click"
+		]);
+	});
+
+	it("refuses an action that needs a member the client switched off", () => {
+		const off = (...names) => converter(SIZE, new Set(MEMBERS.filter((name) => !names.includes(name))));
+		expect(() => off("key").push("type", { text: "x", press_enter: true })).toThrow(/type needs key, which the client switched off/);
+		expect(off("key").push("type", { text: "x" })).toEqual([{ action: "type", text: "x" }]);
+		expect(() => off("mouse_move").push("mouse_down", { x: 1, y: 1 })).toThrow(/needs mouse_move/);
+		expect(() => off("screenshot").push("take_screenshot")).toThrow(/needs screenshot/);
+	});
+
+	it("reads the history by member name, with and without toolset_name on the block, and keeps the older shape too", () => {
+		const body = {
+			tools: [toolset],
+			messages: [
+				{ role: "user", content: "go" },
+				{ role: "assistant", content: [member("a", "screenshot")] },
+				{ role: "user", content: [result("a", [shot(png(2000, 1000))])] },
+				{
+					role: "assistant",
+					content: [
+						member("b__0of2", "type", { text: "hi" }),
+						{ type: "tool_use", id: "b__1of2", name: "key", input: { text: "Return" } },
+						{ type: "tool_use", id: "c", name: "computer", input: { action: "left_click", coordinate: [1000, 500] } },
+						{ type: "tool_use", id: "d", name: "left_click", input: { coordinate: [0, 0] } }
+					]
+				},
+				{
+					role: "user",
+					content: [
+						result("b__0of2", "OK"),
+						result("b__1of2", "OK"),
+						result("c", "OK"),
+						{ type: "tool_result", tool_use_id: "d", content: "OK" }
+					]
+				}
+			]
+		};
+		const out = prepare(body);
+		expect(out.shape).toBe("toolset");
+		expect(out.size).toEqual({ width: 2000, height: 1000 });
+		expect(out.enabled.has("zoom")).toBe(false);
+		const calls = out.body.messages[3].content;
+		expect(calls.map((block) => [block.id, block.name, block.input])).toEqual([
+			["b", "type", { text: "hi", press_enter: true }],
+			["c", "click", { x: 500, y: 500 }],
+			["d", "click", { x: 0, y: 0 }]
+		]);
+		expect(out.body.messages[4].content.map((block) => block.tool_use_id)).toEqual(["b", "c", "d"]);
+		expect(prepare({ tools: [{ type: "computer_20251124", name: "computer" }], messages: body.messages }).shape).toBe("classic");
+	});
+
+	it("a block named like a member is a computer call only for the toolset or with toolset_name, and never when it is the request's own tool", () => {
+		const blocks = [{ type: "tool_use", id: "k", name: "key", input: { text: "a" } }];
+		const old = [{ type: "computer_20250124", name: "computer" }];
+		expect(prepare({ tools: old, messages: [{ role: "assistant", content: blocks }] }).body.messages[0].content).toEqual(blocks);
+		const named = prepare({ tools: old, messages: [{ role: "assistant", content: [{ ...blocks[0], toolset_name: "computer" }] }] });
+		expect(named.body.messages[0].content[0]).toMatchObject({ id: "k", name: "press_key" });
+		const own = prepare({
+			tools: [toolset, { name: "key", input_schema: { type: "object" } }],
+			messages: [{ role: "assistant", content: blocks }]
+		});
+		expect(own.body.messages[0].content).toEqual(blocks);
+	});
+
+	it("repeats a key press, and a click with no coordinate is at the pointer", () => {
+		expect(inverse([{ action: "key", text: "Tab", repeat: 3 }], SIZE, [0, 0]).map((call) => call.name)).toEqual([
+			"press_key",
+			"press_key",
+			"press_key"
+		]);
+		expect(inverse([{ action: "key", text: "ctrl+a", repeat: 500 }], SIZE, [0, 0])).toHaveLength(100);
+		expect(inverse([{ action: "key", text: "a", repeat: "x" }], SIZE, [0, 0])).toHaveLength(1);
+		expect(inverse([{ action: "left_click" }], SIZE, [12, 34])).toEqual([{ name: "click", args: { x: 12, y: 34 } }]);
+		expect(inverse([{ action: "mouse_move" }], SIZE, [5, 6])).toEqual([{ name: "move", args: { x: 5, y: 6 } }]);
+	});
+
+	it("marks the members of a reply with toolset_name, and nothing else", () => {
+		const computer = { shape: "toolset", custom: new Set(["wait"]) };
+		expect(tagged({ type: "tool_use", name: "left_click" }, computer)).toEqual({
+			type: "tool_use",
+			name: "left_click",
+			toolset_name: "computer"
+		});
+		expect(tagged({ type: "tool_use", name: "wait" }, computer)).toEqual({ type: "tool_use", name: "wait" });
+		expect(tagged({ type: "tool_use", name: "other" }, computer)).toEqual({ type: "tool_use", name: "other" });
+		expect(tagged({ type: "text", text: "x" }, computer)).toEqual({ type: "text", text: "x" });
+		expect(tagged({ type: "tool_use", name: "left_click" }, { shape: "classic", custom: new Set() })).toEqual({
+			type: "tool_use",
+			name: "left_click"
+		});
+		expect(tagged({ type: "tool_use", name: "left_click" }, undefined)).toEqual({ type: "tool_use", name: "left_click" });
+	});
+});
+
+describe("past calls of actions Gemini has no equivalent of", () => {
+	const shot = (data) => ({ type: "image", source: { type: "base64", media_type: "image/png", data } });
+	const classic = [{ type: "computer_20251124", name: "computer", display_width_px: 2000, display_height_px: 1000 }];
+	const toolset = [{ type: "computer_toolset_20260801" }];
+	const use = (id, input) => ({ role: "assistant", content: [{ type: "tool_use", id, name: "computer", input }] });
+	const back = (id, content, extra = {}) => ({ role: "user", content: [{ type: "tool_result", tool_use_id: id, content, ...extra }] });
+	const text = (message) => message.content.filter((block) => block.type === "text").map((block) => block.text);
+
+	it("names the actions", () => {
+		expect(UNMAPPED).toEqual(["cursor_position", "hold_key", "zoom"]);
+	});
+
+	it("become text in the model turn, and their results text in the user turn, with a zoom's image kept", () => {
+		const out = prepare({
+			tools: classic,
+			messages: [
+				use("p", { action: "cursor_position" }),
+				back("p", "X=10,Y=20"),
+				use("h", { action: "hold_key", text: "shift", duration: 2 }),
+				back("h", [{ type: "text", text: "" }]),
+				use("z", { action: "zoom", region: [0, 0, 100, 100] }),
+				back("z", [shot(png(100, 100))]),
+				use("f", { action: "zoom", region: [0, 0, 1, 1] }),
+				back("f", "no such region", { is_error: true }),
+				use("g", { action: "zoom", region: [0, 0, 1, 1] }),
+				back("g", [{ type: "text", text: "" }], { is_error: true })
+			]
+		});
+		const messages = out.body.messages;
+		expect(text(messages[0])).toEqual(["[Computer action cursor_position]"]);
+		expect(text(messages[1])).toEqual(["[Result of computer action cursor_position: X=10,Y=20]"]);
+		expect(text(messages[2])).toEqual(['[Computer action hold_key {"text":"shift","duration":2}]']);
+		expect(text(messages[3])).toEqual(["[Result of computer action hold_key]"]);
+		expect(messages[4].content).toEqual([{ type: "text", text: '[Computer action zoom {"region":[0,0,100,100]}]' }]);
+		expect(messages[5].content).toEqual([{ type: "text", text: "[Result of computer action zoom]" }, shot(png(100, 100))]);
+		expect(text(messages[7])).toEqual(["[Computer action zoom failed: no such region]"]);
+		expect(text(messages[9])).toEqual(["[Computer action zoom failed]"]);
+		// A zoom's image is not a screenshot: it does not give the size to scale by.
+		expect(out.size).toBeNull();
+		expect(out.images.size).toBe(0);
+	});
+
+	it("also in the toolset's shape", () => {
+		const out = prepare({
+			tools: toolset,
+			messages: [
+				{
+					role: "assistant",
+					content: [{ type: "tool_use", id: "z", name: "zoom", toolset_name: "computer", input: { region: [1, 2, 3, 4] } }]
+				},
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "z", toolset_name: "computer", content: [shot(png(3, 2))] }] }
+			]
+		});
+		expect(out.body.messages[0].content[0].text).toBe('[Computer action zoom {"region":[1,2,3,4]}]');
+		expect(out.body.messages[1].content[1]).toEqual(shot(png(3, 2)));
+	});
+
+	it("a screenshot before them still gives the size of the screen", () => {
+		const out = prepare({
+			tools: classic,
+			messages: [
+				use("s", { action: "screenshot" }),
+				back("s", [shot(png(2000, 1000))]),
+				use("z", { action: "zoom", region: [0, 0, 9, 9] }),
+				back("z", [shot(png(9, 9))])
+			]
+		});
+		expect(out.size).toEqual({ width: 2000, height: 1000 });
+	});
+
+	it("keeps the input of a call that has none", () => {
+		expect(
+			prepare({
+				tools: classic,
+				messages: [{ role: "assistant", content: [{ type: "tool_use", id: "x", name: "computer", input: { action: "hold_key" } }] }]
+			}).body.messages[0].content[0].text
+		).toBe("[Computer action hold_key]");
 	});
 });

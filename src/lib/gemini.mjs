@@ -805,7 +805,7 @@ function codeText(part) {
 /**
  * Walks the parts of one candidate and gathers what a Chat Completions message holds. Shared by the JSON and the streamed conversion: a streamed
  * reply feeds it part by part and asks for the signatures at the end, when the length of the text is known.
- * @param {{ field?: string, parallel?: boolean, images?: "images" | "text", computer?: {size: {width: number, height: number} | null, custom: Set<string>} }} [options] - `computer` turns Gemini's computer actions into Anthropic's calls (`size` is the size of the latest screenshot, `custom` the names of the request's own tools); `parallel` false keeps only the first function call; `images` says whether generated images go in `images` or as markdown in the text.
+ * @param {{ field?: string, parallel?: boolean, images?: "images" | "text", computer?: {size: {width: number, height: number} | null, custom: Set<string>, shape?: "toolset" | "classic", enabled?: Set<string>} }} [options] - `computer` turns Gemini's computer actions into Anthropic's calls (`size` is the size of the latest screenshot, `custom` the names of the request's own tools); `parallel` false keeps only the first function call; `images` says whether generated images go in `images` or as markdown in the text.
  * @returns {{ add: (part: any) => any, finish: () => any }} `add` takes a part and returns what it contributed (`text`, `thought`, `call`, `image`, `audio`, `signature`); `finish` gives the signature items.
  */
 function gatherer(options = {}) {
@@ -816,7 +816,7 @@ function gatherer(options = {}) {
 	let carried;
 	const pending = [];
 	// With the computer tool, Gemini's actions become Anthropic's `computer` calls (`lib/gemini-computer`).
-	const computer = options.computer ? converter(options.computer.size) : null;
+	const computer = options.computer ? converter(options.computer.size, options.computer.enabled) : null;
 	return {
 		add(part) {
 			const got = {};
@@ -831,7 +831,11 @@ function gatherer(options = {}) {
 				const args = part.functionCall.args ?? {};
 				let made = [{ name, args }];
 				if (computer !== null && ACTIONS.has(name) && !options.computer.custom.has(name)) {
-					made = computer.push(name, args).map((input) => ({ name: "computer", args: input }));
+					made = computer.push(name, args).map((input) => {
+						// The toolset's calls are named by the member, with no `action` in the input; the older tool's are `computer` with `input.action`.
+						const { action, ...rest } = input;
+						return options.computer.shape === "toolset" ? { name: action, args: rest } : { name: "computer", args: input };
+					});
 				}
 				const named = ids(base, made.length);
 				got.calls = made.map((call, at) => ({
@@ -976,7 +980,7 @@ function choiceOf(candidate, index, options) {
  * audio is `audio`, code and its output are fenced blocks in the text, `logprobsResult` is `logprobs`, `finishReason` becomes `finish_reason` and
  * `usageMetadata` becomes `usage`. A prompt Gemini blocked (`promptFeedback.blockReason`, no candidates) is an empty reply that was filtered.
  * @param {any} reply - Parsed `generateContent` reply.
- * @param {{ reasoningField?: string, model?: string, cacheCreated?: number, parallel?: boolean, images?: "images" | "text", audio?: string, computer?: {size: {width: number, height: number} | null, custom: Set<string>} }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `cacheCreated` is the tokens this request wrote to a cached content; `parallel` false keeps only the first function call; `images` says where generated images and audio go (default `images` and `audio`; `text` writes them into the text as data URI links); `audio` is the format asked for; `computer` turns Gemini's computer actions into Anthropic's calls.
+ * @param {{ reasoningField?: string, model?: string, cacheCreated?: number, parallel?: boolean, images?: "images" | "text", audio?: string, computer?: {size: {width: number, height: number} | null, custom: Set<string>, shape?: "toolset" | "classic", enabled?: Set<string>} }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `cacheCreated` is the tokens this request wrote to a cached content; `parallel` false keeps only the first function call; `images` says where generated images and audio go (default `images` and `audio`; `text` writes them into the text as data URI links); `audio` is the format asked for; `computer` turns Gemini's computer actions into Anthropic's calls.
  * @returns {any} `chat.completion` object.
  * @throws {TranslatorError} `invalid_upstream_response` (502) when the reply has no candidate and no block reason.
  */
@@ -1018,7 +1022,7 @@ export function completion(reply, options = {}) {
  * ends that candidate. One chunker is for one reply: it keeps the completion id (so every chunk carries the same one) and the numbering of tool
  * calls of each candidate. The signatures of text and thought are given at the end of a candidate, when the length of its text is known. An
  * `error` object in the stream gives one `{ error }` chunk.
- * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, cacheCreated?: number, candidates?: number, parallel?: boolean, images?: "images" | "text", audio?: string, computer?: {size: {width: number, height: number} | null, custom: Set<string>} }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `cacheCreated` is the tokens this request wrote to a cached content; `candidates` is how many candidates are streamed (default 1; the others are ignored); `parallel` false keeps only the first function call of a candidate; `images` says where generated images go; `audio` is the format asked for.
+ * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, cacheCreated?: number, candidates?: number, parallel?: boolean, images?: "images" | "text", audio?: string, computer?: {size: {width: number, height: number} | null, custom: Set<string>, shape?: "toolset" | "classic", enabled?: Set<string>} }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `cacheCreated` is the tokens this request wrote to a cached content; `candidates` is how many candidates are streamed (default 1; the others are ignored); `parallel` false keeps only the first function call of a candidate; `images` says where generated images go; `audio` is the format asked for.
  * @returns {{ event: (data: any) => any[], finished: () => boolean, usage: () => any }} `event` gives the chunks one stream chunk produces, `finished` says whether every candidate ended (a `finishReason`, a blocked prompt, or a failure) and `usage` is the latest `usageMetadata`.
  */
 export function createChunker(options = {}) {

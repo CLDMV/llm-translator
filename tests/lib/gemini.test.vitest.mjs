@@ -851,6 +851,21 @@ describe("computer use in the conversion", () => {
 		);
 	});
 
+	it("names the toolset's calls by the member, with no action in the input", () => {
+		const toolset = { size, custom: new Set(), shape: "toolset", enabled: new Set(["type", "key", "left_click"]) };
+		const out = completion(reply([fn("type", { text: "hi", press_enter: true }, "g1"), fn("click", { x: 500, y: 500 }, "g2")]), {
+			computer: toolset
+		});
+		expect(out.choices[0].message.tool_calls.map((call) => [call.id, call.function.name, JSON.parse(call.function.arguments)])).toEqual([
+			["g1__0of2", "type", { text: "hi" }],
+			["g1__1of2", "key", { text: "Return" }],
+			["g2", "left_click", { coordinate: [1000, 500] }]
+		]);
+		expect(() => completion(reply([fn("wait", {}, "g3")]), { computer: toolset })).toThrow(
+			/wait needs wait, which the client switched off/
+		);
+	});
+
 	it("keeps only the first action without parallel calls, and leaves a reply alone without the computer option", () => {
 		const two = reply([fn("take_screenshot", {}, "a"), fn("wait", {}, "b")]);
 		expect(completion(two, { computer, parallel: false }).choices[0].message.tool_calls).toHaveLength(1);

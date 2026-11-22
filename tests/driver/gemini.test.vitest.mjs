@@ -1326,6 +1326,108 @@ describe("computer use: an Anthropic client and a Gemini model", () => {
 		});
 	});
 
+	it("serves the toolset: members named in the calls with toolset_name, switched-off members not offered, history read by member", async () => {
+		const toolset = {
+			type: "computer_toolset_20260801",
+			configs: { zoom: { enabled: false }, key: { enabled: false }, mouse_move: { enabled: false } }
+		};
+		const result = (id, content) => ({ type: "tool_result", tool_use_id: id, toolset_name: "computer", content });
+		const messages = [
+			...first,
+			{ role: "assistant", content: [{ type: "tool_use", id: "t1", name: "screenshot", toolset_name: "computer", input: {} }] },
+			{ role: "user", content: [result("t1", [image])] }
+		];
+		const clicked = await run(
+			"anthropic",
+			ask(messages, { tools: [toolset] }),
+			ok(
+				content([
+					call("click", { x: 500, y: 250 }, "g1", "SIG"),
+					call("scroll", { x: 0, y: 0, direction: "down", magnitude_in_pixels: 200 }, "g2")
+				])
+			),
+			undefined,
+			"toolset"
+		);
+		expect(clicked.call.body.tools).toEqual([
+			{
+				computerUse: {
+					environment: "ENVIRONMENT_DESKTOP",
+					excludedPredefinedFunctions: ["mouse_down", "mouse_up", "move", "press_key", "hotkey"]
+				}
+			}
+		]);
+		expect(clicked.call.body.contents[1].parts[0].functionCall).toMatchObject({ id: "t1", name: "take_screenshot" });
+		expect(toolUses(clicked.out)).toEqual([
+			{ type: "tool_use", id: "g1", name: "left_click", toolset_name: "computer", input: { coordinate: [1000, 250] } },
+			{
+				type: "tool_use",
+				id: "g2",
+				name: "scroll",
+				toolset_name: "computer",
+				input: { coordinate: [0, 0], scroll_direction: "down", scroll_amount: 2 }
+			}
+		]);
+		const streamed = await run(
+			"anthropic",
+			ask(messages, { tools: [toolset], stream: true }),
+			streamOf([content([call("type", { text: "hi", press_enter: false }, "g3")], {}, null)]),
+			undefined,
+			"toolset"
+		);
+		const events = await collect(streamed.out.stream);
+		const start = events.find((entry) => entry.event === "content_block_start" && entry.data.content_block.type === "tool_use");
+		expect(start.data.content_block).toMatchObject({ id: "g3", name: "type", toolset_name: "computer" });
+		expect(JSON.parse(delta(events, "input_json_delta", "partial_json"))).toEqual({ text: "hi" });
+		const disabled = await run(
+			"anthropic",
+			ask(messages, { tools: [toolset] }),
+			ok(content([call("press_key", { key: "Enter" })])),
+			undefined,
+			"toolset"
+		);
+		expect(disabled.out.status).toBe(502);
+		expect(disabled.out.body.error.message).toMatch(/press_key needs key, which the client switched off/);
+	});
+
+	it("a conversation started on Claude goes on: cursor_position, hold_key and zoom in the history are text, a zoom's image is kept", async () => {
+		const small = Buffer.alloc(33);
+		small.set(Buffer.from(SHOT, "base64").subarray(0, 33));
+		small.writeUInt32BE(10, 16);
+		small.writeUInt32BE(10, 20);
+		const zoomed = { type: "image", source: { type: "base64", media_type: "image/png", data: small.toString("base64") } };
+		const messages = [
+			...first,
+			{ role: "assistant", content: [{ type: "tool_use", id: "p", name: "computer", input: { action: "cursor_position" } }] },
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "p", content: "X=1,Y=2" }] },
+			{ role: "assistant", content: [{ type: "tool_use", id: "s", name: "computer", input: { action: "screenshot" } }] },
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "s", content: [image] }] },
+			{ role: "assistant", content: [{ type: "tool_use", id: "z", name: "computer", input: { action: "zoom", region: [0, 0, 10, 10] } }] },
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "z", content: [zoomed] }] }
+		];
+		const { call: sent, out } = await run(
+			"anthropic",
+			ask(messages),
+			ok(content([call("click", { x: 500, y: 500 })])),
+			undefined,
+			"history"
+		);
+		expect(sent.body.contents.map((entry) => [entry.role, entry.parts.map((part) => Object.keys(part)[0])])).toEqual([
+			["user", ["text"]],
+			["model", ["text"]],
+			["user", ["text"]],
+			["model", ["functionCall"]],
+			["user", ["functionResponse"]],
+			["model", ["text"]],
+			["user", ["text", "inlineData"]]
+		]);
+		expect(sent.body.contents[1].parts[0].text).toBe("[Computer action cursor_position]");
+		expect(sent.body.contents[2].parts[0].text).toBe("[Result of computer action cursor_position: X=1,Y=2]");
+		expect(sent.body.contents[5].parts[0].text).toBe('[Computer action zoom {"region":[0,0,10,10]}]');
+		expect(sent.body.contents[6].parts[1].inlineData.mimeType).toBe("image/png");
+		expect(toolUses(out)[0].input).toEqual({ action: "left_click", coordinate: [1000, 500] });
+	});
+
 	it("the operator's own computerUse tool in the settings replaces the one made from the client's tool", async () => {
 		const settings = { gemini: { tools: [{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }] } };
 		const { call: sent } = await run("anthropic", ask(first), ok(content([{ text: "x" }])), { settings }, "computer-setting");
