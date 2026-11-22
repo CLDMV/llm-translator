@@ -19,6 +19,7 @@
  */
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { createChunker } from "../../../../../../../lib/gemini.mjs";
+import { tagged } from "../../../../../../../lib/gemini-computer.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
 import { stream as fromChat } from "../../../../../openai/chat/to/anthropic/messages/stream.mjs";
 
@@ -33,13 +34,29 @@ import { stream as fromChat } from "../../../../../openai/chat/to/anthropic/mess
  * @returns {AsyncGenerator<{ event: string, data: any }, void, undefined>} Anthropic events.
  */
 export function stream(source, state, settings) {
-	const chunker = createChunker({ reasoningField: resolve(settings).reasoningField });
-	return fromChat(
-		(async function* () {
-			for await (const message of messages(source)) yield* chunker.event(message.data);
-			if (chunker.finished()) yield { data: "[DONE]" };
-		})(),
-		state,
-		settings
-	);
+	const chunker = createChunker({
+		reasoningField: resolve(settings).reasoningField,
+		parallel: state?.parallel,
+		citations: resolve(settings).citations,
+		images: "text",
+		computer: state?.computer,
+		confirm: state?.confirm,
+		cacheCreated: state?.cache?.created
+	});
+	return (async function* () {
+		const events = fromChat(
+			(async function* () {
+				for await (const message of messages(source)) yield* chunker.event(message.data);
+				if (chunker.finished()) yield { data: "[DONE]" };
+			})(),
+			state,
+			settings
+		);
+		// The computer toolset's calls carry `toolset_name`, which the block that opens each call is given.
+		for await (const event of events) {
+			yield event.event === "content_block_start"
+				? { ...event, data: { ...event.data, content_block: tagged(event.data.content_block, state?.computer) } }
+				: event;
+		}
+	})();
 }

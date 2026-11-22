@@ -183,7 +183,7 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		const endpoint = captured.endpoint(sent.upstream);
 		const driver = captured.driver(endpoint);
 		const exact =
-			driver.count && !sent.state.responses && !(hide && sent.state.stream)
+			driver.count && !sent.state.responses && sent.state.convert?.local === undefined && !(hide && sent.state.stream)
 				? await driver.count({
 						endpoint,
 						request: sent.body,
@@ -519,9 +519,18 @@ function usageShape(state) {
  * @param {any} upstream - Result of `request`.
  * @param {AbortSignal | undefined} signal - Abort signal.
  * @param {{connectTimeout: number, headersTimeout: number} | null} [limits] - Pool timeouts in ms (0 is off), or null for none.
- * @returns {Promise<Response>} Upstream response.
+ * @returns {Promise<Response>} Upstream response (or, for a conversion that already has the reply, one made from it).
  */
 async function call(transport, upstream, signal, limits = null) {
+	// A conversion that already has the reply (`state.convert.local`, a reply in the upstream protocol's shape) is answered here, with no request.
+	const local = upstream.state.convert?.local;
+	if (local !== undefined) {
+		const stream = upstream.state.stream === true;
+		return new Response(stream ? `data: ${JSON.stringify(local)}\n\n` : JSON.stringify(local), {
+			status: 200,
+			headers: { "content-type": stream ? "text/event-stream" : "application/json" }
+		});
+	}
 	let timer;
 	let late = false;
 	let guarded = signal;

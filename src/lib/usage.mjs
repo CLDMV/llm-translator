@@ -57,11 +57,12 @@ export function normalize(protocol, usage) {
 	if (protocol === "openai") {
 		const prompt = count(usage.prompt_tokens);
 		const cached = count(usage.prompt_tokens_details?.cached_tokens);
+		const written = count(usage.prompt_tokens_details?.cache_write_tokens);
 		out = {
-			input_tokens: prompt === null ? null : Math.max(0, prompt - (cached ?? 0)),
+			input_tokens: prompt === null ? null : Math.max(0, prompt - (cached ?? 0) - (written ?? 0)),
 			output_tokens: count(usage.completion_tokens),
 			cache_read_input_tokens: cached,
-			cache_creation_input_tokens: null
+			cache_creation_input_tokens: written
 		};
 	} else if (protocol === "folded") {
 		// Anthropic usage as the OpenAI front reports it: cache creation is folded into the input count and cached tokens are

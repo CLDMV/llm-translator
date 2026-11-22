@@ -236,7 +236,7 @@ async function read(res, maxBytes) {
 /**
  * Fetch a document.
  * @param {string} input - The URL.
- * @param {{allow: string[], maxBytes: number, timeout: number, maxRedirects: number, allowPrivate?: boolean, signal?: AbortSignal}} options - Limits and rules (see the `documentUrls` setting).
+ * @param {{allow: string[], maxBytes: number, timeout: number, maxRedirects: number, allowPrivate?: boolean, signal?: AbortSignal, types?: Map<string, string>}} options - Limits and rules (see the `documentUrls` setting); `types` replaces the content types that are accepted (content type to the media type it is stored as).
  * @param {{lookup?: (host: string) => Promise<{address: string, family: number}[]>, modules?: {http: any, https: any}}} [deps] - Host name lookup and protocol modules (replaceable for tests).
  * @returns {Promise<{bytes: Buffer, mediaType: string, url: string}>} The body, its media type (`application/pdf` or `text/plain`) and the final URL.
  * @throws {FetchError} For anything that stops the fetch; never any other error.
@@ -318,7 +318,7 @@ async function run(input, options, resolver, modules, signal) {
 			res.destroy();
 			throw new FetchError("encoding", "the response is compressed, which is not supported", `content-encoding ${encoding}`);
 		}
-		const type = TYPES.get(
+		const type = (options.types ?? TYPES).get(
 			String(res.headers["content-type"] ?? "")
 				.split(";")[0]
 				.trim()

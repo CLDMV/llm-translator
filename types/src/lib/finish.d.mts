@@ -51,8 +51,8 @@ export function toAnthropicStop(finishReason: string | null | undefined, { hasTo
 export function toOpenAIFinish(stopReason: string | null | undefined): string;
 /**
  * Anthropic usage from an OpenAI usage object. Cached prompt tokens (reported by vLLM only with prompt-token
- * details enabled) are reported as `cache_read_input_tokens` and subtracted from `input_tokens`.
- * @param {{ prompt_tokens?: number, completion_tokens?: number, prompt_tokens_details?: { cached_tokens?: number }|null }|null|undefined} usage - OpenAI usage.
+ * details enabled) are reported as `cache_read_input_tokens` and subtracted from `input_tokens`; `cache_write_tokens` (OpenRouter's name, also written by the Gemini converters) are `cache_creation_input_tokens`, likewise.
+ * @param {{ prompt_tokens?: number, completion_tokens?: number, prompt_tokens_details?: { cached_tokens?: number, cache_write_tokens?: number }|null }|null|undefined} usage - OpenAI usage.
  * @returns {{ input_tokens: number, output_tokens: number, cache_creation_input_tokens: number, cache_read_input_tokens: number }} Anthropic usage.
  */
 export function toAnthropicUsage(usage: {
@@ -60,6 +60,7 @@ export function toAnthropicUsage(usage: {
     completion_tokens?: number;
     prompt_tokens_details?: {
         cached_tokens?: number;
+        cache_write_tokens?: number;
     } | null;
 } | null | undefined): {
     input_tokens: number;

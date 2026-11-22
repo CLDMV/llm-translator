@@ -526,7 +526,14 @@ function imageParts(block, s, state) {
 	}
 	const source = block.source;
 	if (source.type === "base64") return [{ type: "image_url", image_url: { url: `data:${source.media_type};base64,${source.data}` } }];
-	if (source.type === "url") return [{ type: "image_url", image_url: { url: source.url } }];
+	if (source.type === "url") {
+		return [
+			{
+				type: "image_url",
+				image_url: { url: source.url, ...(typeof source.media_type === "string" ? { mime_type: source.media_type } : {}) }
+			}
+		];
+	}
 	drop(state, "image.file");
 	return [{ type: "text", text: "[An image supplied as an uploaded file could not be forwarded.]" }];
 }

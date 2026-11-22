@@ -98,17 +98,18 @@ export function toOpenAIFinish(stopReason) {
 
 /**
  * Anthropic usage from an OpenAI usage object. Cached prompt tokens (reported by vLLM only with prompt-token
- * details enabled) are reported as `cache_read_input_tokens` and subtracted from `input_tokens`.
- * @param {{ prompt_tokens?: number, completion_tokens?: number, prompt_tokens_details?: { cached_tokens?: number }|null }|null|undefined} usage - OpenAI usage.
+ * details enabled) are reported as `cache_read_input_tokens` and subtracted from `input_tokens`; `cache_write_tokens` (OpenRouter's name, also written by the Gemini converters) are `cache_creation_input_tokens`, likewise.
+ * @param {{ prompt_tokens?: number, completion_tokens?: number, prompt_tokens_details?: { cached_tokens?: number, cache_write_tokens?: number }|null }|null|undefined} usage - OpenAI usage.
  * @returns {{ input_tokens: number, output_tokens: number, cache_creation_input_tokens: number, cache_read_input_tokens: number }} Anthropic usage.
  */
 export function toAnthropicUsage(usage) {
 	const prompt = usage?.prompt_tokens ?? 0;
 	const cached = usage?.prompt_tokens_details?.cached_tokens ?? 0;
+	const written = usage?.prompt_tokens_details?.cache_write_tokens ?? 0;
 	return {
-		input_tokens: Math.max(0, prompt - cached),
+		input_tokens: Math.max(0, prompt - cached - written),
 		output_tokens: usage?.completion_tokens ?? 0,
-		cache_creation_input_tokens: 0,
+		cache_creation_input_tokens: written,
 		cache_read_input_tokens: cached
 	};
 }

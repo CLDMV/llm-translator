@@ -59,6 +59,17 @@ describe("finish mapping", () => {
 		expect(toOpenAIFinish(null)).toBe("stop");
 	});
 
+	test("usage to anthropic: cache_write_tokens are cache creation", () => {
+		expect(
+			toAnthropicUsage({ prompt_tokens: 100, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 50 } })
+		).toEqual({
+			input_tokens: 20,
+			output_tokens: 2,
+			cache_creation_input_tokens: 50,
+			cache_read_input_tokens: 30
+		});
+	});
+
 	test("usage to anthropic", () => {
 		expect(toAnthropicUsage(undefined)).toEqual({
 			input_tokens: 0,

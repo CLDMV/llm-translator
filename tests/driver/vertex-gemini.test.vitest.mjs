@@ -21,7 +21,7 @@ import { closeAll, collect, make } from "../helpers/translator.mjs";
 import { fakeGoogle } from "../helpers/google.mjs";
 import { content } from "../helpers/gemini.mjs";
 import * as google from "../../src/lib/google-auth.mjs";
-import { gemini as isGemini, geminiRoute } from "../../src/lib/vertex.mjs";
+import { gemini as isGemini, geminiCache, geminiRoute } from "../../src/lib/vertex.mjs";
 
 const servers = [];
 const start = async (options) => {
@@ -242,5 +242,43 @@ describe("driver leaves", () => {
 		expect(api.driver.vertex.path("messages", { endpoint, model: "claude-x", protocol: "anthropic.messages" })).toMatch(
 			/publishers\/anthropic/
 		);
+	});
+});
+
+describe("cached contents", () => {
+	it("names the collection and the model resource of the project and region", () => {
+		const endpoint = { name: "v", url: "https://x", vertex: { project: "p q", region: "europe-west1" } };
+		expect(geminiCache(endpoint, "publishers/google/models/gemini-2.5-flash")).toEqual({
+			path: "/v1/projects/p%20q/locations/europe-west1/cachedContents",
+			resource: "projects/p q/locations/europe-west1/publishers/google/models/gemini-2.5-flash"
+		});
+		expect(geminiCache(endpoint, "models/gemini-x").resource).toMatch(/publishers\/google\/models\/gemini-x$/);
+	});
+
+	it("a cache_control breakpoint creates a cached content in the project and region, and the request uses it", async () => {
+		const made = [];
+		const server = await start({
+			vertex: (req, body, res) => {
+				if (req.url.endsWith("/cachedContents")) {
+					made.push([req.url, body]);
+					return reply(res, 200, { name: "projects/proj/locations/us-east5/cachedContents/9" });
+				}
+				return reply(res, 200, content([{ text: "ok" }]));
+			}
+		});
+		const api = await make({ front: "anthropic", upstreams: [upstream(server)], detect: false });
+		const system = [{ type: "text", text: "Be careful. ".repeat(500), cache_control: { type: "ephemeral" } }];
+		const out = await api.send({ model: MODEL, max_tokens: 8, system, messages: user });
+		expect(out.status).toBe(200);
+		expect(made[0][0]).toBe("/v1/projects/proj/locations/us-east5/cachedContents");
+		expect(made[0][1].model).toBe(`projects/proj/locations/us-east5/publishers/google/models/${MODEL}`);
+		const calls = vertexCalls(server);
+		expect(calls.map((entry) => entry.url)).toEqual([
+			"/v1/projects/proj/locations/us-east5/cachedContents",
+			`${BASE}/${MODEL}:generateContent`
+		]);
+		expect(calls[0].headers.authorization).toBe("Bearer tok");
+		expect(calls[1].body.cachedContent).toBe("projects/proj/locations/us-east5/cachedContents/9");
+		expect(calls[1].body.systemInstruction).toBeUndefined();
 	});
 });

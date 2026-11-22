@@ -98,10 +98,22 @@
 		"fix:headers": "fix-headers --config .configs/fix-headers.json"
 	},
 	"peerDependencies": {
-		"fastify": "^5.12.7"
+		"fastify": "^5.12.7",
+		"libflacjs": "^5.6.0",
+		"opusscript": "^0.1.1",
+		"wasm-media-encoders": "^0.7.0"
 	},
 	"peerDependenciesMeta": {
 		"fastify": {
+			"optional": true
+		},
+		"libflacjs": {
+			"optional": true
+		},
+		"opusscript": {
+			"optional": true
+		},
+		"wasm-media-encoders": {
 			"optional": true
 		}
 	},
@@ -127,10 +139,13 @@
 		"eslint": "^10.13.0",
 		"fastify": "^5.12.7",
 		"globals": "^17.13.0",
+		"libflacjs": "^5.6.0",
+		"opusscript": "^0.1.1",
 		"prettier": "^3.9.10",
 		"tsup": "^9.0.0",
 		"typescript": "^6.0.3",
-		"vitest": "^5.0.5"
+		"vitest": "^5.0.5",
+		"wasm-media-encoders": "^0.7.0"
 	},
 	"overrides": {
 		"katex": ">=0.19.1 <1.0.0",
