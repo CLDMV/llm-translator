@@ -21,6 +21,7 @@ import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { MAX_CANDIDATES, chatBody } from "../../../../../../../lib/gemini.mjs";
 import { prepare } from "../../../../../../../lib/gemini-images.mjs";
+import { FORMATS, load } from "../../../../../../../lib/gemini-audio.mjs";
 
 /**
  * Convert a Chat Completions request to a `generateContent` body (see `chatBody`). The upstream's `sampling` setting becomes further
@@ -48,6 +49,9 @@ export async function request(body, settings, context) {
 		candidates: body.n > 1 ? Math.min(body.n, MAX_CANDIDATES) : 1,
 		audio: body.audio?.format
 	};
+	// An encoded audio format needs its optional encoder, which fails here, before anything is sent, when it is not installed.
+	const format = typeof body.audio?.format === "string" ? body.audio.format.toLowerCase() : undefined;
+	if (FORMATS.includes(String(format))) await load(String(format));
 	const prepared = await prepare(body, { options: s.documentUrls, report: context?.report, signal: context?.signal });
 	return {
 		body: chatBody(prepared, {

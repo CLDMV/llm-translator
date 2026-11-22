@@ -33,7 +33,12 @@ import { stream as fromChat } from "../../../../../openai/chat/to/anthropic/mess
  * @returns {AsyncGenerator<{ event: string, data: any }, void, undefined>} Anthropic events.
  */
 export function stream(source, state, settings) {
-	const chunker = createChunker({ reasoningField: resolve(settings).reasoningField, parallel: state?.parallel, images: "text" });
+	const chunker = createChunker({
+		reasoningField: resolve(settings).reasoningField,
+		parallel: state?.parallel,
+		images: "text",
+		cacheCreated: state?.cache?.created
+	});
 	return fromChat(
 		(async function* () {
 			for await (const message of messages(source)) yield* chunker.event(message.data);

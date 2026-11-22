@@ -22,6 +22,7 @@ import { callId, completionId } from "./ids.mjs";
 import { parseArguments } from "./arguments.mjs";
 import { reasoningOf } from "./thinking.mjs";
 import { gemini as schemaOf } from "./gemini-schema.mjs";
+import { FORMATS as ENCODED, encode } from "./gemini-audio.mjs";
 
 /** `format` of the `reasoning_details` items that carry a Gemini `thoughtSignature` (`data`) and the part it belongs to (`for`: `text`, `thought` or `call`, with the tool call `id` for a call, and `rest` for text and thought: the characters of the text that follow the part). */
 export const FORMAT = "google-gemini-v1";
@@ -57,6 +58,9 @@ const HANDLED = new Set([
 
 /** Chat Completions fields that mean nothing to Gemini and are not worth a mention when they are left out. */
 const SILENT = new Set(["stream_options", "user", "metadata", "store", "service_tier"]);
+
+/** Every field the conversion reads or ignores on purpose. */
+const KNOWN = new Set([...HANDLED, ...SILENT]);
 
 /** Image types Gemini reads inline, as the MIME types a data URL names. GIF is turned into PNG before the body is built. */
 const IMAGES = new Set(["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"]);
@@ -113,8 +117,8 @@ const AUDIO = {
 /** Gemini's name for each output modality OpenAI names. */
 const MODALITIES = { text: "TEXT", audio: "AUDIO", image: "IMAGE" };
 
-/** Audio formats a reply can be returned in: Gemini answers with raw 16-bit PCM, which is wrapped in a WAV header or returned as it is. */
-const AUDIO_FORMATS = new Set(["wav", "pcm16", "pcm"]);
+/** Audio formats a reply can be returned in: Gemini answers with raw 16-bit PCM, which is wrapped in a WAV header, returned as it is, or encoded (`lib/gemini-audio`). */
+const AUDIO_FORMATS = new Set(["wav", "pcm16", "pcm", ...ENCODED]);
 
 /** Chat Completions `finish_reason` for each Gemini `finishReason`. A reason that is not here is not an answer to show as a failure: see `finishOf`. */
 const FINISH = {
@@ -595,10 +599,13 @@ export function chatBody(body, context = {}) {
 	if (body.audio !== undefined && body.audio !== null) {
 		const wanted = String(body.audio.format ?? "wav").toLowerCase();
 		if (!AUDIO_FORMATS.has(wanted)) {
-			throw new TranslatorError(`audio.format: Gemini returns raw PCM audio, which can be given as "wav" or "pcm16", not "${wanted}"`, {
-				code: "invalid_request",
-				param: "audio.format"
-			});
+			throw new TranslatorError(
+				`audio.format: Gemini returns raw PCM audio, which can be given as "wav", "pcm16", "mp3", "opus" or "flac", not "${wanted}"`,
+				{
+					code: "invalid_request",
+					param: "audio.format"
+				}
+			);
 		}
 		if (typeof body.audio.voice === "string" && body.audio.voice !== "") {
 			config.speechConfig = { voiceConfig: { prebuiltVoiceConfig: { voiceName: body.audio.voice } } };
@@ -619,8 +626,7 @@ export function chatBody(body, context = {}) {
 		}
 	}
 	for (const key of Object.keys(body)) {
-		if (HANDLED.has(key) || SILENT.has(key)) continue;
-		drop(dropped, key);
+		if (!KNOWN.has(key)) drop(dropped, key);
 	}
 	return out;
 }
@@ -655,21 +661,31 @@ function noteOf(candidate) {
 /**
  * Chat Completions usage from a Gemini `usageMetadata`. Gemini counts cached tokens inside `promptTokenCount` and thinking tokens apart from
  * `candidatesTokenCount`; the completion is both, and tokens of tool use prompts count as prompt.
+ * When the request created a cached content, the tokens it wrote are `prompt_tokens_details.cache_write_tokens` (the name OpenRouter uses; OpenAI has none) and are taken out of the cached count, because Gemini reads back what it just wrote.
  * @param {any} meta - Gemini `usageMetadata`.
- * @returns {{prompt_tokens: number, completion_tokens: number, total_tokens: number, prompt_tokens_details?: {cached_tokens: number}, completion_tokens_details?: {reasoning_tokens: number}} | undefined} Usage, or undefined when there are no counts.
+ * @param {number} [created] - Tokens written to a cached content by this request.
+ * @returns {{prompt_tokens: number, completion_tokens: number, total_tokens: number, prompt_tokens_details?: {cached_tokens?: number, cache_write_tokens?: number}, completion_tokens_details?: {reasoning_tokens: number}} | undefined} Usage, or undefined when there are no counts.
  */
-export function usageOf(meta) {
+export function usageOf(meta, created) {
 	if (!Number.isFinite(meta?.promptTokenCount) && !Number.isFinite(meta?.candidatesTokenCount)) return undefined;
 	const count = (value) => (Number.isFinite(value) ? value : 0);
 	const prompt = count(meta.promptTokenCount) + count(meta.toolUsePromptTokenCount);
 	const thoughts = count(meta.thoughtsTokenCount);
 	const completion = count(meta.candidatesTokenCount) + thoughts;
-	const cached = count(meta.cachedContentTokenCount);
+	const written = count(created);
+	const cached = Math.max(0, count(meta.cachedContentTokenCount) - written);
 	return {
 		prompt_tokens: prompt,
 		completion_tokens: completion,
 		total_tokens: prompt + completion,
-		...(cached > 0 ? { prompt_tokens_details: { cached_tokens: cached } } : {}),
+		...(cached > 0 || written > 0
+			? {
+					prompt_tokens_details: {
+						...(cached > 0 ? { cached_tokens: cached } : {}),
+						...(written > 0 ? { cache_write_tokens: written } : {})
+					}
+				}
+			: {}),
 		...(thoughts > 0 ? { completion_tokens_details: { reasoning_tokens: thoughts } } : {})
 	};
 }
@@ -677,17 +693,19 @@ export function usageOf(meta) {
 /**
  * The same counts as Anthropic usage, which is what the OpenAI front's usage report reads from a converted reply (cached tokens are not in `input_tokens`).
  * @param {any} meta - Gemini `usageMetadata`.
+ * @param {number} [created] - Tokens written to a cached content by this request.
  * @returns {{input_tokens: number, output_tokens: number, cache_read_input_tokens: number, cache_creation_input_tokens: number} | undefined} Anthropic usage, or undefined when there are no counts.
  */
-export function folded(meta) {
-	const usage = usageOf(meta);
+export function folded(meta, created) {
+	const usage = usageOf(meta, created);
 	if (usage === undefined) return undefined;
 	const cached = usage.prompt_tokens_details?.cached_tokens ?? 0;
+	const written = usage.prompt_tokens_details?.cache_write_tokens ?? 0;
 	return {
-		input_tokens: usage.prompt_tokens - cached,
+		input_tokens: usage.prompt_tokens - cached - written,
 		output_tokens: usage.completion_tokens,
 		cache_read_input_tokens: cached,
-		cache_creation_input_tokens: 0
+		cache_creation_input_tokens: written
 	};
 }
 
@@ -844,7 +862,7 @@ function gatherer(options = {}) {
 /**
  * The audio of a reply as the `audio` object of a Chat Completions message.
  * @param {{mime: string, data: string}[]} pieces - The audio parts, in order.
- * @param {string} format - `wav` or `pcm16`.
+ * @param {string | undefined} format - `wav` (the default), `pcm16` or `pcm`, or `mp3`, `opus` or `flac`, which `lib/gemini-audio` encodes (its encoder is loaded when the request is made).
  * @returns {{id: string, data: string, expires_at: number, transcript: string}} The audio object.
  */
 function audioOf(pieces, format) {
@@ -852,7 +870,12 @@ function audioOf(pieces, format) {
 	const rate = Number(/rate=(\d+)/.exec(pieces[0].mime)?.[1] ?? 24000);
 	return {
 		id: `audio_${completionId().slice(9)}`,
-		data: (format === "wav" ? wav(pcm, rate) : pcm).toString("base64"),
+		data: (ENCODED.includes(String(format))
+			? encode(pcm, rate, String(format))
+			: format === "pcm16" || format === "pcm"
+				? pcm
+				: wav(pcm, rate)
+		).toString("base64"),
 		expires_at: 0,
 		transcript: ""
 	};
@@ -895,7 +918,7 @@ function choiceOf(candidate, index, options) {
 	if (images.length > 0 && options.images !== "text") {
 		message.images = images.map((image) => ({ type: "image_url", image_url: { url: `data:${image.mime};base64,${image.data}` } }));
 	}
-	if (audio.length > 0) message.audio = audioOf(audio, options.audio === "pcm16" || options.audio === "pcm" ? "pcm16" : "wav");
+	if (audio.length > 0) message.audio = audioOf(audio, options.audio);
 	if (finish === "content_filter") message.refusal = refusalOf(candidate.finishReason, candidate.finishMessage, false);
 	const logprobs = logprobsOf(candidate?.logprobsResult);
 	return { index, message, ...(logprobs === undefined ? {} : { logprobs }), finish_reason: finish };
@@ -908,12 +931,17 @@ function choiceOf(candidate, index, options) {
  * audio is `audio`, code and its output are fenced blocks in the text, `logprobsResult` is `logprobs`, `finishReason` becomes `finish_reason` and
  * `usageMetadata` becomes `usage`. A prompt Gemini blocked (`promptFeedback.blockReason`, no candidates) is an empty reply that was filtered.
  * @param {any} reply - Parsed `generateContent` reply.
- * @param {{ reasoningField?: string, model?: string, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `parallel` false keeps only the first function call; `images` says where generated images go (default `images`); `audio` is the format asked for.
+ * @param {{ reasoningField?: string, model?: string, cacheCreated?: number, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `cacheCreated` is the tokens this request wrote to a cached content; `parallel` false keeps only the first function call; `images` says where generated images go (default `images`); `audio` is the format asked for.
  * @returns {any} `chat.completion` object.
  * @throws {TranslatorError} `invalid_upstream_response` (502) when the reply has no candidate and no block reason.
  */
 export function completion(reply, options = {}) {
-	const spec = { field: options.reasoningField ?? "reasoning", parallel: options.parallel, images: options.images, audio: options.audio };
+	const spec = {
+		field: options.reasoningField ?? "reasoning",
+		parallel: options.parallel,
+		images: options.images,
+		audio: options.audio?.toLowerCase()
+	};
 	let choices;
 	if (Array.isArray(reply?.candidates) && reply.candidates.length > 0) {
 		choices = reply.candidates.map((candidate, at) => choiceOf(candidate, candidate.index ?? at, spec));
@@ -927,7 +955,7 @@ export function completion(reply, options = {}) {
 			}
 		];
 	} else throw new TranslatorError("Upstream response contained no message", { code: "invalid_upstream_response", status: 502 });
-	const usage = usageOf(reply.usageMetadata);
+	const usage = usageOf(reply.usageMetadata, options.cacheCreated);
 	return {
 		id: completionId(),
 		object: "chat.completion",
@@ -944,7 +972,7 @@ export function completion(reply, options = {}) {
  * ends that candidate. One chunker is for one reply: it keeps the completion id (so every chunk carries the same one) and the numbering of tool
  * calls of each candidate. The signatures of text and thought are given at the end of a candidate, when the length of its text is known. An
  * `error` object in the stream gives one `{ error }` chunk.
- * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, candidates?: number, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `candidates` is how many candidates are streamed (default 1; the others are ignored); `parallel` false keeps only the first function call of a candidate; `images` says where generated images go; `audio` is the format asked for.
+ * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, cacheCreated?: number, candidates?: number, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `cacheCreated` is the tokens this request wrote to a cached content; `candidates` is how many candidates are streamed (default 1; the others are ignored); `parallel` false keeps only the first function call of a candidate; `images` says where generated images go; `audio` is the format asked for.
  * @returns {{ event: (data: any) => any[], finished: () => boolean, usage: () => any }} `event` gives the chunks one stream chunk produces, `finished` says whether every candidate ended (a `finishReason`, a blocked prompt, or a failure) and `usage` is the latest `usageMetadata`.
  */
 export function createChunker(options = {}) {
@@ -952,6 +980,7 @@ export function createChunker(options = {}) {
 	const created = Math.floor(Date.now() / 1000);
 	const field = options.reasoningField ?? "reasoning";
 	const wanted = options.candidates ?? 1;
+	const audio = options.audio?.toLowerCase();
 	const states = new Map();
 	let failed = false;
 	let blocked = false;
@@ -1041,10 +1070,7 @@ export function createChunker(options = {}) {
 					const { signatures } = own.gather.finish();
 					if (signatures.length > 0) out.push(...first(index), make(index, { reasoning_details: signatures }));
 					if (own.audio.length > 0) {
-						out.push(
-							...first(index),
-							make(index, { audio: audioOf(own.audio, options.audio === "pcm16" || options.audio === "pcm" ? "pcm16" : "wav") })
-						);
+						out.push(...first(index), make(index, { audio: audioOf(own.audio, audio) }));
 					}
 					const finish = finishOf(candidate.finishReason, own.calls > 0);
 					if (finish === "content_filter")
@@ -1052,7 +1078,7 @@ export function createChunker(options = {}) {
 					out.push(...first(index), make(index, {}, finish));
 				}
 			}
-			const total = usageOf(usage);
+			const total = usageOf(usage, options.cacheCreated);
 			if (ended() && !failed && !counted && total !== undefined && options.includeUsage !== false) {
 				counted = true;
 				out.push({ id, object: "chat.completion.chunk", created, model: options.model, choices: [], usage: total });

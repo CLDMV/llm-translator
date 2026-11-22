@@ -128,6 +128,9 @@ describe("chatBody: messages", () => {
 		});
 		expect(chatBody({ messages: [{ role: "user", content: "x" }], n: 1, temperature: null, stop: null }).generationConfig).toBeUndefined();
 		expect(chatBody({}).contents).toEqual([]);
+		const quiet = [];
+		chatBody({ messages: [], metadata: { a: 1 }, store: true, service_tier: "auto", user: "u", stream_options: {} }, { dropped: quiet });
+		expect(quiet).toEqual([]);
 		expect(
 			chatBody({
 				messages: [
@@ -499,7 +502,7 @@ describe("chatBody: structured output, logprobs, modalities, audio and the setti
 		expect(config({ modalities: ["text", "audio"], audio: { format: "pcm16" } })).toEqual({ responseModalities: ["TEXT", "AUDIO"] });
 		expect(config({ audio: { voice: "", format: "PCM" } })).toEqual({ responseModalities: ["AUDIO"] });
 		expect(config({ audio: {} }, { gemini: { responseModalities: ["TEXT", "AUDIO"] } })).toEqual({ responseModalities: ["TEXT", "AUDIO"] });
-		expect(() => ask({ audio: { format: "mp3" } })).toThrow(/audio\.format/);
+		expect(() => ask({ audio: { format: "aac" } })).toThrow(/audio\.format/);
 		expect(chatBody({ messages: [], audio: null }).generationConfig).toBeUndefined();
 	});
 
@@ -736,6 +739,37 @@ describe("finishOf, usageOf and folded", () => {
 	});
 });
 
+describe("cache creation tokens", () => {
+	const meta = { promptTokenCount: 1600, candidatesTokenCount: 5, cachedContentTokenCount: 1500 };
+
+	it("reports what a request wrote as cache_write_tokens, out of the cached count, and as creation in the Anthropic shape", () => {
+		expect(usageOf(meta)).toMatchObject({ prompt_tokens: 1600, prompt_tokens_details: { cached_tokens: 1500 } });
+		expect(usageOf(meta, 1500)).toEqual({
+			prompt_tokens: 1600,
+			completion_tokens: 5,
+			total_tokens: 1605,
+			prompt_tokens_details: { cache_write_tokens: 1500 }
+		});
+		expect(usageOf(meta, 1000).prompt_tokens_details).toEqual({ cached_tokens: 500, cache_write_tokens: 1000 });
+		expect(usageOf({ promptTokenCount: 5, candidatesTokenCount: 1 }, 7).prompt_tokens_details).toEqual({ cache_write_tokens: 7 });
+		expect(folded(meta, 1500)).toEqual({
+			input_tokens: 100,
+			output_tokens: 5,
+			cache_read_input_tokens: 0,
+			cache_creation_input_tokens: 1500
+		});
+		expect(folded(meta)).toMatchObject({ cache_read_input_tokens: 1500, cache_creation_input_tokens: 0 });
+	});
+
+	it("puts them on a completion and on the stream's usage chunk", () => {
+		const reply = { candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }], usageMetadata: meta };
+		expect(completion(reply, { cacheCreated: 1500 }).usage.prompt_tokens_details).toEqual({ cache_write_tokens: 1500 });
+		const chunker = createChunker({ cacheCreated: 1500 });
+		const out = chunker.event({ ...reply });
+		expect(out.at(-1).usage.prompt_tokens_details).toEqual({ cache_write_tokens: 1500 });
+	});
+});
+
 describe("completion", () => {
 	const reply = (parts, extra = {}) => ({
 		candidates: [{ index: 0, content: { role: "model", parts }, finishReason: "STOP", ...extra }],
@@ -752,6 +786,7 @@ describe("completion", () => {
 				{ functionCall: { name: "Read" } },
 				{ inlineData: { mimeType: "video/mp4", data: "AAAA" } },
 				{ inlineData: { mimeType: "image/png" } },
+				{ inlineData: { data: "AAAA" } },
 				{ fileData: { fileUri: "x" } },
 				{ thoughtSignature: "" },
 				null

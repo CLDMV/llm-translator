@@ -61,15 +61,18 @@ export function finishOf(reason: string | undefined, calls: boolean): string;
 /**
  * Chat Completions usage from a Gemini `usageMetadata`. Gemini counts cached tokens inside `promptTokenCount` and thinking tokens apart from
  * `candidatesTokenCount`; the completion is both, and tokens of tool use prompts count as prompt.
+ * When the request created a cached content, the tokens it wrote are `prompt_tokens_details.cache_write_tokens` (the name OpenRouter uses; OpenAI has none) and are taken out of the cached count, because Gemini reads back what it just wrote.
  * @param {any} meta - Gemini `usageMetadata`.
- * @returns {{prompt_tokens: number, completion_tokens: number, total_tokens: number, prompt_tokens_details?: {cached_tokens: number}, completion_tokens_details?: {reasoning_tokens: number}} | undefined} Usage, or undefined when there are no counts.
+ * @param {number} [created] - Tokens written to a cached content by this request.
+ * @returns {{prompt_tokens: number, completion_tokens: number, total_tokens: number, prompt_tokens_details?: {cached_tokens?: number, cache_write_tokens?: number}, completion_tokens_details?: {reasoning_tokens: number}} | undefined} Usage, or undefined when there are no counts.
  */
-export function usageOf(meta: any): {
+export function usageOf(meta: any, created?: number): {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
     prompt_tokens_details?: {
-        cached_tokens: number;
+        cached_tokens?: number;
+        cache_write_tokens?: number;
     };
     completion_tokens_details?: {
         reasoning_tokens: number;
@@ -78,9 +81,10 @@ export function usageOf(meta: any): {
 /**
  * The same counts as Anthropic usage, which is what the OpenAI front's usage report reads from a converted reply (cached tokens are not in `input_tokens`).
  * @param {any} meta - Gemini `usageMetadata`.
+ * @param {number} [created] - Tokens written to a cached content by this request.
  * @returns {{input_tokens: number, output_tokens: number, cache_read_input_tokens: number, cache_creation_input_tokens: number} | undefined} Anthropic usage, or undefined when there are no counts.
  */
-export function folded(meta: any): {
+export function folded(meta: any, created?: number): {
     input_tokens: number;
     output_tokens: number;
     cache_read_input_tokens: number;
@@ -93,13 +97,14 @@ export function folded(meta: any): {
  * audio is `audio`, code and its output are fenced blocks in the text, `logprobsResult` is `logprobs`, `finishReason` becomes `finish_reason` and
  * `usageMetadata` becomes `usage`. A prompt Gemini blocked (`promptFeedback.blockReason`, no candidates) is an empty reply that was filtered.
  * @param {any} reply - Parsed `generateContent` reply.
- * @param {{ reasoningField?: string, model?: string, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `parallel` false keeps only the first function call; `images` says where generated images go (default `images`); `audio` is the format asked for.
+ * @param {{ reasoningField?: string, model?: string, cacheCreated?: number, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `cacheCreated` is the tokens this request wrote to a cached content; `parallel` false keeps only the first function call; `images` says where generated images go (default `images`); `audio` is the format asked for.
  * @returns {any} `chat.completion` object.
  * @throws {TranslatorError} `invalid_upstream_response` (502) when the reply has no candidate and no block reason.
  */
 export function completion(reply: any, options?: {
     reasoningField?: string;
     model?: string;
+    cacheCreated?: number;
     parallel?: boolean;
     images?: "images" | "text";
     audio?: string;
@@ -110,13 +115,14 @@ export function completion(reply: any, options?: {
  * ends that candidate. One chunker is for one reply: it keeps the completion id (so every chunk carries the same one) and the numbering of tool
  * calls of each candidate. The signatures of text and thought are given at the end of a candidate, when the length of its text is known. An
  * `error` object in the stream gives one `{ error }` chunk.
- * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, candidates?: number, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `candidates` is how many candidates are streamed (default 1; the others are ignored); `parallel` false keeps only the first function call of a candidate; `images` says where generated images go; `audio` is the format asked for.
+ * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, cacheCreated?: number, candidates?: number, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `cacheCreated` is the tokens this request wrote to a cached content; `candidates` is how many candidates are streamed (default 1; the others are ignored); `parallel` false keeps only the first function call of a candidate; `images` says where generated images go; `audio` is the format asked for.
  * @returns {{ event: (data: any) => any[], finished: () => boolean, usage: () => any }} `event` gives the chunks one stream chunk produces, `finished` says whether every candidate ended (a `finishReason`, a blocked prompt, or a failure) and `usage` is the latest `usageMetadata`.
  */
 export function createChunker(options?: {
     model?: string;
     reasoningField?: string;
     includeUsage?: boolean;
+    cacheCreated?: number;
     candidates?: number;
     parallel?: boolean;
     images?: "images" | "text";

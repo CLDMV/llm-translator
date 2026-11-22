@@ -34,8 +34,9 @@ export function response(reply, state, settings) {
 		reasoningField: resolve(settings).reasoningField,
 		model: state?.model,
 		parallel: state?.parallel,
-		audio: state?.audio
+		audio: state?.audio,
+		cacheCreated: state?.cache?.created
 	});
-	if (state) state.upstreamUsage = folded(reply.usageMetadata);
+	if (state) state.upstreamUsage = folded(reply.usageMetadata, state?.cache?.created);
 	return out;
 }

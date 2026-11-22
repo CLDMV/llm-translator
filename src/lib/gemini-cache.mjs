@@ -118,8 +118,12 @@ export async function apply({ cache, body, endpoint, headers, transport, timeout
 			},
 			timeout
 		});
-		if (made.ok && typeof made.body?.name === "string") entry = { name: made.body.name, until: now + (cache.ttl - MARGIN) * 1000 };
-		else {
+		if (made.ok && typeof made.body?.name === "string") {
+			entry = { name: made.body.name, until: now + (cache.ttl - MARGIN) * 1000 };
+			// What Google says the cache holds: the tokens this request wrote, reported as cache creation.
+			const total = made.body.usageMetadata?.totalTokenCount;
+			if (Number.isFinite(total) && total > 0) cache.created = total;
+		} else {
 			entry = { retry: now + RETRY };
 			warn?.(
 				`Upstream ${endpoint.name}: the conversation could not be cached (${made.ok ? "no name in the reply" : `HTTP ${made.status}`}); it is sent whole`

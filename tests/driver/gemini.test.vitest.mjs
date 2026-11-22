@@ -1036,9 +1036,34 @@ describe("images, audio and code", () => {
 		expect([...Buffer.from(chunks.find((entry) => entry.choices[0]?.delta?.audio).choices[0].delta.audio.data, "base64")]).toEqual([
 			1, 2, 3
 		]);
-		const mp3 = await run("openai", { model: MODEL, audio: { format: "mp3" }, messages: user }, ok(reply));
+		const mp3 = await run("openai", { model: MODEL, audio: { format: "aac" }, messages: user }, ok(reply));
 		expect(mp3.out.status).toBe(400);
 		expect(mp3.out.body.error.message).toMatch(/audio\.format/);
+	});
+
+	it("returns audio as MP3, Opus or FLAC when asked, also in a stream", async () => {
+		const pcm = Buffer.alloc(24000 * 2);
+		for (let at = 0; at < 24000; at++) pcm.writeInt16LE(Math.round(6000 * Math.sin(at / 9)), at * 2);
+		const reply = content([{ inlineData: { mimeType: "audio/L16;codec=pcm;rate=24000", data: pcm.toString("base64") } }]);
+		const magic = {
+			mp3: (file) => file[0] === 0xff,
+			opus: (file) => file.subarray(0, 4).toString() === "OggS",
+			flac: (file) => file.subarray(0, 4).toString() === "fLaC"
+		};
+		for (const format of ["mp3", "opus", "FLAC"]) {
+			const { out } = await run("openai", { model: MODEL, audio: { format }, messages: user }, ok(reply), undefined, `enc-${format}`);
+			expect(magic[format.toLowerCase()](Buffer.from(out.body.choices[0].message.audio.data, "base64"))).toBe(true);
+		}
+		const streamed = await run(
+			"openai",
+			{ model: MODEL, stream: true, audio: { format: "opus" }, messages: user },
+			streamOf([reply]),
+			undefined,
+			"enc-stream"
+		);
+		const chunks = (await collect(streamed.out.stream)).map((entry) => entry.data).filter((entry) => entry !== "[DONE]");
+		const data = chunks.find((entry) => entry.choices[0]?.delta?.audio).choices[0].delta.audio.data;
+		expect(Buffer.from(data, "base64").subarray(0, 4).toString()).toBe("OggS");
 	});
 
 	it("sends audio the client gave, and writes code and its output into the text", async () => {
@@ -1063,9 +1088,13 @@ describe("cached contents for a cache_control breakpoint", () => {
 	const cachedHandler = (made) => (call, res) => {
 		if (call.url === "/v1beta/cachedContents") {
 			made.push(call.body);
-			return json(res, 200, { name: `cachedContents/c${made.length}` });
+			return json(res, 200, { name: `cachedContents/c${made.length}`, usageMetadata: { totalTokenCount: 1500 } });
 		}
-		return json(res, 200, content([{ text: "ok" }]));
+		return json(
+			res,
+			200,
+			content([{ text: "ok" }], {}, { promptTokenCount: 1600, candidatesTokenCount: 5, cachedContentTokenCount: 1500 })
+		);
 	};
 
 	it("creates the cache once, sends only what follows it, and reuses it for the next request", async () => {
@@ -1076,13 +1105,21 @@ describe("cached contents for a cache_control breakpoint", () => {
 		expect(first.status).toBe(200);
 		expect(google.seen.map((entry) => entry.url)).toEqual(["/v1beta/cachedContents", `${PATH}:generateContent`]);
 		expect(made[0]).toMatchObject({ model: `models/${MODEL}`, ttl: "300s", contents: [] });
+		expect(first.body.usage).toMatchObject({ cache_creation_input_tokens: 1500 });
 		expect(made[0].systemInstruction.parts[0].text).toContain("You are careful.");
 		expect(google.seen[1].body).toEqual({
 			contents: [{ role: "user", parts: [{ text: "one" }] }],
 			generationConfig: { maxOutputTokens: 8 },
 			cachedContent: "cachedContents/c1"
 		});
-		await api.send(ask("two"));
+		expect(first.body.usage).toMatchObject({
+			input_tokens: 100,
+			cache_creation_input_tokens: 1500,
+			cache_read_input_tokens: 0,
+			output_tokens: 5
+		});
+		const second = await api.send(ask("two"));
+		expect(second.body.usage).toMatchObject({ input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 1500 });
 		expect(google.seen.map((entry) => entry.url).filter((url) => url === "/v1beta/cachedContents")).toHaveLength(1);
 		expect(google.seen.at(-1).body.cachedContent).toBe("cachedContents/c1");
 		const streamed = await api.send(ask("three", { stream: true }));

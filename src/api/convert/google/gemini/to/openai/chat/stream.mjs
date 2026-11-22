@@ -38,14 +38,15 @@ export async function* stream(source, state, settings) {
 		includeUsage: state?.includeUsage ?? true,
 		candidates: state?.candidates ?? 1,
 		parallel: state?.parallel,
-		audio: state?.audio
+		audio: state?.audio,
+		cacheCreated: state?.cache?.created
 	});
 	const failure = (message, type = "api_error") => ({ data: { error: { message, type, param: null, code: null } } });
 	try {
 		for await (const message of messages(source)) {
 			const chunks = chunker.event(message.data);
 			// Known before the usage chunk goes out, so the usage report and the estimate for a missing side see it.
-			if (state && chunker.usage() !== undefined) state.upstreamUsage = folded(chunker.usage());
+			if (state && chunker.usage() !== undefined) state.upstreamUsage = folded(chunker.usage(), state?.cache?.created);
 			for (const chunk of chunks) {
 				yield { data: chunk };
 				if (chunk.error) {

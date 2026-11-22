@@ -388,6 +388,18 @@ describe("usage helpers", () => {
 		expect(normalize("anthropic", undefined)).toBeNull();
 		expect(normalize("anthropic", { input_tokens: 0, output_tokens: 0 })).toBeNull();
 		expect(normalize("openai", { prompt_tokens: 0, completion_tokens: 0 })).toBeNull();
+		expect(
+			normalize("openai", {
+				prompt_tokens: 100,
+				completion_tokens: 2,
+				prompt_tokens_details: { cached_tokens: 30, cache_write_tokens: 50 }
+			})
+		).toEqual({
+			input_tokens: 20,
+			output_tokens: 2,
+			cache_read_input_tokens: 30,
+			cache_creation_input_tokens: 50
+		});
 		expect(normalize("anthropic", { input_tokens: 3 })).toEqual({
 			input_tokens: 3,
 			output_tokens: null,
