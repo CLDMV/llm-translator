@@ -67,7 +67,7 @@ describe("detection and facts", () => {
 		const transport = fakeTransport(() => ({ body: {} }));
 		const api = await make({ upstreams: ["https://us-east5-aiplatform.googleapis.com", "https://aiplatform.googleapis.com"], transport });
 		expect(api.status().upstreams.map((entry) => entry.driver)).toEqual(["vertex", "vertex"]);
-		expect(api.status().upstreams[0]).toMatchObject({ protocol: "anthropic.messages", protocols: ["anthropic.messages"] });
+		expect(api.status().upstreams[0]).toMatchObject({ protocol: "anthropic.messages", protocols: ["anthropic.messages", "google.gemini"] });
 		expect(transport.calls).toHaveLength(0);
 		const { detect } = api.driver.vertex;
 		expect(detect({ endpoint: { url: "https://europe-west1-aiplatform.googleapis.com/v1" } })).toEqual({

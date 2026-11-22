@@ -19,7 +19,7 @@
  */
 import * as http from "../../../../lib/http.mjs";
 import { GEMINI } from "../../../../lib/protocol.mjs";
-import { countBody } from "../../../../lib/gemini.mjs";
+import { countBody, countPath } from "../../../../lib/gemini.mjs";
 
 /**
  * Count tokens with `POST /v1beta/models/<model>:countTokens` for an upstream on the native API. The prompt is the `generateContent` body the
@@ -31,7 +31,7 @@ export async function count({ endpoint, request, path, state, transport, signal,
 	if (state?.protocol !== GEMINI) return null;
 	// The path of a native call is always `.../models/<model>:<method>` (the `path` leaf builds it, with the model's own colons encoded).
 	const base = path.slice(0, path.indexOf(":"));
-	const result = await http.json(transport, http.join(endpoint.url, `${base}:countTokens`), {
+	const result = await http.json(transport, http.join(endpoint.url, countPath(path)), {
 		method: "POST",
 		headers: { "content-type": "application/json", ...endpoint.headers, ...(endpoint.apiKey ? { "x-goog-api-key": endpoint.apiKey } : {}) },
 		body: countBody(request, decodeURIComponent(base.slice(base.indexOf("/models/") + "/models/".length))),

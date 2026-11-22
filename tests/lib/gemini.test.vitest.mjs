@@ -128,6 +128,14 @@ describe("chatBody: messages", () => {
 		});
 		expect(chatBody({ messages: [{ role: "user", content: "x" }], n: 1, temperature: null, stop: null }).generationConfig).toBeUndefined();
 		expect(chatBody({}).contents).toEqual([]);
+		expect(
+			chatBody({
+				messages: [
+					{ role: "user", content: null },
+					{ role: "user", content: 5 }
+				]
+			}).contents
+		).toEqual([]);
 	});
 
 	it("sends base64 images and files as bytes and says so when it cannot send an image", () => {
