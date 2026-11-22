@@ -17,7 +17,22 @@
  * @fileoverview Cohere v2 chat as Chat Completions: the request body (messages, tools, tool choice, sampling, response format, thinking), the reply, the finish reasons and failures, usage, and the stream chunker.
  */
 import { describe, expect, it } from "vitest";
-import { chatBody, completion, createChunker, failureOf, finishOf, folded, rootOf, usageOf } from "../../src/lib/cohere.mjs";
+import {
+	chatBody,
+	chunksOf,
+	citationsOf,
+	completion,
+	createChunker,
+	failureOf,
+	finishOf,
+	folded,
+	logprobsOf,
+	needsNative,
+	promptText,
+	rootOf,
+	usageOf
+} from "../../src/lib/cohere.mjs";
+import { tag } from "../../src/lib/citations.mjs";
 
 const tool = (name, extra = {}) => ({ type: "function", function: { name, parameters: { type: "object" }, ...extra } });
 const user = [{ role: "user", content: "hi" }];
@@ -160,12 +175,19 @@ describe("chatBody tools and sampling", () => {
 		expect(chatBody({ model: "m", messages: user, tools: [tool("a")] })).not.toHaveProperty("strict_tools");
 	});
 
-	it("forces a named tool only when it is the only one, and names the choice it cannot send", () => {
+	it("forces a named tool by offering only that tool and requiring a call, and names a choice it cannot send", () => {
 		const named = { type: "function", function: { name: "a" } };
 		expect(chatBody({ model: "m", messages: user, tools: [tool("a")], tool_choice: named }).tool_choice).toBe("REQUIRED");
 		const dropped = [];
 		const two = chatBody({ model: "m", messages: user, tools: [tool("a"), tool("b")], tool_choice: named }, { dropped });
-		expect(two).not.toHaveProperty("tool_choice");
+		expect(two).toMatchObject({ tool_choice: "REQUIRED" });
+		expect(two.tools.map((entry) => entry.function.name)).toEqual(["a"]);
+		const missing = chatBody(
+			{ model: "m", messages: user, tools: [tool("a")], tool_choice: { type: "function", function: { name: "zzz" } } },
+			{ dropped }
+		);
+		expect(missing).not.toHaveProperty("tool_choice");
+		expect(missing.tools).toHaveLength(1);
 		chatBody({ model: "m", messages: user, tools: [tool("a")], tool_choice: { type: "allowed_tools" } }, { dropped });
 		expect(dropped).toEqual(["tool_choice"]);
 		const auto = [];
@@ -226,7 +248,7 @@ describe("chatBody tools and sampling", () => {
 		expect(Object.keys(nulls).sort()).toEqual(["messages", "model", "stream"]);
 	});
 
-	it("maps response_format, and leaves it out (named) when tools are offered", () => {
+	it("maps response_format, and asks for the JSON in a system instruction when tools or documents are offered", () => {
 		const schema = { type: "object", properties: { a: { type: "string" } } };
 		expect(chatBody({ model: "m", messages: user, response_format: { type: "json_object" } }).response_format).toEqual({
 			type: "json_object"
@@ -239,9 +261,27 @@ describe("chatBody tools and sampling", () => {
 			"response_format"
 		);
 		const dropped = [];
-		const out = chatBody({ model: "m", messages: user, tools: [tool("a")], response_format: { type: "json_object" } }, { dropped });
+		const out = chatBody(
+			{ model: "m", messages: [{ role: "system", content: "s" }, ...user], tools: [tool("a")], response_format: { type: "json_object" } },
+			{ dropped }
+		);
 		expect(out).not.toHaveProperty("response_format");
-		expect(dropped).toEqual(["response_format"]);
+		expect(out.messages.map((message) => message.role)).toEqual(["system", "system", "user"]);
+		expect(out.messages[1].content).toMatch(/only a valid JSON object/);
+		expect(dropped).toEqual([]);
+		const withSchema = chatBody(
+			{ model: "m", messages: user, tools: [tool("a")], response_format: { type: "json_schema", json_schema: { schema } } },
+			{ dropped }
+		);
+		expect(withSchema.messages[0]).toEqual({ role: "system", content: expect.stringContaining(JSON.stringify(schema)) });
+		const withDocuments = chatBody(
+			{ model: "m", messages: user, documents: [{ id: "d", data: { text: "t" } }], response_format: { type: "json_object" } },
+			{ dropped }
+		);
+		expect(withDocuments).not.toHaveProperty("response_format");
+		expect(withDocuments.messages[0].role).toBe("system");
+		const bare = chatBody({ model: "m", messages: [], tools: [tool("a")], response_format: { type: "json_object" } });
+		expect(bare.messages).toHaveLength(1);
 	});
 
 	it("sets thinking from the Anthropic request's mode and budget, else from the reasoning effort", () => {
@@ -250,7 +290,15 @@ describe("chatBody tools and sampling", () => {
 		expect(chatBody(base, { thinking: "enabled", thinkingBudget: 2048 }).thinking).toEqual({ type: "enabled", token_budget: 2048 });
 		expect(chatBody(base, { thinking: "enabled" }).thinking).toEqual({ type: "enabled" });
 		expect(chatBody({ ...base, reasoning_effort: "none" }, { thinking: "adaptive" }).thinking).toEqual({ type: "disabled" });
-		expect(chatBody({ ...base, reasoning_effort: "high" }).thinking).toEqual({ type: "enabled" });
+		expect(chatBody({ ...base, reasoning_effort: "high" }).thinking).toEqual({ type: "enabled", token_budget: 16384 });
+		for (const [effort, budget] of Object.entries({ minimal: 1024, low: 2048, medium: 8192, xhigh: 24576, max: 31000 })) {
+			expect(chatBody({ ...base, reasoning_effort: effort }).thinking).toEqual({ type: "enabled", token_budget: budget });
+		}
+		expect(chatBody({ ...base, reasoning_effort: "custom" }).thinking).toEqual({ type: "enabled" });
+		expect(chatBody({ ...base, reasoning_effort: "low" }, { thinking: "enabled", thinkingBudget: 5000 }).thinking).toEqual({
+			type: "enabled",
+			token_budget: 2048
+		});
 		expect(chatBody(base, { thinking: "adaptive" })).not.toHaveProperty("thinking");
 		expect(chatBody(base)).not.toHaveProperty("thinking");
 	});
@@ -263,7 +311,7 @@ describe("chatBody tools and sampling", () => {
 				messages: user,
 				n: 2,
 				logit_bias: {},
-				parallel_tool_calls: true,
+				top_logprobs: 3,
 				user: "u",
 				metadata: {},
 				store: true,
@@ -272,7 +320,7 @@ describe("chatBody tools and sampling", () => {
 			},
 			{ dropped }
 		);
-		expect(dropped).toEqual(["n", "logit_bias", "parallel_tool_calls"]);
+		expect(dropped).toEqual(["n", "logit_bias", "top_logprobs"]);
 		const quiet = [];
 		chatBody({ model: "m", messages: user, n: 1 }, { dropped: quiet });
 		expect(quiet).toEqual([]);
@@ -310,7 +358,7 @@ describe("finish reasons, failures and usage", () => {
 		expect(usageOf({ tokens: { input_tokens: 4 } })).toEqual({ prompt_tokens: 4, completion_tokens: 0, total_tokens: 4 });
 		expect(usageOf({ tokens: {}, billed_units: {} })).toBeUndefined();
 		expect(usageOf(undefined)).toBeUndefined();
-		expect(folded({ tokens })).toEqual({ input_tokens: 71, output_tokens: 26 });
+		expect(folded({ tokens })).toEqual({ input_tokens: 71, output_tokens: 26, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
 		expect(folded({})).toBeUndefined();
 	});
 });
@@ -343,7 +391,7 @@ describe("completion", () => {
 					finish_reason: "tool_calls",
 					message: {
 						role: "assistant",
-						content: "so far",
+						content: "I will look.\n\nso far",
 						reasoning_content: "hm",
 						tool_calls: [
 							{ id: "t1", type: "function", function: { name: "Read", arguments: '{"p":1}' } },
@@ -355,6 +403,7 @@ describe("completion", () => {
 			]
 		});
 		expect(out.choices[0].message).not.toHaveProperty("tool_plan");
+		expect(out.choices[0].message).not.toHaveProperty("annotations");
 	});
 
 	it("reads a plain reply, with the default reasoning field, and none of the optional parts", () => {
@@ -408,11 +457,12 @@ describe("createChunker", () => {
 			{ role: "assistant", content: "" },
 			{ reasoning_content: "hm" },
 			{ content: "hel" },
+			{ content: "I" },
 			{},
 			undefined
 		]);
-		expect(chunks[3].choices[0].finish_reason).toBe("stop");
-		expect(chunks[4]).toMatchObject({ model: "asked", choices: [], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } });
+		expect(chunks[4].choices[0].finish_reason).toBe("stop");
+		expect(chunks[5]).toMatchObject({ model: "asked", choices: [], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } });
 		expect(chunker.finished()).toBe(true);
 		expect(chunker.usage()).toEqual({ tokens: { input_tokens: 4, output_tokens: 2 } });
 	});
@@ -466,5 +516,570 @@ describe("createChunker", () => {
 		}
 		const bare = createChunker();
 		expect(bare.event("message-end", undefined).at(-1).choices[0].finish_reason).toBe("stop");
+	});
+});
+
+const part = (text, source) => (source === undefined ? { type: "text", text } : tag({ type: "text", text }, source));
+const docSource = (index, extra = {}) => ({ kind: "document", index, title: `Doc ${index}`, citations: true, ...extra });
+const resultSource = (index, extra = {}) => ({
+	kind: "search_result",
+	index,
+	title: "S",
+	source: "https://s.test",
+	citations: true,
+	blocks: 2,
+	text: "body",
+	...extra
+});
+
+describe("documents from request sources", () => {
+	it("moves the sources that asked for citations out of a user message into documents, and keeps the rest", () => {
+		const state = {};
+		const out = chatBody(
+			{
+				model: "m",
+				messages: [
+					{
+						role: "user",
+						content: [
+							part("<document>page one</document>", docSource(0)),
+							part("page two", docSource(0)),
+							part("[Search result: S (https://s.test)]\nbody", resultSource(1)),
+							part("not cited", docSource(2, { citations: false })),
+							{ type: "image_url", image_url: { url: "data:image/png;base64,AA" } },
+							part("question?")
+						]
+					}
+				]
+			},
+			{ state }
+		);
+		expect(out.documents).toEqual([
+			{ id: "doc_0", data: { title: "Doc 0", text: "<document>page one</document>\n\npage two" } },
+			{ id: "result_1", data: { title: "S", source: "https://s.test", text: "body" } }
+		]);
+		expect(out.messages).toEqual([
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: "not cited" },
+					{ type: "image_url", image_url: { url: "data:image/png;base64,AA" } },
+					{ type: "text", text: "question?" }
+				]
+			}
+		]);
+		expect(state.documents).toEqual({
+			doc_0: { kind: "document", index: 0, title: "Doc 0", length: 39 },
+			result_1: { kind: "search_result", index: 1, title: "S", source: "https://s.test", length: 4, blocks: 2 }
+		});
+	});
+
+	it("leaves a user message that was only documents out, and untitled documents have no title", () => {
+		const out = chatBody({
+			model: "m",
+			messages: [{ role: "user", content: [part("text", { kind: "document", index: 0, citations: true })] }, ...user]
+		});
+		expect(out.messages).toHaveLength(1);
+		expect(out.documents).toEqual([{ id: "doc_0", data: { text: "text" } }]);
+		const result = chatBody({
+			model: "m",
+			messages: [{ role: "user", content: [part("[Search result]", { kind: "search_result", index: 0, citations: true })] }]
+		});
+		expect(result.documents).toEqual([{ id: "result_0", data: { text: "[Search result]" } }]);
+	});
+
+	it("sends the sources of a tool result as document blocks, once each, with plain text as text blocks", () => {
+		const state = {};
+		const out = chatBody(
+			{
+				model: "m",
+				messages: [
+					{
+						role: "tool",
+						tool_call_id: "t1",
+						content: [
+							part("[Search result: S (u)]\nbody", resultSource(0)),
+							part("more", resultSource(0)),
+							part("note"),
+							part(""),
+							{ type: "image_url" }
+						]
+					},
+					{ role: "tool", tool_call_id: "t2", content: [part("only", resultSource(1, { citations: false }))] },
+					{ role: "tool", tool_call_id: "t3", content: [part("cited", docSource(2))] }
+				]
+			},
+			{ state }
+		);
+		const [first, second, third] = out.messages;
+		expect(first.content).toEqual([
+			{ type: "document", document: { id: "result_0", data: { title: "S", source: "https://s.test", text: "body\n\nbody" } } },
+			{ type: "text", text: "note" }
+		]);
+		expect(second.content).toBe("only");
+		expect(third.content[0].document.id).toBe("doc_2");
+		expect(out).not.toHaveProperty("documents");
+		expect(state.tools).toEqual({ t1: 0, t2: 1, t3: 2 });
+		expect(state.documents.result_0.length).toBe(10);
+		expect(
+			chatBody({
+				model: "m",
+				messages: [{ role: "tool", tool_call_id: "t", content: [{ type: "image_url" }, null, part("x", resultSource(0))] }]
+			}).messages[0].content
+		).toHaveLength(1);
+	});
+
+	it("sends documents a client gave on the body, with its own citation options and the other Cohere fields", () => {
+		const out = chatBody({
+			model: "m",
+			messages: [{ role: "user", content: [part("cited", docSource(0))] }, ...user],
+			documents: [{ id: "mine", data: { text: "t" } }, "plain"],
+			citation_options: { mode: "FAST" },
+			safety_mode: "STRICT",
+			priority: 3,
+			strict_tools: true
+		});
+		expect(out.documents.map((entry) => entry.id ?? entry)).toEqual(["mine", "plain", "doc_0"]);
+		expect(out).toMatchObject({ citation_options: { mode: "FAST" }, safety_mode: "STRICT", priority: 3, strict_tools: true });
+		expect(chatBody({ model: "m", messages: user, strict_tools: false, documents: "x" })).toMatchObject({ strict_tools: false });
+		expect(chatBody({ model: "m", messages: user, documents: "x" })).not.toHaveProperty("documents");
+	});
+});
+
+describe("tool plans, tool errors, parallel calls and logprobs", () => {
+	it("sends the text of an assistant turn that has tool calls as its tool plan, with the reasoning still a thinking block", () => {
+		const call = { id: "a", type: "function", function: { name: "f", arguments: "{}" } };
+		const out = chatBody({
+			model: "m",
+			messages: [
+				{ role: "assistant", content: "I will look.", tool_calls: [call] },
+				{ role: "assistant", content: "I will look.", reasoning: "hm", tool_calls: [call] },
+				{ role: "assistant", content: "", reasoning: "hm", tool_calls: [call] }
+			]
+		});
+		expect(out.messages[0]).toEqual({ role: "assistant", tool_plan: "I will look.", tool_calls: [call] });
+		expect(out.messages[1]).toEqual({
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "hm" }],
+			tool_plan: "I will look.",
+			tool_calls: [call]
+		});
+		expect(out.messages[2]).toEqual({ role: "assistant", content: [{ type: "thinking", thinking: "hm" }], tool_calls: [call] });
+	});
+
+	it("sends a failed tool result as an error object, whether the marker is in the text or a lone first part", () => {
+		const call = (content, marker = "[error] ") =>
+			chatBody({ model: "m", messages: [{ role: "tool", tool_call_id: "t", content }] }, { marker }).messages[0].content;
+		expect(call("[error] file missing")).toBe('{"error":"file missing"}');
+		expect(call("[error] ")).toBe('{"error":"error"}');
+		expect(call("fine")).toBe("fine");
+		expect(chatBody({ model: "m", messages: [{ role: "tool", tool_call_id: "t", content: "[error] x" }] }).messages[0].content).toBe(
+			"[error] x"
+		);
+		expect(
+			call([
+				{ type: "text", text: "[error]" },
+				{ type: "text", text: "disk full" }
+			])
+		).toBe('{"error":"disk full"}');
+		expect(call([{ type: "text", text: "[error]" }])).toBe('{"error":"error"}');
+		expect(call([{ type: "text", text: "[error] " }])).toBe('{"error":"error"}');
+		expect(call([{ type: "text", text: "plain" }])).toBe("plain");
+	});
+
+	it("keeps parallel_tool_calls: false on the state, and sends logprobs", () => {
+		const state = {};
+		const out = chatBody({ model: "m", messages: user, parallel_tool_calls: false, logprobs: true, top_logprobs: 2 }, { state });
+		expect(state.singleCall).toBe(true);
+		expect(out.logprobs).toBe(true);
+		const dropped = [];
+		chatBody({ model: "m", messages: user, parallel_tool_calls: false, logprobs: true, top_logprobs: 2 }, { dropped });
+		expect(dropped).toEqual(["top_logprobs"]);
+		const other = {};
+		chatBody({ model: "m", messages: user, parallel_tool_calls: true, logprobs: false }, { state: other });
+		expect(other).not.toHaveProperty("singleCall");
+		expect(chatBody({ model: "m", messages: user, logprobs: false })).not.toHaveProperty("logprobs");
+	});
+
+	it("moves values into Cohere's ranges and says which moved", () => {
+		const clamped = [];
+		const out = chatBody(
+			{
+				model: "m",
+				messages: user,
+				temperature: -1,
+				top_p: 1,
+				top_k: 900.4,
+				frequency_penalty: 1.5,
+				presence_penalty: -0.5,
+				stop: ["1", "2", "3", "4", "5", "6", "7"]
+			},
+			{ clamped }
+		);
+		expect(out).toMatchObject({
+			temperature: 0,
+			p: 0.99,
+			k: 500,
+			frequency_penalty: 1,
+			presence_penalty: 0,
+			stop_sequences: ["1", "2", "3", "4", "5"]
+		});
+		expect(clamped).toEqual(["temperature", "p", "k", "frequency_penalty", "presence_penalty", "stop_sequences"]);
+		const fine = [];
+		const kept = chatBody(
+			{ model: "m", messages: user, temperature: 5, top_p: 0.5, top_k: 40, frequency_penalty: 0.2, stop: "x" },
+			{ clamped: fine }
+		);
+		expect(kept).toMatchObject({ temperature: 5, p: 0.5, k: 40 });
+		expect(fine).toEqual([]);
+		expect(chatBody({ model: "m", messages: user, top_p: 0, top_k: 3.6 }, { clamped: fine })).toMatchObject({ p: 0.01, k: 4 });
+		expect(chatBody({ model: "m", messages: user }, { sampling: { temperature: "hot" } }).temperature).toBe("hot");
+	});
+});
+
+describe("needsNative", () => {
+	it("is true for what only Cohere's own protocol has, from either front", () => {
+		expect(needsNative({ model: "m", messages: [{ role: "user", content: "hi" }] })).toBe(false);
+		expect(needsNative({ model: "m", reasoning_effort: "high" })).toBe(false);
+		expect(needsNative({ reasoning_effort: "none" })).toBe(false);
+		expect(needsNative({ reasoning_effort: "low" })).toBe(true);
+		expect(needsNative({ output_config: { effort: "medium" } })).toBe(true);
+		expect(needsNative({ thinking: { type: "enabled", budget_tokens: 2000 } })).toBe(true);
+		expect(needsNative({ thinking: { type: "enabled" } })).toBe(false);
+		expect(needsNative({ thinking: { type: "adaptive" } })).toBe(false);
+		for (const key of ["documents", "citation_options", "safety_mode", "priority", "strict_tools", "logprobs"])
+			expect(needsNative({ [key]: true })).toBe(true);
+		expect(needsNative({ logprobs: false })).toBe(false);
+		expect(needsNative({ tool_choice: "auto" })).toBe(false);
+		expect(needsNative({ tool_choice: "required" })).toBe(true);
+		expect(needsNative({ tool_choice: { type: "function", function: { name: "f" } } })).toBe(true);
+		expect(needsNative({ tool_choice: { type: "auto" } })).toBe(false);
+		expect(needsNative({ tool_choice: { type: "auto", disable_parallel_tool_use: true } })).toBe(true);
+		expect(needsNative({ tool_choice: {} })).toBe(false);
+		expect(needsNative({ parallel_tool_calls: false })).toBe(true);
+		expect(needsNative({ parallel_tool_calls: true })).toBe(false);
+		const tools = [{ type: "function", function: { name: "f" } }];
+		expect(needsNative({ tools, response_format: { type: "json_object" } })).toBe(true);
+		expect(needsNative({ tools, output_config: { format: {} } })).toBe(true);
+		expect(needsNative({ tools })).toBe(false);
+		expect(needsNative({ tools: [], response_format: {} })).toBe(false);
+		expect(needsNative({ response_format: {} })).toBe(false);
+		expect(needsNative(null)).toBe(false);
+		expect(needsNative("x")).toBe(false);
+	});
+
+	it("is true for a document or search result that asks for citations, also inside a tool result", () => {
+		const doc = (extra) => ({ type: "document", source: { type: "text" }, ...extra });
+		const ask = (content) => needsNative({ messages: [{ role: "user", content }] });
+		expect(ask([doc({ citations: { enabled: true } })])).toBe(true);
+		expect(ask([doc({ citations: { enabled: false } })])).toBe(false);
+		expect(ask([doc({})])).toBe(false);
+		expect(ask([{ type: "search_result", citations: { enabled: true } }])).toBe(true);
+		expect(ask([{ type: "tool_result", content: [{ type: "search_result", citations: { enabled: true } }] }])).toBe(true);
+		expect(ask([{ type: "tool_result", content: "text" }, null])).toBe(false);
+		expect(ask("plain")).toBe(false);
+		expect(needsNative({ messages: [null, { role: "user", content: [doc({ citations: { enabled: true } })] }] })).toBe(true);
+		expect(needsNative({ messages: "x" })).toBe(false);
+	});
+});
+
+describe("cited replies", () => {
+	const state = {
+		documents: {
+			doc_0: { kind: "document", index: 0, title: "Doc 0", length: 50 },
+			result_1: { kind: "search_result", index: 1, title: "S", source: "https://s.test", length: 4, blocks: 2 }
+		},
+		tools: { call1: 3 }
+	};
+
+	it("names each source of a citation: a document, a search result, a tool result, or a document the client gave", () => {
+		const found = citationsOf(
+			{
+				start: 2,
+				end: 6,
+				sources: [
+					{ type: "document", id: "doc_0", document: { text: "quote" } },
+					{ type: "document", id: "result_1", document: { snippet: "snip" } },
+					{ type: "tool", id: "call1:2", tool_output: { a: 1 } },
+					{ type: "tool", id: "call1", tool_output: { a: 1 } },
+					{ type: "tool", id: "other:x" },
+					{ type: "document", id: "mine", document: { title: "Mine", text: "t" } },
+					{ type: "document", id: "bare" },
+					null
+				]
+			},
+			10,
+			state
+		);
+		const span = { start: 12, end: 16 };
+		expect(found).toEqual([
+			{ kind: "document", index: 0, title: "Doc 0", text: "quote", location: { type: "char", start: 0, end: 50 }, span },
+			{
+				kind: "search_result",
+				index: 1,
+				title: "S",
+				source: "https://s.test",
+				text: "snip",
+				location: { type: "block", start: 0, end: 2 },
+				span
+			},
+			{ kind: "search_result", source: "call1", index: 3, text: '{"a":1}', location: { type: "block", start: 2, end: 3 }, span },
+			{ kind: "search_result", source: "call1", index: 3, text: '{"a":1}', location: { type: "block", start: 0, end: 1 }, span },
+			{ kind: "search_result", source: "other", index: 0, text: "{}", location: { type: "block", start: 0, end: 1 }, span },
+			{ kind: "document", id: "mine", title: "Mine", text: "t", span },
+			{ kind: "document", id: "bare", span },
+			{ kind: "document", span }
+		]);
+		expect(citationsOf({ start: 0, end: 1 }, 0)).toEqual([]);
+		expect(citationsOf({ start: 0, end: 1, sources: [{ type: "tool", id: "x:1" }] }, 0)[0]).toMatchObject({ index: 0 });
+		expect(citationsOf({ start: 0, end: 1, sources: [{ type: "document", id: "d" }] }, 0, {})[0]).toMatchObject({ id: "d" });
+		const untitled = citationsOf({ start: 0, end: 1, sources: [{ type: "document", id: "doc_0" }] }, 0, {
+			documents: { doc_0: { kind: "document", index: 0, length: 3 } }
+		});
+		expect(untitled[0]).not.toHaveProperty("title");
+		const noSource = citationsOf({ start: 0, end: 1, sources: [{ type: "document", id: "r" }] }, 0, {
+			documents: { r: { kind: "search_result", index: 0 } }
+		});
+		expect(noSource[0]).toMatchObject({ kind: "search_result", location: { type: "block", start: 0, end: 1 } });
+		expect(noSource[0]).not.toHaveProperty("source");
+	});
+
+	it("puts citations on the reply as annotations spanning the cited text, counting the tool plan and the content blocks before it", () => {
+		const out = completion(
+			{
+				finish_reason: "COMPLETE",
+				message: {
+					tool_plan: "Plan.",
+					content: [
+						{ type: "thinking", thinking: "hm" },
+						{ type: "text", text: "First " },
+						{ type: "text", text: "second answer" }
+					],
+					citations: [
+						{ start: 0, end: 6, type: "TEXT_CONTENT", content_index: 1, sources: [{ type: "document", id: "doc_0", document: {} }] },
+						{ start: 7, end: 13, type: "TEXT_CONTENT", content_index: 2, sources: [{ type: "document", id: "result_1", document: {} }] },
+						{ start: 0, end: 5, type: "PLAN", sources: [{ type: "document", id: "doc_0", document: {} }] },
+						{ start: 0, end: 3, type: "THINKING_CONTENT", sources: [{ type: "document", id: "doc_0", document: {} }] },
+						{ start: 1, end: 2, sources: [{ type: "document", id: "doc_0", document: {} }] },
+						{ start: 1, end: 2, type: "TEXT_CONTENT", content_index: 9, sources: [{ type: "document", id: "doc_0", document: {} }] }
+					]
+				}
+			},
+			{ state }
+		);
+		const message = out.choices[0].message;
+		expect(message.content).toBe("Plan.\n\nFirst second answer");
+		expect(message.annotations.map((entry) => entry.citation.span)).toEqual([
+			{ start: 7, end: 13 },
+			{ start: 20, end: 26 },
+			{ start: 0, end: 5 },
+			{ start: 8, end: 9 },
+			{ start: 8, end: 9 }
+		]);
+		const noBody = completion({ message: { tool_plan: "Only a plan.", content: [] } });
+		expect(noBody.choices[0].message.content).toBe("Only a plan.");
+	});
+
+	it("keeps only the first tool call when parallel calls were switched off", () => {
+		const calls = [
+			{ id: "a", type: "function", function: { name: "f", arguments: "{}" } },
+			{ id: "b", type: "function", function: { name: "g", arguments: "{}" } }
+		];
+		const reply = { finish_reason: "TOOL_CALL", message: { tool_calls: calls, content: [] } };
+		expect(completion(reply, { state: { singleCall: true } }).choices[0].message.tool_calls.map((call) => call.id)).toEqual(["a"]);
+		expect(completion(reply, { state: {} }).choices[0].message.tool_calls).toHaveLength(2);
+		expect(completion(reply).choices[0].message.tool_calls).toHaveLength(2);
+	});
+
+	it("reports the log probabilities as chat logprobs, and the cached tokens in the usage", () => {
+		expect(
+			logprobsOf([
+				{ token_ids: [1, 2], text: "hé", logprobs: [-0.1, -0.2] },
+				{ text: "x", logprobs: [-1] },
+				{ logprobs: [-2] },
+				{ token_ids: [] }
+			])
+		).toEqual([
+			{ token: "hé", logprob: -0.1, bytes: [104, 195, 169], top_logprobs: [] },
+			{ token: "", logprob: -0.2, bytes: [], top_logprobs: [] },
+			{ token: "x", logprob: -1, bytes: [120], top_logprobs: [] },
+			{ token: "", logprob: -2, bytes: [], top_logprobs: [] }
+		]);
+		expect(logprobsOf({ text: "a", logprobs: [-3] })).toHaveLength(1);
+		expect(logprobsOf(undefined)).toEqual([]);
+		const out = completion({
+			finish_reason: "COMPLETE",
+			message: { content: [{ type: "text", text: "x" }] },
+			logprobs: [{ text: "x", logprobs: [-0.5] }]
+		});
+		expect(out.choices[0].logprobs).toEqual({ content: [{ token: "x", logprob: -0.5, bytes: [120], top_logprobs: [] }] });
+		expect(completion({ message: {}, logprobs: [] }).choices[0]).not.toHaveProperty("logprobs");
+		const cached = { tokens: { input_tokens: 100, output_tokens: 5 }, cached_tokens: 40 };
+		expect(usageOf(cached)).toEqual({
+			prompt_tokens: 100,
+			completion_tokens: 5,
+			total_tokens: 105,
+			prompt_tokens_details: { cached_tokens: 40 }
+		});
+		expect(folded(cached)).toEqual({ input_tokens: 60, output_tokens: 5, cache_read_input_tokens: 40, cache_creation_input_tokens: 0 });
+		expect(usageOf({ tokens: { input_tokens: 1, output_tokens: 1 }, cached_tokens: 0 })).not.toHaveProperty("prompt_tokens_details");
+		expect(folded({ tokens: { input_tokens: 5, output_tokens: 1 }, cached_tokens: 9 }).input_tokens).toBe(0);
+	});
+});
+
+describe("createChunker: plans, citations, log probabilities and single calls", () => {
+	const ev = (type, extra = {}) => ({ name: type, data: { type, ...extra } });
+	const run = (chunker, list) => list.flatMap(({ name, data }) => chunker.event(name, data));
+	const state = { documents: { doc_0: { kind: "document", index: 0, title: "D", length: 9 } } };
+	const cite = (extra = {}) =>
+		ev("citation-start", {
+			index: 1,
+			delta: {
+				message: {
+					citations: { start: 0, end: 4, type: "TEXT_CONTENT", sources: [{ type: "document", id: "doc_0", document: {} }], ...extra }
+				}
+			}
+		});
+
+	it("streams the tool plan as content, with a break before the content that follows it, and counts citations from it", () => {
+		const chunker = createChunker({ state });
+		const chunks = run(chunker, [
+			ev("tool-plan-delta", { delta: { message: { tool_plan: "Plan" } } }),
+			ev("tool-plan-delta", { delta: { message: { tool_plan: "" } } }),
+			ev("tool-plan-delta", { delta: {} }),
+			ev("content-delta", { index: 1, delta: { message: { content: { text: "Answer" } } } }),
+			ev("content-delta", { index: 1, delta: { message: { content: { text: " more" } } } }),
+			cite(),
+			cite({ type: "PLAN", start: 1, end: 3 }),
+			cite({ type: "THINKING_CONTENT" }),
+			ev("citation-start", { index: 1 }),
+			ev("citation-start", { index: 1, delta: { message: { citations: { start: 0, end: 1, sources: [] } } } }),
+			ev("citation-end", { index: 1 })
+		]);
+		expect(chunks.map((chunk) => chunk.choices[0].delta.content).filter((value) => value !== undefined)).toEqual([
+			"",
+			"Plan",
+			"\n\nAnswer",
+			" more"
+		]);
+		const annotated = chunks.filter((chunk) => chunk.choices[0].delta.annotations);
+		expect(annotated.map((chunk) => chunk.choices[0].delta.annotations[0].citation.span)).toEqual([
+			{ start: 6, end: 10 },
+			{ start: 1, end: 3 }
+		]);
+	});
+
+	it("counts a citation from the start of the text when no content block started, and works with no state", () => {
+		const chunks = run(createChunker(), [cite({ start: 2, end: 5 }), cite({ type: "PLAN", start: 0, end: 2 })]);
+		expect(
+			chunks.filter((chunk) => chunk.choices[0].delta.annotations).map((chunk) => chunk.choices[0].delta.annotations[0].citation.span)
+		).toEqual([
+			{ start: 2, end: 5 },
+			{ start: 0, end: 2 }
+		]);
+	});
+
+	it("streams log probabilities with the text they belong to", () => {
+		const chunks = run(createChunker(), [
+			ev("content-delta", {
+				index: 0,
+				delta: { message: { content: { text: "hi" } } },
+				logprobs: { token_ids: [1], text: "hi", logprobs: [-0.3] }
+			}),
+			ev("content-delta", { index: 0, delta: { message: { content: { thinking: "hm" } } }, logprobs: { text: "hm", logprobs: [-0.4] } })
+		]);
+		expect(chunks[1].choices[0].logprobs.content[0]).toMatchObject({ token: "hi", logprob: -0.3 });
+		expect(chunks[2].choices[0].logprobs.content[0]).toMatchObject({ token: "hm" });
+	});
+
+	it("goes on with the first tool call only when parallel calls were switched off", () => {
+		const start = (index, id) =>
+			ev("tool-call-start", {
+				index,
+				delta: { message: { tool_calls: { id, type: "function", function: { name: "f", arguments: "" } } } }
+			});
+		const delta = (index) => ev("tool-call-delta", { index, delta: { message: { tool_calls: { function: { arguments: "{}" } } } } });
+		const run2 = (options) =>
+			run(createChunker(options), [
+				start(0, "a"),
+				delta(0),
+				start(1, "b"),
+				delta(1),
+				ev("message-end", { delta: { finish_reason: "TOOL_CALL" } })
+			]);
+		expect(
+			run2({ state: { singleCall: true } })
+				.flatMap((chunk) => chunk.choices[0]?.delta.tool_calls ?? [])
+				.map((call) => call.index)
+		).toEqual([0, 0]);
+		expect(
+			run2({ state: {} })
+				.flatMap((chunk) => chunk.choices[0]?.delta.tool_calls ?? [])
+				.map((call) => call.index)
+		).toEqual([0, 0, 1, 1]);
+	});
+
+	it("reports cached tokens in the final usage chunk", () => {
+		const chunks = run(createChunker(), [
+			ev("message-end", {
+				delta: { finish_reason: "COMPLETE", usage: { tokens: { input_tokens: 10, output_tokens: 1 }, cached_tokens: 4 } }
+			})
+		]);
+		expect(chunks.at(-1).usage.prompt_tokens_details).toEqual({ cached_tokens: 4 });
+	});
+});
+
+describe("promptText and chunksOf", () => {
+	it("collects the text the model reads from a Cohere body, and from a Chat Completions body", () => {
+		const text = promptText({
+			messages: [
+				{ role: "system", content: "sys" },
+				{ role: "user", content: [{ type: "text", text: "hi" }, { type: "image_url" }, null] },
+				{
+					role: "assistant",
+					content: [{ type: "thinking", thinking: "hm" }],
+					tool_plan: "plan",
+					tool_calls: [{ function: { name: "f", arguments: "{}" } }, {}]
+				},
+				{ role: "assistant", content: "", reasoning: "why" },
+				{
+					role: "tool",
+					content: [
+						{ type: "document", document: { id: "d", data: { text: "doc" } } },
+						{ type: "document", document: { id: "e" } }
+					]
+				}
+			],
+			tools: [{ type: "function", function: { name: "f" } }, { name: "bare" }],
+			documents: ["plain", { id: "x", data: { text: "dd" } }, { id: "y" }]
+		});
+		expect(text).toEqual([
+			"sys",
+			"hi",
+			"hm",
+			"plan",
+			"f",
+			"{}",
+			"why",
+			'{"text":"doc"}',
+			'{"id":"e"}',
+			'{"name":"f"}',
+			'{"name":"bare"}',
+			"plain",
+			'{"text":"dd"}',
+			'{"id":"y"}'
+		]);
+		expect(promptText({})).toEqual([]);
+		expect(promptText(undefined)).toEqual([]);
+		expect(promptText({ messages: [{ role: "user", content: 5 }] })).toEqual([]);
+	});
+
+	it("cuts a text into pieces, never between the halves of a surrogate pair", () => {
+		expect(chunksOf("", 4)).toEqual([]);
+		expect(chunksOf("abcdef", 4)).toEqual(["abcd", "ef"]);
+		expect(chunksOf("abcd", 4)).toEqual(["abcd"]);
+		const pieces = chunksOf("abc😀def", 4);
+		expect(pieces).toEqual(["abc", "😀de", "f"]);
+		expect(pieces.join("")).toBe("abc😀def");
 	});
 });

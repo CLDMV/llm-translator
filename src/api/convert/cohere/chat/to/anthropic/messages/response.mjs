@@ -30,5 +30,5 @@ import { response as fromChat } from "../../../../../openai/chat/to/anthropic/me
  * @throws {import("../../../../../../../lib/errors.mjs").TranslatorError} When the reply has no message or ends in a failure.
  */
 export function response(reply, state, settings) {
-	return fromChat(completion(reply), state, settings);
+	return fromChat(completion(reply, { state }), state, settings);
 }

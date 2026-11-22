@@ -35,7 +35,7 @@ const NATIVE = {
 	prefill: "none",
 	streamUsage: false,
 	continuousUsage: false,
-	parallelToolCalls: false,
+	parallelToolCalls: true,
 	reasoningRoundTrip: false,
 	responseFormat: true
 };
@@ -52,11 +52,22 @@ const NATIVE = {
  */
 export async function request(body, settings, context) {
 	const s = resolve(settings);
-	const { body: chat, state } = await toChat(body, { ...s, ...NATIVE }, context);
+	const { body: chat, state } = await toChat(body, { ...s, ...NATIVE }, { ...context, sources: true });
 	const asked = body.metadata?.sampling;
 	const sampling = { ...s.sampling, ...(asked !== null && typeof asked === "object" && !Array.isArray(asked) ? asked : {}) };
+	const clamped = [];
+	const out = chatBody(chat, {
+		dropped: state.dropped,
+		clamped,
+		sampling,
+		thinking: state.thinking,
+		thinkingBudget: state.thinkingBudget,
+		marker: s.toolErrors ? s.toolErrorMarker : undefined,
+		state
+	});
+	if (clamped.length > 0) state.clamped = clamped;
 	return {
-		body: chatBody(chat, { dropped: state.dropped, sampling, thinking: state.thinking, thinkingBudget: state.thinkingBudget }),
+		body: out,
 		state
 	};
 }

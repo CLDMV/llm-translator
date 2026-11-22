@@ -284,7 +284,8 @@ async function convertMessages(messages, s, state, fit, fitId, system, keepThink
 					title: block.title ?? undefined,
 					source: block.source ?? undefined,
 					citations: block.citations?.enabled === true,
-					blocks: (block.content ?? []).length
+					blocks: (block.content ?? []).length,
+					text: body
 				});
 				return [tag({ type: "text", text: `[Search result: ${block.title ?? ""} (${block.source ?? ""})]\n${body}` }, source)];
 			}

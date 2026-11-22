@@ -572,7 +572,7 @@ describe("request sources and document citations", () => {
 		expect(parts.map((part) => sourceOf(part))).toEqual([
 			{ kind: "document", index: 0, title: "Notes", citations: true },
 			undefined,
-			{ kind: "search_result", index: 0, title: "S", source: "https://s.test", citations: true, blocks: 2 },
+			{ kind: "search_result", index: 0, title: "S", source: "https://s.test", citations: true, blocks: 2, text: "one\ntwo" },
 			{ kind: "document", index: 1, title: undefined, citations: false }
 		]);
 	});

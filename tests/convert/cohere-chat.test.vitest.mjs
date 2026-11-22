@@ -58,6 +58,34 @@ describe("request converters", () => {
 		expect(quiet.body).not.toHaveProperty("thinking");
 		await expect(fromAnthropic({ model: "m", max_tokens: 5 })).rejects.toThrow(/messages: Field required/);
 	});
+
+	it("Anthropic: names the values moved into Cohere's ranges, and leaves the tool error marker alone with toolErrors off", async () => {
+		const failed = [
+			{ role: "user", content: "go" },
+			{ role: "assistant", content: [{ type: "tool_use", id: "t", name: "R", input: {} }] },
+			{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", is_error: true, content: "bad" }] }
+		];
+		const body = { model: "m", max_tokens: 5, top_p: 1, tools: [{ name: "R", input_schema: { type: "object" } }], messages: failed };
+		const on = await fromAnthropic(body);
+		expect(on.state.clamped).toEqual(["p"]);
+		expect(on.body.messages.at(-1).content).toBe('{"error":"bad"}');
+		const off = await fromAnthropic({ ...body, top_p: 0.5 }, { toolErrors: false });
+		expect(off.state).not.toHaveProperty("clamped");
+		expect(off.body.messages.at(-1).content).toBe("bad");
+	});
+
+	it("Chat Completions: names the values moved into Cohere's ranges, and reads the tool error marker only with toolErrorInference", () => {
+		const turn = [
+			{ role: "user", content: "go" },
+			{ role: "tool", tool_call_id: "t", content: "[error] bad" }
+		];
+		const on = fromChat({ model: "m", frequency_penalty: 3, messages: turn }, { toolErrorInference: true });
+		expect(on.state.clamped).toEqual(["frequency_penalty"]);
+		expect(on.body.messages.at(-1).content).toBe('{"error":"bad"}');
+		const off = fromChat({ model: "m", messages: turn });
+		expect(off.state).not.toHaveProperty("clamped");
+		expect(off.body.messages.at(-1).content).toBe("[error] bad");
+	});
 });
 
 describe("response converters", () => {
@@ -70,7 +98,7 @@ describe("response converters", () => {
 	it("Chat Completions: the client's model, the usage kept on the state, and no state at all", () => {
 		const state = { model: "asked" };
 		expect(toChat(reply, state, {}).model).toBe("asked");
-		expect(state.upstreamUsage).toEqual({ input_tokens: 3, output_tokens: 4 });
+		expect(state.upstreamUsage).toEqual({ input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
 		expect(toChat(reply).choices[0].message.content).toBe("ok");
 	});
 
@@ -87,7 +115,7 @@ describe("stream converters", () => {
 		const out = (await collect(chatStream(text, state, {}))).map((entry) => entry.data);
 		expect(out.at(-1)).toBe("[DONE]");
 		expect(out.find((chunk) => chunk.usage)).toMatchObject({ model: "asked", usage: { prompt_tokens: 1, completion_tokens: 2 } });
-		expect(state.upstreamUsage).toEqual({ input_tokens: 1, output_tokens: 2 });
+		expect(state.upstreamUsage).toEqual({ input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
 		expect((await collect(chatStream(sse(text)))).map((entry) => entry.data).at(-1)).toBe("[DONE]");
 		const quiet = (await collect(chatStream(text, { includeUsage: false }))).map((entry) => entry.data);
 		expect(quiet.some((chunk) => chunk.usage)).toBe(false);

@@ -84,16 +84,10 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 ## Cohere
 
 - Nothing has been run against the real Cohere API; the shapes follow the documentation ([#70](https://github.com/CLDMV/llm-translator/issues/70)).
-- Over `cohere.chat` the `tool_plan` (the sentence the model writes before a tool call) is not returned, and citations (`citations` in the reply, the `citation-start` and `citation-end` events) are not mapped ([#16](https://github.com/CLDMV/llm-translator/issues/16), [#189](https://github.com/CLDMV/llm-translator/issues/189)).
-- Anthropic `document` blocks are sent as inline text, not as Cohere `documents`, so a Cohere model cites nothing from them ([#189](https://github.com/CLDMV/llm-translator/issues/189)).
-- Cohere cannot force one named tool. `tool_choice` naming a tool is sent as `REQUIRED` when it is the only tool and left out (recorded as `tool_choice`) when there are several. `tool_choice` needs Command R7B or newer on Cohere's side ([#189](https://github.com/CLDMV/llm-translator/issues/189)).
-- `response_format` is left out when tools are offered (Cohere does not take both), and `logprobs`, `n` above 1, `parallel_tool_calls` and `logit_bias` are not mapped ([#189](https://github.com/CLDMV/llm-translator/issues/189)).
-- Cohere's value ranges are not checked: penalties above 1.0, `top_p` outside 0.01 to 0.99 and more than five stop sequences are sent as given and answered by Cohere's own error ([#189](https://github.com/CLDMV/llm-translator/issues/189)).
-- Thinking is on or off with an optional token budget; the effort levels collapse to `enabled`. Through the Compatibility API `reasoning_effort` takes `none` and `high` only, so every other level is sent as `high` and a budget is not sent at all ([#189](https://github.com/CLDMV/llm-translator/issues/189)).
-- Reasoning sent back in history as a `thinking` block follows Cohere's request schema; the reasoning documentation does not say whether a model requires it ([#189](https://github.com/CLDMV/llm-translator/issues/189)).
-- A failed tool result keeps the `toolErrors` marker text; Cohere has no error flag on a tool message ([#189](https://github.com/CLDMV/llm-translator/issues/189)).
-- Token counts are estimated: `POST /v1/tokenize` takes one raw string and does not match a chat prompt ([#189](https://github.com/CLDMV/llm-translator/issues/189)).
-- Cached token counts (`usage.cached_tokens`) are not reported, and the Compatibility API's streams ask for no usage chunk, so a Chat Completions stream's usage is the translator's estimate unless Cohere sends one ([#189](https://github.com/CLDMV/llm-translator/issues/189)).
+- Cohere's documentation does not say whether a model needs its past `thinking` blocks sent back; they are sent, as the request schema allows. Checking that against the real API is part of [#70](https://github.com/CLDMV/llm-translator/issues/70).
+- `logit_bias` and `top_logprobs` are dropped and named in `state.dropped`. Cohere has no field for either (its `logprobs` gives the log probability of each generated token and no alternatives), so this is a limit of the protocol and not open work.
+- Structured output (`response_format`, `output_config.format`) next to tools or documents is a system instruction to reply in that JSON, because Cohere does not take the format together with them. The model follows the instruction; the format is not enforced, and a reply can still be something else.
+- Token counts use Cohere's tokenizer on the text the model reads, and the chat template's few tokens per message are not counted, so a count runs slightly below what Cohere bills.
 
 ## Streaming
 
