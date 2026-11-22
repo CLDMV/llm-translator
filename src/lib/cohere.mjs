@@ -315,10 +315,14 @@ function markPiece(text, cites, marks, state) {
  * @returns {string} The text without markers and list, or the text itself when it has no source list.
  */
 export function unmark(text) {
-	const found = /\n\nSources:\n((?:\[\d+\] [^\n]*\n?)+)$/.exec(text);
-	if (found === null) return text;
-	const count = found[1].split("\n").filter((line) => line !== "").length;
-	return text.slice(0, found.index).replace(/\[(\d+)\]/g, (all, n) => (Number(n) >= 1 && Number(n) <= count ? "" : all));
+	const head = "\n\nSources:\n";
+	for (let at = text.indexOf(head); at !== -1; at = text.indexOf(head, at + 1)) {
+		const lines = text.slice(at + head.length).split("\n");
+		if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+		if (!lines.every((line) => /^\[\d+\] /.test(line))) continue;
+		return text.slice(0, at).replace(/\[(\d+)\]/g, (all, n) => (Number(n) >= 1 && Number(n) <= lines.length ? "" : all));
+	}
+	return text;
 }
 
 /**

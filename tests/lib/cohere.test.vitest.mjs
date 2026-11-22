@@ -1167,6 +1167,26 @@ describe("citations of the model's thinking", () => {
 		expect(unmark("a[1]\n\nSources:\nnot a list")).toBe("a[1]\n\nSources:\nnot a list");
 	});
 
+	it("reads the source list the way the old pattern did: one trailing newline at most, the whole tail a list", () => {
+		expect(unmark("a[1]\n\nSources:\n[1] A")).toBe("a");
+		expect(unmark("a[1]\n\nSources:\n[1] A\n\n")).toBe("a[1]\n\nSources:\n[1] A\n\n");
+		expect(unmark("a[1]\n\nSources:\n[1] A\nafter")).toBe("a[1]\n\nSources:\n[1] A\nafter");
+		expect(unmark("a[1]\n\nSources:\n")).toBe("a[1]\n\nSources:\n");
+		expect(unmark("a[1]\n\nSources:\n[1] A\n\nb")).toBe("a[1]\n\nSources:\n[1] A\n\nb");
+	});
+
+	it("uses the first Sources block whose tail is a list, and skips an earlier one that is not", () => {
+		expect(unmark("x[1]\n\nSources:\nnote\n\nSources:\n[1] A\n[2] B")).toBe("x\n\nSources:\nnote");
+		expect(unmark("x[1]\n\nSources:\n[1] A\n\nSources:\n[1] B")).toBe("x\n\nSources:\n A");
+	});
+
+	it("scans a pathological source list in linear time", () => {
+		const text = "\n\nSources:\n[9] " + "[0] ".repeat(50000) + "x\ny";
+		const start = Date.now();
+		expect(unmark(text)).toBe(text);
+		expect(Date.now() - start).toBeLessThan(1000);
+	});
+
 	it("sends thinking back as Cohere wrote it", () => {
 		const marked = "Let me[1] check\n\nSources:\n[1] Doc";
 		const out = chatBody({ model: "m", messages: [{ role: "assistant", content: "hi", reasoning: marked }] });
