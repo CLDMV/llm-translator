@@ -30,6 +30,7 @@ import {
 	needsNative,
 	promptText,
 	rootOf,
+	unmark,
 	usageOf
 } from "../../src/lib/cohere.mjs";
 import { tag } from "../../src/lib/citations.mjs";
@@ -1081,5 +1082,165 @@ describe("promptText and chunksOf", () => {
 		const pieces = chunksOf("abc😀def", 4);
 		expect(pieces).toEqual(["abc", "😀de", "f"]);
 		expect(pieces.join("")).toBe("abc😀def");
+	});
+});
+
+describe("citations of the model's thinking", () => {
+	const doc = (id, document = {}) => ({ type: "document", id, document });
+	const thought = (end, sources, extra = {}) => ({ type: "THINKING_CONTENT", start: 0, end, content_index: 0, sources, ...extra });
+	const state = { documents: { doc_0: { kind: "document", index: 0, title: "Doc  0", length: 9, source: "https://info.test/x" } } };
+	const reasoningOf = (citations, thinking = "Let me check the notes", options = {}) =>
+		completion(
+			{
+				finish_reason: "COMPLETE",
+				message: {
+					content: [
+						{ type: "thinking", thinking },
+						{ type: "text", text: "ok" }
+					],
+					citations
+				}
+			},
+			{ state, ...options }
+		).choices[0].message.reasoning;
+
+	it("writes [n] markers at the cited spans and lists the sources, numbered in the order they are cited", () => {
+		const out = reasoningOf([
+			thought(22, [doc("doc_0", { title: "Ignored" }), doc("b", { title: "B" })]),
+			thought(6, [doc("b", { title: "B", url: "https://b.test" })])
+		]);
+		expect(out).toBe("Let me[1] check the notes[2][1]\n\nSources:\n[1] B (https://b.test)\n[2] Doc 0 (https://info.test/x)");
+		expect(unmark(out)).toBe("Let me check the notes");
+	});
+
+	it("names a source by its title, its id, or its tool call, with the URL the document gives", () => {
+		const out = reasoningOf([
+			thought(3, [doc("only-id")]),
+			thought(3, [doc("d2", { title: "Two", source: "https://two.test" })]),
+			thought(3, [doc("d3", { title: "Three", source: "not a url", url: 5 })]),
+			thought(3, [{ type: "tool", id: "call7:2", tool_output: {} }]),
+			thought(3, [{ type: "tool", id: "call7:3" }]),
+			thought(3, [{ type: "document" }, null])
+		]);
+		expect(out.split("\n\nSources:\n")[1].split("\n")).toEqual([
+			"[1] only-id",
+			"[2] Two (https://two.test)",
+			"[3] Three",
+			"[4] tool result call7",
+			"[5] document"
+		]);
+	});
+
+	it("marks the end of the text when a citation has no usable end, keeps within the text, and only marks the block it names", () => {
+		const out = completion(
+			{
+				finish_reason: "COMPLETE",
+				message: {
+					content: [
+						{ type: "thinking", thinking: "one" },
+						{ type: "text", text: "x" },
+						{ type: "thinking", thinking: "two" }
+					],
+					citations: [
+						thought(undefined, [doc("a", { title: "A" })]),
+						thought(-4, [doc("a", { title: "A" })]),
+						thought(99, [doc("c", { title: "C" })], { content_index: 2 }),
+						{ type: "THINKING_CONTENT", end: 1, sources: "x" },
+						{ type: "THINKING_CONTENT", end: 1, content_index: 7, sources: [doc("z")] }
+					]
+				}
+			},
+			{ state }
+		);
+		expect(out.choices[0].message.reasoning).toBe("[1]one[1]two[2]\n\nSources:\n[1] A\n[2] C");
+	});
+
+	it("leaves thinking with no citations, and a list-less text, as it is", () => {
+		expect(reasoningOf([])).toBe("Let me check the notes");
+		expect(reasoningOf(undefined)).toBe("Let me check the notes");
+		expect(unmark("plain [1] text")).toBe("plain [1] text");
+	});
+
+	it("takes out only the markers the list accounts for, and only after a list in the translator's form", () => {
+		expect(unmark("a[1]b[2]c[3] d[0]\n\nSources:\n[1] A\n[2] B")).toBe("abc[3] d[0]");
+		expect(unmark("a[1]\n\nSources:\n[1] A\n")).toBe("a");
+		expect(unmark("a[1]\n\nSources:\nnot a list")).toBe("a[1]\n\nSources:\nnot a list");
+	});
+
+	it("sends thinking back as Cohere wrote it", () => {
+		const marked = "Let me[1] check\n\nSources:\n[1] Doc";
+		const out = chatBody({ model: "m", messages: [{ role: "assistant", content: "hi", reasoning: marked }] });
+		expect(out.messages[0].content[0]).toEqual({ type: "thinking", thinking: "Let me check" });
+	});
+
+	it("sets state.cites when the request has documents, and not otherwise", () => {
+		const withDocs = {};
+		chatBody({ model: "m", messages: user, documents: [{ id: "d", data: {} }] }, { state: withDocs });
+		expect(withDocs.cites).toBe(true);
+		const without = {};
+		chatBody({ model: "m", messages: user }, { state: without });
+		expect(without).not.toHaveProperty("cites");
+	});
+
+	describe("streamed", () => {
+		const ev = (type, extra = {}) => ({ name: type, data: { type, ...extra } });
+		const think = (text, index = 0) => ev("content-delta", { index, delta: { message: { content: { thinking: text } } } });
+		const cite = (end, sources, index = 0) =>
+			ev("citation-start", { index, delta: { message: { citations: { type: "THINKING_CONTENT", start: 0, end, sources } } } });
+		const answer = (text) => ev("content-delta", { index: 1, delta: { message: { content: { text } } } });
+		const run = (list, options) => {
+			const chunker = createChunker({ state: { cites: true, ...state }, ...options });
+			return list.flatMap(({ name, data }) => chunker.event(name, data));
+		};
+		const reasoning = (chunks) => chunks.map((chunk) => chunk.choices?.[0]?.delta.reasoning ?? "");
+
+		it("holds a thinking block until it ends, then sends it marked, then the sources before the answer", () => {
+			const chunks = run([
+				ev("message-start"),
+				think("Let me "),
+				think("check"),
+				cite(6, [doc("doc_0")]),
+				ev("citation-start", { index: 9 }),
+				ev("content-end", { index: 0 }),
+				answer("ok"),
+				ev("message-end", { delta: { finish_reason: "COMPLETE" } })
+			]);
+			expect(reasoning(chunks).filter((text) => text !== "")).toEqual(["Let me[1] check", "\n\nSources:\n[1] Doc 0 (https://info.test/x)"]);
+			const kinds = chunks.map((chunk) => (chunk.choices?.[0]?.delta.reasoning ? "r" : chunk.choices?.[0]?.delta.content ? "c" : "-"));
+			expect(kinds.join("").replace(/-/g, "")).toBe("rrc");
+		});
+
+		it("settles a thinking block that has no content-end before the plan, a tool call and the end of the reply", () => {
+			const plan = ev("tool-plan-delta", { delta: { message: { tool_plan: "plan" } } });
+			const call = ev("tool-call-start", { index: 2, delta: { message: { tool_calls: { id: "t", function: { name: "f" } } } } });
+			const end = ev("message-end", { delta: { finish_reason: "TOOL_CALL" } });
+			for (const next of [plan, call, end]) {
+				const chunks = run([think("abc"), cite(2, [doc("x", { title: "X" })]), next]);
+				expect(reasoning(chunks).filter((text) => text !== "")).toEqual(["ab[1]c", "\n\nSources:\n[1] X"]);
+			}
+		});
+
+		it("sends no list when nothing was cited, sends the sources once, and ignores citations of a block it does not hold", () => {
+			const plain = run([think("abc"), ev("content-end", { index: 0 }), ev("content-end", { index: 5 }), answer("a"), answer("b")]);
+			expect(reasoning(plain).filter((text) => text !== "")).toEqual(["abc"]);
+			const twice = run([think("abc"), cite(1, [doc("x")]), answer("a"), answer("b"), cite(1, [doc("y")], 7), cite(1, "no")]);
+			expect(reasoning(twice).filter((text) => text !== "")).toHaveLength(2);
+			const odd = run([think("abc"), cite(1, "no"), ev("content-end", { index: 0 })]);
+			expect(reasoning(odd).filter((text) => text !== "")).toEqual(["abc"]);
+		});
+
+		it("streams thinking live when no citations are possible", () => {
+			const chunks = run([think("abc"), cite(1, [doc("x")])], { state: {} });
+			expect(reasoning(chunks)).toContain("abc");
+		});
+	});
+});
+
+describe("dropped fields", () => {
+	it("names a part Cohere cannot take once, however many messages have one", () => {
+		const dropped = [];
+		const audio = { role: "user", content: [{ type: "input_audio" }, { type: "text", text: "x" }] };
+		chatBody({ model: "m", messages: [audio, audio] }, { dropped });
+		expect(dropped).toEqual(["content.input_audio"]);
 	});
 });

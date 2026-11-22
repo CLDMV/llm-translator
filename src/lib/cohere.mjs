@@ -243,6 +243,84 @@ function toolContentOf(content, dropped, gathered) {
 	return text || NO_OUTPUT;
 }
 
+/** Heading of the source list written after marked thinking. */
+const SOURCES = "Sources:";
+
+/**
+ * What a Cohere citation source is called in a marker list: a document by its title (else its id) with its URL when it has one, a tool result by its call.
+ * @param {any} source - Cohere citation source (`type`, `id`, `document`).
+ * @param {any} [state] - Conversion state (`documents`, for the titles of request documents).
+ * @returns {{ key: string, label: string }} The key that tells sources apart and the label for the list.
+ */
+function labelOf(source, state) {
+	const tool = source?.type === "tool";
+	const document = source?.document ?? {};
+	const info = state?.documents?.[source?.id];
+	const title = info?.title ?? (typeof document.title === "string" ? document.title : undefined);
+	const link = [document.url, document.source, info?.source].find((value) => typeof value === "string" && /^https?:\/\//i.test(value));
+	const call = String(source?.id).split(":")[0];
+	const name = tool ? `tool result ${call}` : (title ?? String(source?.id ?? "document"));
+	return {
+		key: tool ? `tool:${call}` : `doc:${source?.id ?? name}`,
+		label: (link === undefined ? name : `${name} (${link})`).replace(/\s+/g, " ")
+	};
+}
+
+/**
+ * The numbering of one reply's markers: a source gets the next number the first time it is cited, and the list names them in that order.
+ * @returns {{ number: (label: { key: string, label: string }) => number, list: () => string }} The numbering.
+ */
+function newMarks() {
+	const numbers = new Map();
+	const labels = [];
+	return {
+		number(entry) {
+			if (!numbers.has(entry.key)) {
+				labels.push(entry.label);
+				numbers.set(entry.key, labels.length);
+			}
+			return numbers.get(entry.key);
+		},
+		list: () => (labels.length === 0 ? "" : `\n\n${SOURCES}\n${labels.map((label, at) => `[${at + 1}] ${label}`).join("\n")}`)
+	};
+}
+
+/**
+ * Write `[n]` markers into one piece of thinking text, at the end of each cited span (a citation with no usable end is marked at the end of the text).
+ * @param {string} text - The thinking text the citations' offsets count in.
+ * @param {{ end?: number, sources: any[] }[]} cites - Citations of that text.
+ * @param {ReturnType<typeof newMarks>} marks - The reply's numbering.
+ * @param {any} [state] - Conversion state.
+ * @returns {string} The text with markers.
+ */
+function markPiece(text, cites, marks, state) {
+	const placed = cites
+		.map((cite) => ({ at: Number.isInteger(cite.end) ? Math.min(Math.max(cite.end, 0), text.length) : text.length, sources: cite.sources }))
+		.sort((left, right) => left.at - right.at);
+	let out = "";
+	let from = 0;
+	for (const cite of placed) {
+		out += text.slice(from, cite.at);
+		from = cite.at;
+		out += [...new Set(cite.sources.map((source) => marks.number(labelOf(source, state))))].map((n) => `[${n}]`).join("");
+	}
+	return out + text.slice(from);
+}
+
+/**
+ * Take the markers and the source list out of thinking text that `completion` or the chunker wrote them into, so Cohere gets back the text it
+ * wrote. Only text that ends with a source list in the form the translator writes is touched, and then only the markers `[1]` to `[n]` for the
+ * `n` sources in that list.
+ * @param {string} text - Thinking text.
+ * @returns {string} The text without markers and list, or the text itself when it has no source list.
+ */
+export function unmark(text) {
+	const found = /\n\nSources:\n((?:\[\d+\] [^\n]*\n?)+)$/.exec(text);
+	if (found === null) return text;
+	const count = found[1].split("\n").filter((line) => line !== "").length;
+	return text.slice(0, found.index).replace(/\[(\d+)\]/g, (all, n) => (Number(n) >= 1 && Number(n) <= count ? "" : all));
+}
+
 /**
  * The Cohere message of an assistant turn: its reasoning as a `thinking` block, its tool calls (`arguments` as JSON text), and its text, which is
  * the `tool_plan` when the turn has tool calls (the sentence a model writes before a call is Cohere's `tool_plan`, and that is how it is
@@ -253,7 +331,7 @@ function toolContentOf(content, dropped, gathered) {
  */
 function assistantOf(message, dropped) {
 	const text = textOf(message.content, dropped);
-	const thinking = reasoningOf(message);
+	const thinking = unmark(reasoningOf(message));
 	const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 	const entry = /** @type {any} */ ({ role: "assistant" });
 	if (thinking !== "")
@@ -455,6 +533,8 @@ export function chatBody(body, context = {}) {
 		context.state.documents = gathered.info;
 		context.state.tools = gathered.tools;
 		if (body.parallel_tool_calls === false) context.state.singleCall = true;
+		// Citations are possible, so the chunker holds each thinking block until it ends (its citations become markers in it).
+		if (documents.length > 0 || gathered.documents.size > 0) context.state.cites = true;
 	}
 	return out;
 }
@@ -612,8 +692,8 @@ export function citationsOf(citation, base, state) {
  * Convert a (non-streaming) Cohere reply to a Chat Completions `chat.completion`: text blocks are joined into the content, `thinking` blocks go
  * in the settings' reasoning field, `tool_calls` become tool calls, `finish_reason` becomes `finish_reason`, `usage` becomes `usage` and `logprobs`
  * become `choices[0].logprobs`. The `tool_plan` (the sentence the model writes before a tool call) is the start of the content, and `citations`
- * are `annotations` (neutral citations, see `lib/citations.mjs`) spanning the text they cite; a citation of the model's thinking has no place in
- * Chat Completions and is left out.
+ * are `annotations` (neutral citations, see `lib/citations.mjs`) spanning the text they cite. A citation of the model's thinking has no place in
+ * Chat Completions, so it is written into the reasoning text as `[n]` markers at the cited spans, followed by a list of the sources.
  * @param {any} reply - Parsed Cohere reply.
  * @param {{ reasoningField?: string, model?: string, state?: any }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `state` is the conversion state (`documents`, `tools`, `singleCall`).
  * @returns {any} `chat.completion` object.
@@ -644,7 +724,24 @@ export function completion(reply, options = {}) {
 	const body = blocks.map((block) => (block?.type === "text" ? block.text : "")).join("");
 	const lead = plan === "" ? 0 : plan.length + (body === "" ? 0 : PLAN_BREAK.length);
 	const out = /** @type {any} */ ({ role: "assistant", content: plan === "" ? body : plan + (body === "" ? "" : PLAN_BREAK) + body });
-	const reasoning = blocks.map((block) => (block?.type === "thinking" ? block.thinking : "")).join("");
+	// A citation of the model's thinking becomes `[n]` markers in the thinking text and a list of the sources at its end (no protocol has citations on reasoning).
+	const marks = newMarks();
+	const thoughts = Array.isArray(message.citations) ? message.citations.filter((citation) => citation?.type === "THINKING_CONTENT") : [];
+	const reasoning =
+		blocks
+			.map((block, at) =>
+				block?.type === "thinking"
+					? markPiece(
+							block.thinking,
+							thoughts
+								.filter((citation) => (citation.content_index ?? 0) === at)
+								.map((citation) => ({ end: citation.end, sources: Array.isArray(citation.sources) ? citation.sources : [] })),
+							marks,
+							options.state
+						)
+					: ""
+			)
+			.join("") + marks.list();
 	if (reasoning !== "") out[options.reasoningField ?? "reasoning"] = reasoning;
 	if (calls.length > 0) out.tool_calls = calls;
 	const cited = [];
@@ -675,7 +772,9 @@ export function completion(reply, options = {}) {
 
 /**
  * Create the converter of a Cohere stream's events into Chat Completions chunks. One chunker is for one reply: it keeps the completion id (so
- * every chunk carries the same one), whether any tool was called and how much text has been sent (citations count from it). The `tool-plan-delta`
+ * every chunk carries the same one), whether any tool was called and how much text has been sent (citations count from it). When the request could get
+ * citations (`state.cites`) each thinking block is held until its `content-end`, and the citations of its text (`THINKING_CONTENT`) are written into it as `[n]` markers,
+ * followed by the list of sources before the next thing that is not thinking. The `tool-plan-delta`
  * events are content text (a blank line separates the plan from content that follows it), `citation-start` events are `annotations` chunks,
  * `content-delta` log probabilities are `logprobs`, and the `debug` events are not carried over.
  * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, state?: any }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `state` is the conversion state (`documents`, `tools`, `singleCall`).
@@ -694,6 +793,11 @@ export function createChunker(options = {}) {
 	let planAt = null;
 	let planned = false;
 	const starts = new Map();
+	// With citations possible, each thinking block is held until it ends so its citations can be written into it as markers.
+	const hold = options.state?.cites === true;
+	const held = new Map();
+	const marks = newMarks();
+	let listed = false;
 	const make = (delta, finish = null, extra = {}) => ({
 		id,
 		object: "chat.completion.chunk",
@@ -715,33 +819,59 @@ export function createChunker(options = {}) {
 		length += value.length;
 		return [...first(), make({ content: value }, null, extra)];
 	};
+	const release = (index) => {
+		const block = held.get(index);
+		held.delete(index);
+		const marked = block === undefined ? "" : markPiece(block.text, block.cites, marks, options.state);
+		return marked === "" ? [] : [...first(), make({ [field]: marked })];
+	};
+	// Before anything that follows thinking: the blocks still held, then the source list (once).
+	const settle = () => {
+		const out = [...held.keys()].flatMap((index) => release(index));
+		const list = marks.list();
+		if (list !== "" && !listed) {
+			listed = true;
+			out.push(...first(), make({ [field]: list }));
+		}
+		return out;
+	};
 	return {
 		event(name, data) {
 			const type = data?.type ?? name;
+			if (type === "content-end") return release(data.index);
 			if (type === "content-delta") {
 				const content = data?.delta?.message?.content;
 				const extra = data?.logprobs === undefined ? {} : { logprobs: { content: logprobsOf(data.logprobs) } };
 				if (typeof content?.text === "string" && content.text !== "") {
 					// Text after a tool plan starts a new paragraph.
+					const before = settle();
 					const lead = planned && !starts.has(data.index) ? PLAN_BREAK : "";
 					if (!starts.has(data.index)) starts.set(data.index, length + lead.length);
-					return text(lead + content.text, extra);
+					return [...before, ...text(lead + content.text, extra)];
 				}
 				if (typeof content?.thinking === "string" && content.thinking !== "") {
-					return [...first(), make({ [field]: content.thinking }, null, extra)];
+					if (!hold) return [...first(), make({ [field]: content.thinking }, null, extra)];
+					if (!held.has(data.index)) held.set(data.index, { text: "", cites: [] });
+					held.get(data.index).text += content.thinking;
+					return [];
 				}
 				return [];
 			}
 			if (type === "tool-plan-delta") {
 				const plan = data?.delta?.message?.tool_plan;
 				if (typeof plan !== "string" || plan === "") return [];
+				const before = settle();
 				planAt ??= length;
 				planned = true;
-				return text(plan);
+				return [...before, ...text(plan)];
 			}
 			if (type === "citation-start") {
 				const citation = data?.delta?.message?.citations;
-				if (citation?.type === "THINKING_CONTENT" || citation === undefined) return [];
+				if (citation === undefined) return [];
+				if (citation.type === "THINKING_CONTENT") {
+					held.get(data.index)?.cites.push({ end: citation.end, sources: Array.isArray(citation.sources) ? citation.sources : [] });
+					return [];
+				}
 				const base = citation.type === "PLAN" ? (planAt ?? 0) : (starts.get(data.index) ?? length);
 				const found = citationsOf(citation, base, options.state);
 				return found.length === 0 ? [] : [...first(), make({ annotations: found.map((entry) => toAnnotation(entry)) })];
@@ -757,7 +887,7 @@ export function createChunker(options = {}) {
 				const call = data?.delta?.message?.tool_calls;
 				calls += 1;
 				const entry = { index: data.index, id: call?.id, type: "function", function: { name: call?.function?.name, arguments: "" } };
-				return [...first(), make({ tool_calls: [entry] })];
+				return [...settle(), ...first(), make({ tool_calls: [entry] })];
 			}
 			if (type === "message-end") {
 				const failure = failureOf(data?.delta?.finish_reason, data?.delta?.error);
@@ -765,7 +895,7 @@ export function createChunker(options = {}) {
 				finished = true;
 				usage = data?.delta?.usage;
 				const counted = usageOf(usage);
-				const out = [...first(), make({}, finishOf(data?.delta?.finish_reason, calls > 0))];
+				const out = [...settle(), ...first(), make({}, finishOf(data?.delta?.finish_reason, calls > 0))];
 				if (options.includeUsage !== false && counted !== undefined) {
 					out.push({ id, object: "chat.completion.chunk", created, model: options.model, choices: [], usage: counted });
 				}

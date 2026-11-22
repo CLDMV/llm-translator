@@ -14,6 +14,14 @@ export function rootOf(base: string): string;
  */
 export function needsNative(body: any): boolean;
 /**
+ * Take the markers and the source list out of thinking text that `completion` or the chunker wrote them into, so Cohere gets back the text it
+ * wrote. Only text that ends with a source list in the form the translator writes is touched, and then only the markers `[1]` to `[n]` for the
+ * `n` sources in that list.
+ * @param {string} text - Thinking text.
+ * @returns {string} The text without markers and list, or the text itself when it has no source list.
+ */
+export function unmark(text: string): string;
+/**
  * Convert a Chat Completions request body to a Cohere `/v2/chat` body. `max_tokens` is the same field, `top_p` is `p`, `top_k` is `k`, `stop`
  * is `stop_sequences`, tools keep their JSON schema, `tool_choice` `required` and `none` are `REQUIRED` and `NONE`, and a named tool is `REQUIRED`
  * with only that tool offered (Cohere cannot force one of several any other way). `response_format` `json_object` and `json_schema` are a
@@ -107,8 +115,8 @@ export function citationsOf(citation: any, base: number, state?: any): import(".
  * Convert a (non-streaming) Cohere reply to a Chat Completions `chat.completion`: text blocks are joined into the content, `thinking` blocks go
  * in the settings' reasoning field, `tool_calls` become tool calls, `finish_reason` becomes `finish_reason`, `usage` becomes `usage` and `logprobs`
  * become `choices[0].logprobs`. The `tool_plan` (the sentence the model writes before a tool call) is the start of the content, and `citations`
- * are `annotations` (neutral citations, see `lib/citations.mjs`) spanning the text they cite; a citation of the model's thinking has no place in
- * Chat Completions and is left out.
+ * are `annotations` (neutral citations, see `lib/citations.mjs`) spanning the text they cite. A citation of the model's thinking has no place in
+ * Chat Completions, so it is written into the reasoning text as `[n]` markers at the cited spans, followed by a list of the sources.
  * @param {any} reply - Parsed Cohere reply.
  * @param {{ reasoningField?: string, model?: string, state?: any }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `state` is the conversion state (`documents`, `tools`, `singleCall`).
  * @returns {any} `chat.completion` object.
@@ -121,7 +129,9 @@ export function completion(reply: any, options?: {
 }): any;
 /**
  * Create the converter of a Cohere stream's events into Chat Completions chunks. One chunker is for one reply: it keeps the completion id (so
- * every chunk carries the same one), whether any tool was called and how much text has been sent (citations count from it). The `tool-plan-delta`
+ * every chunk carries the same one), whether any tool was called and how much text has been sent (citations count from it). When the request could get
+ * citations (`state.cites`) each thinking block is held until its `content-end`, and the citations of its text (`THINKING_CONTENT`) are written into it as `[n]` markers,
+ * followed by the list of sources before the next thing that is not thinking. The `tool-plan-delta`
  * events are content text (a blank line separates the plan from content that follows it), `citation-start` events are `annotations` chunks,
  * `content-delta` log probabilities are `logprobs`, and the `debug` events are not carried over.
  * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, state?: any }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `state` is the conversion state (`documents`, `tools`, `singleCall`).

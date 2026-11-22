@@ -17,6 +17,8 @@
  * @fileoverview Cohere driver: host detection, URL layout, the Compatibility API normalizer, the model list, and the native `/v2/chat` protocol (`api: "cohere"`) for both fronts: request bodies, replies, SSE streaming (whole or split), usage, errors and configuration.
  */
 import { afterAll, describe, expect, it } from "vitest";
+import { response as toResponses } from "../../src/api/convert/openai/chat/to/openai/responses/response.mjs";
+import { stream as toResponsesStream } from "../../src/api/convert/openai/chat/to/openai/responses/stream.mjs";
 import { closeAll, collect, fakeTransport, make } from "../helpers/translator.mjs";
 import { readable, slices } from "../helpers/streams.mjs";
 
@@ -932,5 +934,99 @@ describe("auto routing and several choices", () => {
 		expect(out.body.choices.map((choice) => choice.index)).toEqual([0, 1]);
 		expect(transport.calls).toHaveLength(2);
 		expect(transport.calls.every((call) => JSON.parse(call.init.body).n === undefined)).toBe(true);
+	});
+});
+
+describe("citations of the model's thinking, on each front", () => {
+	const thinking = "Let me check the notes";
+	const citations = [
+		{
+			type: "THINKING_CONTENT",
+			start: 0,
+			end: 6,
+			content_index: 0,
+			sources: [{ type: "document", id: "mine", document: { title: "Mine", url: "https://mine.test" } }]
+		}
+	];
+	const answer = reply(
+		{
+			content: [
+				{ type: "thinking", thinking },
+				{ type: "text", text: "ok" }
+			],
+			citations
+		},
+		{ finish_reason: "COMPLETE" }
+	);
+	const marked = "Let me[1] check the notes\n\nSources:\n[1] Mine (https://mine.test)";
+	const documents = [{ id: "mine", data: { title: "Mine", text: "t" } }];
+	const events = [
+		{ type: "message-start", id: "r1", delta: { message: { role: "assistant" } } },
+		{ type: "content-start", index: 0, delta: { message: { content: { type: "thinking", thinking: "" } } } },
+		{ type: "content-delta", index: 0, delta: { message: { content: { thinking: "Let me check " } } } },
+		{ type: "content-delta", index: 0, delta: { message: { content: { thinking: "the notes" } } } },
+		{ type: "citation-start", index: 0, delta: { message: { citations: citations[0] } } },
+		{ type: "content-end", index: 0 },
+		{ type: "content-start", index: 1, delta: { message: { content: { type: "text", text: "" } } } },
+		{ type: "content-delta", index: 1, delta: { message: { content: { text: "ok" } } } },
+		{ type: "content-end", index: 1 },
+		{ type: "message-end", delta: { finish_reason: "COMPLETE" } }
+	];
+
+	it("is a marked thinking block for an Anthropic client, whole and streamed", async () => {
+		const { api, use } = await apiFor("anthropic");
+		use(() => ({ body: answer }));
+		const out = await api.send({ model: "command-a", max_tokens: 8, messages: user });
+		expect(out.body.content[0]).toMatchObject({ type: "thinking", thinking: marked });
+		use(raw(sse(events)));
+		const asks = {
+			type: "document",
+			title: "T",
+			source: { type: "text", media_type: "text/plain", data: "t" },
+			citations: { enabled: true }
+		};
+		const body = {
+			model: "command-a",
+			max_tokens: 8,
+			stream: true,
+			messages: [{ role: "user", content: [asks, { type: "text", text: "q" }] }]
+		};
+		const list = await collect((await api.send(body)).stream);
+		const text = list.filter((event) => event.data?.delta?.type === "thinking_delta").map((event) => event.data.delta.thinking);
+		expect(text.join("")).toBe(marked);
+	});
+
+	it("is marked reasoning for a Chat Completions client, whole and streamed", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: answer }));
+		expect((await api.send({ model: "command-a", messages: user })).body.choices[0].message.reasoning).toBe(marked);
+		use(raw(sse(events)));
+		const chunks = await collect((await api.send({ model: "command-a", stream: true, documents, messages: user })).stream);
+		const text = chunks.map((event) => event.data).filter((chunk) => chunk !== "[DONE]");
+		expect(text.map((chunk) => chunk.choices[0]?.delta.reasoning ?? "").join("")).toBe(marked);
+	});
+
+	it("is marked reasoning summary text for a Responses client", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: answer }));
+		// The Responses front sits on the Chat Completions reply (`wire: "responses"`), which its converter turns into output items.
+		const out = await api.send({ model: "command-a", messages: user }, { front: "openai", wire: "responses" });
+		const item = toResponses(out.body, { model: "command-a" }).output.find((entry) => entry.type === "reasoning");
+		expect(item.summary[0].text).toBe(marked);
+		use(raw(sse(events)));
+		const chat = await api.send({ model: "command-a", stream: true, documents, messages: user }, { front: "openai", wire: "responses" });
+		const streamed = await collect(toResponsesStream(chat.stream, { model: "command-a" }));
+		const parts = streamed.filter((event) => event.event === "response.reasoning_summary_text.delta").map((event) => event.data.delta);
+		expect(parts.join("")).toBe(marked);
+	});
+
+	it("sends the thinking back without the markers and the list", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: answer }));
+		const sent = await api.request({
+			model: "command-a",
+			messages: [...user, { role: "assistant", content: "ok", reasoning: marked }, { role: "user", content: "more" }]
+		});
+		expect(sent.body.messages[1].content[0]).toEqual({ type: "thinking", thinking });
 	});
 });
