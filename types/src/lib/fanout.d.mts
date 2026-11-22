@@ -1,6 +1,6 @@
 /**
  * How many branches a request needs: `n` when the OpenAI-front body asks for more than one choice and the router would send it to an
- * upstream that cannot answer it (one on another protocol than Chat Completions, which has no `n`, or a driver whose `info().n` is `false`), else 0 (the request goes the normal way: an OpenAI-protocol upstream handles `n` itself, and a value
+ * Anthropic-protocol upstream, else 0 (the request goes the normal way: an OpenAI-protocol upstream handles `n` itself, and so does Gemini's native API (`candidateCount`, up to 8), and a value
  * that is not an integer above 1 is left to the converter's own validation). The decision is made on the endpoint the router picks
  * first; each branch is then routed and failed over like any request.
  * @param {any} c - Captured translator parts (`capture`).

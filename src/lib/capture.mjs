@@ -46,6 +46,7 @@ export function collect(driverApi) {
 			auth: driver.auth,
 			request: driver.request,
 			sign: driver.sign,
+			cache: driver.cache,
 			response: driver.response,
 			chunk: driver.chunk,
 			flush: driver.flush,

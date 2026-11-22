@@ -30,5 +30,6 @@ import { response as fromChat } from "../../../../../openai/chat/to/anthropic/me
  * @throws {import("../../../../../../../lib/errors.mjs").TranslatorError} When the reply has no message or ends in a failure.
  */
 export function response(reply, state, settings) {
-	return fromChat(completion(reply), state, settings);
+	// Generated images have no place in an Anthropic message, so they are written into the text as markdown images.
+	return fromChat(completion(reply, { parallel: state?.parallel, images: "text" }), state, settings);
 }

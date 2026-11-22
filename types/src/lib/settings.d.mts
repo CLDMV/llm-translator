@@ -52,6 +52,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {boolean} effortPassthrough - vLLM driver: send `xhigh` and `max` reasoning effort unchanged instead of clamping them to `high`.
  * @property {boolean} passthroughFilter - Restrict bodies forwarded from the OpenAI front to an OpenAI-protocol upstream to standard Chat Completions fields plus documented vLLM extensions. Off in the library; the server turns it on unless set to false.
  * @property {boolean | "auto"} nativeMessages - Deprecated: use the upstream's `api` instead. For a vLLM upstream that sets no `api`, `true` reads as `api: "anthropic.messages"`, `"auto"` as `api: "auto"` and `false` as `api: "openai.chat"`, with a deprecation warning; it is ignored (also with a warning) when `api` is set.
+ * @property {{ safetySettings?: {category: string, threshold: string}[], tools?: object[], cachedContent?: string, cache?: boolean, thinking?: "auto"|"level"|"budget", responseModalities?: string[], imageConfig?: object, speechConfig?: object, mediaResolution?: string }} gemini - Google Gemini request fields for an upstream on the `google.gemini` protocol, merged key by key: `safetySettings` (sent as given), `tools` (built-in tools such as `{ googleSearch: {} }` or `{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }`, added to the request's own), `cachedContent` (a cached content name sent with every request), `cache` (false stops `cache_control` from creating cached contents), `thinking` (`level` or `budget` forces the thinking control a model that is not recognized by name takes; `auto` decides from the model id), `responseModalities`, `imageConfig`, `speechConfig` and `mediaResolution` (sent in `generationConfig`). Only the operator sets these; a client never does.
  * @property {number} contextWindow - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
  * @property {number} defaultMaxTokens - `max_tokens` used when an OpenAI request has none (Anthropic requires one).
  */
@@ -255,6 +256,23 @@ export type Settings = {
      * - Deprecated: use the upstream's `api` instead. For a vLLM upstream that sets no `api`, `true` reads as `api: "anthropic.messages"`, `"auto"` as `api: "auto"` and `false` as `api: "openai.chat"`, with a deprecation warning; it is ignored (also with a warning) when `api` is set.
      */
     nativeMessages: boolean | "auto";
+    /**
+     * - Google Gemini request fields for an upstream on the `google.gemini` protocol, merged key by key: `safetySettings` (sent as given), `tools` (built-in tools such as `{ googleSearch: {} }` or `{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }`, added to the request's own), `cachedContent` (a cached content name sent with every request), `cache` (false stops `cache_control` from creating cached contents), `thinking` (`level` or `budget` forces the thinking control a model that is not recognized by name takes; `auto` decides from the model id), `responseModalities`, `imageConfig`, `speechConfig` and `mediaResolution` (sent in `generationConfig`). Only the operator sets these; a client never does.
+     */
+    gemini: {
+        safetySettings?: {
+            category: string;
+            threshold: string;
+        }[];
+        tools?: object[];
+        cachedContent?: string;
+        cache?: boolean;
+        thinking?: "auto" | "level" | "budget";
+        responseModalities?: string[];
+        imageConfig?: object;
+        speechConfig?: object;
+        mediaResolution?: string;
+    };
     /**
      * - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
      */

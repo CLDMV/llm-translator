@@ -317,6 +317,8 @@ describe("fan-out helpers", () => {
 		expect(add({ a: 1, d: { x: 1 } }, { a: 2, b: 3, d: { x: 4 } })).toEqual({ a: 3, b: 3, d: { x: 5 } });
 		expect(add(undefined, 2)).toBe(2);
 		expect(add(1, undefined)).toBe(1);
+		expect(add({ a: 1 }, 5)).toEqual({ a: 1 });
+		expect(add("x", { a: 1 })).toBe("x");
 	});
 
 	it("joins bodies without usage", () => {

@@ -63,6 +63,17 @@ export function geminiRoute(endpoint: any, model: string, { stream, count, env }
     env?: Record<string, string | undefined>;
 }): string;
 /**
+ * Where a Gemini model's cached contents are made on Vertex AI.
+ * @param {any} endpoint - Runtime endpoint.
+ * @param {string} model - Model id, for example `gemini-2.5-flash`.
+ * @param {Record<string, string | undefined>} [env] - Environment.
+ * @returns {{path: string, resource: string}} The `cachedContents` collection path, and the model's resource name for the create call.
+ */
+export function geminiCache(endpoint: any, model: string, env?: Record<string, string | undefined>): {
+    path: string;
+    resource: string;
+};
+/**
  * The body Vertex AI takes: the Messages body with `anthropic_version` added and the model taken out (it is in the path). The model stays on the
  * result as a property that is not enumerable, so it is not sent but the rest of the translator can still read `body.model`.
  * @param {any} body - Anthropic Messages request body.

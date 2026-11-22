@@ -21,6 +21,7 @@ import { TranslatorError } from "./errors.mjs";
 import { normalize as normalizeUrls } from "./document-urls.mjs";
 import { check } from "./constraint.mjs";
 import { valid } from "./cache.mjs";
+import { check as checkGemini } from "./gemini-settings.mjs";
 
 /**
  * Settings understood by the converters. Every key is optional when passed in; `resolve()` fills the rest.
@@ -69,6 +70,7 @@ import { valid } from "./cache.mjs";
  * @property {boolean} effortPassthrough - vLLM driver: send `xhigh` and `max` reasoning effort unchanged instead of clamping them to `high`.
  * @property {boolean} passthroughFilter - Restrict bodies forwarded from the OpenAI front to an OpenAI-protocol upstream to standard Chat Completions fields plus documented vLLM extensions. Off in the library; the server turns it on unless set to false.
  * @property {boolean | "auto"} nativeMessages - Deprecated: use the upstream's `api` instead. For a vLLM upstream that sets no `api`, `true` reads as `api: "anthropic.messages"`, `"auto"` as `api: "auto"` and `false` as `api: "openai.chat"`, with a deprecation warning; it is ignored (also with a warning) when `api` is set.
+ * @property {{ safetySettings?: {category: string, threshold: string}[], tools?: object[], cachedContent?: string, cache?: boolean, thinking?: "auto"|"level"|"budget", responseModalities?: string[], imageConfig?: object, speechConfig?: object, mediaResolution?: string }} gemini - Google Gemini request fields for an upstream on the `google.gemini` protocol, merged key by key: `safetySettings` (sent as given), `tools` (built-in tools such as `{ googleSearch: {} }` or `{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }`, added to the request's own), `cachedContent` (a cached content name sent with every request), `cache` (false stops `cache_control` from creating cached contents), `thinking` (`level` or `budget` forces the thinking control a model that is not recognized by name takes; `auto` decides from the model id), `responseModalities`, `imageConfig`, `speechConfig` and `mediaResolution` (sent in `generationConfig`). Only the operator sets these; a client never does.
  * @property {number} contextWindow - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
  * @property {number} defaultMaxTokens - `max_tokens` used when an OpenAI request has none (Anthropic requires one).
  */
@@ -111,6 +113,7 @@ export const DEFAULTS = Object.freeze({
 	parallelToolCalls: true,
 	unknownFields: "drop",
 	sampling: Object.freeze({}),
+	gemini: Object.freeze({}),
 	constraint: null,
 	cacheSalt: null,
 	promptCacheKey: null,
@@ -159,7 +162,7 @@ const BOOLEANS = [
  * @returns {Settings} Resolved settings.
  */
 export function resolve(...layers) {
-	const out = { ...DEFAULTS, pdf: { ...DEFAULTS.pdf }, sampling: { ...DEFAULTS.sampling } };
+	const out = { ...DEFAULTS, pdf: { ...DEFAULTS.pdf }, sampling: { ...DEFAULTS.sampling }, gemini: { ...DEFAULTS.gemini } };
 	for (const layer of layers) {
 		if (!layer) continue;
 		for (const [key, value] of Object.entries(layer)) {
@@ -167,6 +170,7 @@ export function resolve(...layers) {
 			if (key === "pdf") Object.assign(out.pdf, value);
 			else if (key === "sampling" && value !== null && typeof value === "object" && !Array.isArray(value))
 				Object.assign(out.sampling, value);
+			else if (key === "gemini" && value !== null && typeof value === "object" && !Array.isArray(value)) Object.assign(out.gemini, value);
 			else out[key] = value;
 		}
 	}
@@ -207,6 +211,14 @@ export function resolve(...layers) {
 			code: "invalid_setting",
 			status: 500,
 			details: { key: "sampling" }
+		});
+	}
+	const geminiProblem = checkGemini(out.gemini);
+	if (geminiProblem !== null) {
+		throw new TranslatorError(`Invalid setting gemini: ${JSON.stringify(out.gemini)} (${geminiProblem})`, {
+			code: "invalid_setting",
+			status: 500,
+			details: { key: "gemini" }
 		});
 	}
 	const problem = check(out.constraint);

@@ -23,7 +23,7 @@ export function lookup(host: string): Promise<{
 /**
  * Fetch a document.
  * @param {string} input - The URL.
- * @param {{allow: string[], maxBytes: number, timeout: number, maxRedirects: number, allowPrivate?: boolean, signal?: AbortSignal}} options - Limits and rules (see the `documentUrls` setting).
+ * @param {{allow: string[], maxBytes: number, timeout: number, maxRedirects: number, allowPrivate?: boolean, signal?: AbortSignal, types?: Map<string, string>}} options - Limits and rules (see the `documentUrls` setting); `types` replaces the content types that are accepted (content type to the media type it is stored as).
  * @param {{lookup?: (host: string) => Promise<{address: string, family: number}[]>, modules?: {http: any, https: any}}} [deps] - Host name lookup and protocol modules (replaceable for tests).
  * @returns {Promise<{bytes: Buffer, mediaType: string, url: string}>} The body, its media type (`application/pdf` or `text/plain`) and the final URL.
  * @throws {FetchError} For anything that stops the fetch; never any other error.
@@ -35,6 +35,7 @@ export function fetchUrl(input: string, options: {
     maxRedirects: number;
     allowPrivate?: boolean;
     signal?: AbortSignal;
+    types?: Map<string, string>;
 }, deps?: {
     lookup?: (host: string) => Promise<{
         address: string;

@@ -2,28 +2,32 @@
  *
  *	@Project: @cldmv/llm-translator
  *	@Filename: /src/lib/gemini.mjs
- *	@Date: 2026-11-21T10:00:00-08:00 (1795284000)
+ *	@Date: 2026-11-22T10:00:00-08:00 (1795370400)
  *	@Author: Nate Corcoran <CLDMV>
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-21T10:00:00-08:00 (1795284000)
+ *	@Last modified time: 2026-11-22T10:00:00-08:00 (1795370400)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
  */
 
 /**
- * @fileoverview Google Gemini's native `generateContent` API as Chat Completions: the request body, the reply and the streamed chunks are translated to and from the Chat Completions shapes the converters already know. Written to be shared by every upstream that speaks this API (the Gemini API today, Vertex AI's Gemini models later).
+ * @fileoverview Google Gemini's native `generateContent` API as Chat Completions: the request body, the reply and the streamed chunks are translated to and from the Chat Completions shapes the converters already know. Written to be shared by every upstream that speaks this API (the Gemini API and Vertex AI).
  * @module @cldmv/llm-translator/lib/gemini
  */
 import { TranslatorError } from "./errors.mjs";
 import { callId, completionId } from "./ids.mjs";
 import { parseArguments } from "./arguments.mjs";
 import { reasoningOf } from "./thinking.mjs";
+import { gemini as schemaOf } from "./gemini-schema.mjs";
 
-/** `format` of the `reasoning_details` items that carry a Gemini `thoughtSignature` (`data`) and the part it belongs to (`for`: `text` or `call`, with the tool call `id` for a call). */
+/** `format` of the `reasoning_details` items that carry a Gemini `thoughtSignature` (`data`) and the part it belongs to (`for`: `text`, `thought` or `call`, with the tool call `id` for a call, and `rest` for text and thought: the characters of the text that follow the part). */
 export const FORMAT = "google-gemini-v1";
+
+/** The `thoughtSignature` Google documents for a function call part that has no real signature (history written by another model, or a client that dropped them). */
+export const SKIP_SIGNATURE = "skip_thought_signature_validator";
 
 /** Chat Completions fields the body conversion reads. */
 const HANDLED = new Set([
@@ -32,6 +36,7 @@ const HANDLED = new Set([
 	"stream",
 	"tools",
 	"tool_choice",
+	"parallel_tool_calls",
 	"max_tokens",
 	"max_completion_tokens",
 	"stop",
@@ -43,33 +48,75 @@ const HANDLED = new Set([
 	"presence_penalty",
 	"frequency_penalty",
 	"response_format",
-	"reasoning_effort"
+	"reasoning_effort",
+	"logprobs",
+	"top_logprobs",
+	"modalities",
+	"audio"
 ]);
 
 /** Chat Completions fields that mean nothing to Gemini and are not worth a mention when they are left out. */
 const SILENT = new Set(["stream_options", "user", "metadata", "store", "service_tier"]);
 
-/** Image types Gemini takes, as the MIME types a data URL names. */
+/** Image types Gemini reads inline, as the MIME types a data URL names. GIF is turned into PNG before the body is built. */
 const IMAGES = new Set(["image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"]);
 
-/** Text that stands in for an image Gemini cannot be given: it takes base64 PNG, JPEG, WebP, HEIC and HEIF images, and the translator does not fetch URLs. */
+/** Text that stands in for an image Gemini cannot be given. */
 const IMAGE_NOTE =
-	"[An image was omitted because Gemini accepts base64 PNG, JPEG, WebP, HEIC and HEIF images only and the translator does not fetch URLs.]";
+	"[An image was omitted because Gemini cannot read it: it has to be a base64 PNG, JPEG, GIF, WebP, HEIC or HEIF image, or an http(s) or gs URL of a type Gemini reads (a GIF at a URL needs the documentUrls setting).]";
 
 /** Text of a tool result that has none: Gemini wants a response object with something in it. */
 const NO_OUTPUT = "(no output)";
 
-/** The thinking budget (tokens) sent for each reasoning effort. Gemini 2.5 models take a budget; Gemini 3 models still accept one. */
+/** The thinking budget (tokens) sent for each reasoning effort on a model that takes a budget. */
 const BUDGETS = { minimal: 512, low: 1024, medium: 8192, high: 24576, xhigh: 24576, max: 24576 };
 
-/** The thinking levels of Gemini 3 and later models, lowest first, and the effort each effort name asks for. */
+/** The thinking levels of Gemini 3 and later models, lowest first, and the level each effort name asks for. */
 const LEVELS = ["MINIMAL", "LOW", "MEDIUM", "HIGH", "XHIGH"];
 const EFFORT_LEVEL = { minimal: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 4 };
 
-/** The `thoughtSignature` Google documents for a function call part that has no real signature (history written by another model, or a client that dropped them). */
-export const SKIP_SIGNATURE = "skip_thought_signature_validator";
+/** File types read from an http(s) or gs URL, by extension. GIF is not here: Gemini does not read it. */
+const TYPES = {
+	png: "image/png",
+	jpg: "image/jpeg",
+	jpeg: "image/jpeg",
+	webp: "image/webp",
+	heic: "image/heic",
+	heif: "image/heif",
+	bmp: "image/bmp",
+	pdf: "application/pdf",
+	txt: "text/plain",
+	html: "text/html",
+	csv: "text/csv",
+	json: "application/json",
+	mp3: "audio/mp3",
+	wav: "audio/wav",
+	aac: "audio/aac",
+	flac: "audio/flac",
+	ogg: "audio/ogg",
+	mp4: "video/mp4",
+	webm: "video/webm",
+	mov: "video/quicktime"
+};
 
-/** Chat Completions `finish_reason` for each Gemini `finishReason`. A reason that is not here (and is not a normal end) is `error`. */
+/** The MIME type of each audio format an OpenAI `input_audio` part names. */
+const AUDIO = {
+	wav: "audio/wav",
+	mp3: "audio/mp3",
+	aiff: "audio/aiff",
+	aac: "audio/aac",
+	ogg: "audio/ogg",
+	flac: "audio/flac",
+	m4a: "audio/aac"
+};
+
+/** Gemini's name for each output modality OpenAI names. */
+const MODALITIES = { text: "TEXT", audio: "AUDIO", image: "IMAGE" };
+
+/** Audio formats a reply can be returned in: Gemini answers with raw 16-bit PCM, which is wrapped in a WAV header or returned as it is. */
+const AUDIO_FORMATS = new Set(["wav", "pcm16", "pcm"]);
+
+/** Chat Completions `finish_reason` for each Gemini `finishReason`. A reason that is not here is not an answer to show as a failure: see `finishOf`. */
 const FINISH = {
 	STOP: "stop",
 	FINISH_REASON_UNSPECIFIED: "stop",
@@ -84,6 +131,9 @@ const FINISH = {
 	IMAGE_PROHIBITED_CONTENT: "content_filter",
 	IMAGE_RECITATION: "content_filter"
 };
+
+/** Most candidates one request asks for (Gemini's own limit); more are answered by fan-out. */
+export const MAX_CANDIDATES = 8;
 
 /**
  * Record a field that has no Gemini equivalent, once.
@@ -131,13 +181,34 @@ export function countPath(path) {
  */
 export function countBody(request, model) {
 	const out = { model: modelPath(model), contents: request.contents };
-	for (const field of ["systemInstruction", "tools", "toolConfig"]) if (request[field] !== undefined) out[field] = request[field];
+	for (const field of ["systemInstruction", "tools", "toolConfig", "cachedContent"])
+		if (request[field] !== undefined) out[field] = request[field];
 	return { generateContentRequest: out };
 }
 
 /**
- * The Gemini parts of a Chat Completions message content: text parts (an empty one is left out), images and PDFs from base64 data URLs
- * (an `image_url` part may carry a PDF: that is how the Anthropic converter hands one over) and files from base64 data URLs.
+ * A reference to a file at a URL, as a `fileData` part: an http(s) URL (a public one, a signed one, a Files API URI, a YouTube video) or a
+ * Cloud Storage `gs://` URI. The type is the given one, else the one the extension names, else the fallback; a Files API URI and a YouTube URL
+ * need none. A GIF (Gemini does not read it) and any other kind of URL are not references.
+ * @param {string} url - The URL.
+ * @param {string | undefined} mime - The MIME type the caller knows.
+ * @param {string | undefined} fallback - The type to assume when there is none.
+ * @returns {any | null} The part, or null when Gemini cannot be given the URL.
+ */
+function reference(url, mime, fallback) {
+	const match = /^(?:https?|gs):\/\/[^?#]*/i.exec(url);
+	if (match === null) return null;
+	const extension = /\.([a-z0-9]+)$/i.exec(match[0])?.[1]?.toLowerCase();
+	if (extension === "gif" || mime === "image/gif") return null;
+	const known = /^https:\/\/(?:generativelanguage\.googleapis\.com\/v1beta\/files\/|(?:www\.)?youtube\.com\/|youtu\.be\/)/i.test(url);
+	const type = mime ?? (extension === undefined ? undefined : TYPES[extension]) ?? (known ? undefined : fallback);
+	return { fileData: { fileUri: url, ...(type === undefined ? {} : { mimeType: type }) } };
+}
+
+/**
+ * The Gemini parts of a Chat Completions message content: text parts (an empty one is left out), images and PDFs from base64 data URLs and
+ * references to files at URLs (an `image_url` part may carry a PDF or another file: that is how the Anthropic converter hands one over),
+ * files from base64 data URLs or by reference, and audio.
  * @param {any} content - String, or an array of content parts.
  * @param {string[]} dropped - Collects what was left out.
  * @returns {any[]} Parts.
@@ -149,17 +220,27 @@ function partsOf(content, dropped) {
 		if (part?.type === "text") {
 			if (typeof part.text === "string" && part.text !== "") out.push({ text: part.text });
 		} else if (part?.type === "image_url") {
-			const match = /^data:([^;,]+);base64,(.*)$/s.exec(String(part.image_url?.url ?? part.image_url ?? ""));
-			if (match && (IMAGES.has(match[1]) || match[1] === "application/pdf"))
-				out.push({ inlineData: { mimeType: match[1], data: match[2] } });
-			else {
+			const url = String(part.image_url?.url ?? part.image_url ?? "");
+			const match = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+			const sent = match
+				? IMAGES.has(match[1]) || match[1] === "application/pdf"
+					? { inlineData: { mimeType: match[1], data: match[2] } }
+					: null
+				: reference(url, part.image_url?.mime_type, "image/jpeg");
+			if (sent === null) {
 				out.push({ text: IMAGE_NOTE });
 				drop(dropped, "image_url");
-			}
+			} else out.push(sent);
 		} else if (part?.type === "file") {
 			const match = /^data:([^;,]+);base64,(.*)$/s.exec(String(part.file?.file_data ?? ""));
-			if (match) out.push({ inlineData: { mimeType: match[1], data: match[2] } });
-			else drop(dropped, "content.file");
+			const sent = match
+				? { inlineData: { mimeType: match[1], data: match[2] } }
+				: reference(String(part.file?.file_id ?? ""), undefined, undefined);
+			if (sent === null) drop(dropped, "content.file");
+			else out.push(sent);
+		} else if (part?.type === "input_audio" && typeof part.input_audio?.data === "string" && part.input_audio.data !== "") {
+			const format = String(part.input_audio.format ?? "wav").toLowerCase();
+			out.push({ inlineData: { mimeType: AUDIO[format] ?? `audio/${format}`, data: part.input_audio.data } });
 		} else drop(dropped, `content.${part?.type ?? "part"}`);
 	}
 	return out;
@@ -168,15 +249,40 @@ function partsOf(content, dropped) {
 /**
  * The thought signatures an assistant message carries: the `reasoning_details` items in this protocol's format (anything else is ignored).
  * @param {any} details - `reasoning_details` of the message.
- * @returns {{ text: string | undefined, calls: Map<string, string> }} The signature of the text and the signature of each tool call by its id.
+ * @returns {{ text: {data: string, rest: number}[], thought: {data: string, rest: number}[], legacy: string | undefined, calls: Map<string, string> }} The signatures of the text and of the thought (each with how much text follows the part), a signature of the text that says no position (the last text part gets it), and the signature of each tool call by its id.
  */
 function signaturesOf(details) {
-	const out = { text: undefined, calls: new Map() };
+	const out = { text: [], thought: [], legacy: undefined, calls: new Map() };
 	for (const item of Array.isArray(details) ? details : []) {
 		if (item?.format !== FORMAT || typeof item.data !== "string" || item.data === "") continue;
+		const placed = Number.isInteger(item.rest) && item.rest >= 0;
 		if (item.for === "call" && typeof item.id === "string") out.calls.set(item.id, item.data);
-		else if (item.for === "text") out.text = item.data;
+		else if (item.for === "thought" && placed) out.thought.push({ data: item.data, rest: item.rest });
+		else if (item.for === "text") {
+			if (placed) out.text.push({ data: item.data, rest: item.rest });
+			else out.legacy = item.data;
+		}
 	}
+	return out;
+}
+
+/**
+ * Cut a text where its signed parts ended: the end of a part is the length of the text less the characters that followed it. The part after the
+ * last signed one has no signature.
+ * @param {string} text - The whole text.
+ * @param {{data: string, rest: number}[]} marks - The signatures with their `rest`.
+ * @returns {{text: string, signature?: string}[]} The parts, in order; a signed part may be empty.
+ */
+function cut(text, marks) {
+	const ordered = marks.map((mark) => ({ ...mark, end: Math.max(0, text.length - mark.rest) })).sort((left, right) => left.end - right.end);
+	const out = [];
+	let at = 0;
+	for (const mark of ordered) {
+		const end = Math.max(at, mark.end);
+		out.push({ text: text.slice(at, end), signature: mark.data });
+		at = end;
+	}
+	if (at < text.length) out.push({ text: text.slice(at) });
 	return out;
 }
 
@@ -189,6 +295,53 @@ function textOfResult(result) {
 	const failed = result.response.error !== undefined;
 	const body = failed ? result.response.error : result.response.output;
 	return failed ? `[Tool ${result.name} failed: ${body}]` : `[Result of tool ${result.name}: ${body}]`;
+}
+
+/**
+ * The parts of an assistant message: the thought parts that carry a signature, the text (cut where its signed parts ended), and the function
+ * calls, each with its signature. The first call of a turn that has no signature gets Google's placeholder (see `conversationOf`).
+ * @param {any} message - Chat Completions assistant message.
+ * @param {string[]} dropped - Collects what was left out.
+ * @param {boolean} plain - Write tool calls as text.
+ * @param {Map<string, string>} names - Tool names by call id, filled here.
+ * @returns {any[]} Parts.
+ */
+function assistantParts(message, dropped, plain, names) {
+	const signatures = signaturesOf(message.reasoning_details);
+	const found = partsOf(message.content, dropped);
+	const parts = [];
+	const thought = reasoningOf(message);
+	if (thought !== "") {
+		const signed = cut(thought, signatures.thought).filter((entry) => entry.signature !== undefined);
+		for (const entry of signed) parts.push({ text: entry.text, thought: true, thoughtSignature: entry.signature });
+		if (signed.length === 0 && signatures.text.length === 0 && signatures.legacy === undefined && signatures.calls.size === 0)
+			drop(dropped, "reasoning");
+	}
+	const texts = found.filter((part) => part.text !== undefined);
+	const others = found.filter((part) => part.text === undefined);
+	if (signatures.text.length > 0 && texts.length > 0) {
+		for (const entry of cut(texts.map((part) => part.text).join(""), signatures.text)) {
+			parts.push({ text: entry.text, ...(entry.signature === undefined ? {} : { thoughtSignature: entry.signature }) });
+		}
+	} else {
+		parts.push(...texts);
+		const last = [...parts].reverse().find((part) => part.thought === undefined && part.text !== undefined);
+		if (signatures.legacy !== undefined && last) last.thoughtSignature = signatures.legacy;
+	}
+	parts.push(...others);
+	for (const call of message.tool_calls ?? []) {
+		const args = parseArguments(call.function?.arguments);
+		names.set(call.id, call.function?.name);
+		if (plain) parts.push({ text: `[Called tool ${call.function?.name} with input ${JSON.stringify(args)}]` });
+		else {
+			const signature = signatures.calls.get(call.id);
+			parts.push({
+				functionCall: { id: call.id, name: call.function?.name, args },
+				...(signature === undefined ? {} : { thoughtSignature: signature })
+			});
+		}
+	}
+	return parts;
 }
 
 /**
@@ -225,29 +378,11 @@ function conversationOf(list, dropped, marker, plain) {
 				name: names.get(message.tool_call_id) ?? message.name ?? "tool",
 				response: failed ? { error: output } : { output }
 			};
-			parts = [plain ? { text: textOfResult(result) } : { functionResponse: result }, ...found.filter((part) => part.inlineData)];
+			parts = [plain ? { text: textOfResult(result) } : { functionResponse: result }, ...found.filter((part) => part.text === undefined)];
 		} else if (message?.role === "user") parts = partsOf(message.content, dropped);
 		else if (message?.role === "assistant") {
 			role = "model";
-			parts = partsOf(message.content, dropped);
-			const signatures = signaturesOf(message.reasoning_details);
-			if (signatures.text !== undefined) {
-				const last = [...parts].reverse().find((part) => part.text !== undefined);
-				if (last) last.thoughtSignature = signatures.text;
-			}
-			if (signatures.text === undefined && signatures.calls.size === 0 && reasoningOf(message) !== "") drop(dropped, "reasoning");
-			for (const call of message.tool_calls ?? []) {
-				const args = parseArguments(call.function?.arguments);
-				names.set(call.id, call.function?.name);
-				if (plain) parts.push({ text: `[Called tool ${call.function?.name} with input ${JSON.stringify(args)}]` });
-				else {
-					const signature = signatures.calls.get(call.id);
-					parts.push({
-						functionCall: { id: call.id, name: call.function?.name, args },
-						...(signature === undefined ? {} : { thoughtSignature: signature })
-					});
-				}
-			}
+			parts = assistantParts(message, dropped, plain, names);
 		} else {
 			drop(dropped, `messages.${message?.role}`);
 			continue;
@@ -265,13 +400,27 @@ function conversationOf(list, dropped, marker, plain) {
 }
 
 /**
+ * The 2.5 model family of a model id, for the range of its thinking budget.
+ * @param {unknown} model - Model id as sent upstream, with or without the `models/` prefix.
+ * @returns {{min: number, max: number} | null} The smallest and largest budget (a request for less than `min` is raised to it: Pro cannot switch thinking off, Flash-Lite thinks in at least 512 tokens), or null for another model.
+ */
+function rangeOf(model) {
+	const match = /^(?:models\/)?gemini-2\.5-(pro|flash-lite|flash)(?:$|[-@])/.exec(String(model));
+	if (match === null) return null;
+	return match[1] === "pro" ? { min: 128, max: 32768 } : match[1] === "flash-lite" ? { min: 512, max: 24576 } : { min: 0, max: 24576 };
+}
+
+/**
  * The thinking levels a model takes. Gemini 3 and later models take levels (`thinkingLevel`) and Gemini 2.5 and earlier take a token budget.
  * @param {unknown} model - Model id as sent upstream, with or without the `models/` prefix.
+ * @param {"auto" | "level" | "budget"} control - The `gemini.thinking` setting: `auto` decides from the model id, `level` and `budget` say what a model that is not recognized takes.
  * @returns {number[] | null} Indexes into `LEVELS`, or null for a model that takes a budget. Gemini 4 has no `MINIMAL` and adds `XHIGH`, `gemini-3-pro` has `LOW` and `HIGH` only, other Pro models no `MINIMAL`, and the Gemini 3 Flash models the four lower levels.
  */
-function levelsOf(model) {
+function levelsOf(model, control) {
 	const match = /^(?:models\/)?gemini-(\d+)(?:\.\d+)?-([a-z]+)/.exec(String(model));
-	if (match === null || Number(match[1]) < 3) return null;
+	if (control === "budget") return null;
+	if (match === null) return control === "level" ? [0, 1, 2, 3] : null;
+	if (Number(match[1]) < 3) return control === "level" ? [0, 1, 2, 3] : null;
 	if (Number(match[1]) >= 4) return [1, 2, 3, 4];
 	if (match[2] === "pro") return /^(?:models\/)?gemini-3-pro/.test(String(model)) ? [1, 3] : [1, 2, 3];
 	return [0, 1, 2, 3];
@@ -279,24 +428,31 @@ function levelsOf(model) {
 
 /**
  * The `thinkingConfig` for a request. A model that takes a budget gets the explicit one, or one per effort (`BUDGETS`; `none` is a zero
- * budget). A model that takes levels gets the level of the effort (a budget counts as the effort it is closest to), moved to the nearest level the
- * model has; `none` is the lowest level, because these models cannot switch thinking off, and sending a budget to them is refused or
- * deprecated. Thought summaries are asked for whenever thinking is on.
+ * budget), kept inside the range of its family; a dynamic budget (`-1`) is asked for with `dynamic`. A model that takes levels gets the level of
+ * the effort (a budget counts as the effort it is closest to), moved to the nearest level the model has; `none` is the lowest level, because
+ * these models cannot switch thinking off, and sending a budget to them is refused or deprecated, and dynamic is the model's own default. Thought
+ * summaries are asked for whenever thinking is on.
  * @param {any} effort - Chat Completions `reasoning_effort`.
- * @param {number | undefined} budget - Token budget of enabled thinking.
+ * @param {{budget?: number, dynamic?: boolean, model?: unknown, control?: "auto" | "level" | "budget"}} spec - The explicit budget, whether the client asked for dynamic thinking, the model sent upstream and the `gemini.thinking` setting.
  * @param {string[]} dropped - Collects what was left out.
- * @param {unknown} model - Model id as sent upstream.
  * @returns {any} `thinkingConfig`, or undefined when the request does not ask for any.
  */
-function thinkingOf(effort, budget, dropped, model) {
-	const levels = levelsOf(model);
+function thinkingOf(effort, { budget, dynamic: asked, model, control = "auto" }, dropped) {
+	let dynamic = asked;
+	const levels = levelsOf(model, control);
+	const range = rangeOf(model);
+	// `reasoning_effort: "dynamic"` (not an OpenAI value) asks for the model to decide, as Anthropic's `adaptive` does.
+	if (effort === "dynamic") dynamic = true;
+	const sized = (tokens) => (range === null ? tokens : tokens === 0 ? range.min : Math.min(range.max, Math.max(range.min, tokens)));
 	if (levels === null) {
-		if (budget !== undefined) return { includeThoughts: true, thinkingBudget: budget };
+		if (dynamic === true) return { includeThoughts: true, thinkingBudget: -1 };
+		if (budget !== undefined) return { includeThoughts: true, thinkingBudget: sized(budget) };
 		if (effort === undefined || effort === null) return undefined;
-		if (effort === "none") return { thinkingBudget: 0 };
-		if (Object.hasOwn(BUDGETS, effort)) return { includeThoughts: true, thinkingBudget: BUDGETS[effort] };
+		if (effort === "none") return range !== null && range.min > 0 ? { thinkingBudget: range.min } : { thinkingBudget: 0 };
+		if (Object.hasOwn(BUDGETS, effort)) return { includeThoughts: true, thinkingBudget: sized(BUDGETS[effort]) };
 	} else {
 		let want;
+		if (dynamic === true) return { includeThoughts: true };
 		if (budget !== undefined) want = budget < 1024 ? 0 : budget < 4096 ? 1 : budget < 16384 ? 2 : 3;
 		else if (effort === undefined || effort === null) return undefined;
 		else if (effort === "none") want = -1;
@@ -312,20 +468,84 @@ function thinkingOf(effort, budget, dropped, model) {
 }
 
 /**
- * Convert a Chat Completions request body to a `generateContent` body (`contents`, `systemInstruction`, `generationConfig`, `tools` and
- * `toolConfig`; the model and the choice of streaming belong to the URL, so neither is in the body). `max_tokens`, `temperature`, `top_p`,
- * `top_k`, `stop`, `seed`, the penalties and `n` become `generationConfig` fields, `response_format` becomes `responseMimeType` with
- * `responseJsonSchema`, tools become function declarations with their JSON Schema as `parametersJsonSchema`, `tool_choice` becomes the calling
- * mode (`auto`, `required` and one named function map to `AUTO`, `ANY` and `ANY` with the name allowed; `none` to `NONE`), images and files
- * are sent as bytes, and `reasoning_effort` or a thinking budget becomes `thinkingConfig`. What Gemini has no field for (`logprobs`,
- * `parallel_tool_calls`, images given by URL, reasoning text in history, ...) is left out and named in `dropped`. A request without tools has
- * its past tool calls and results written as text.
+ * The tool names an OpenAI `allowed_tools` choice lists.
+ * @param {any} choice - `tool_choice`.
+ * @returns {{mode: string, names: string[]} | null} The mode and the names, or null when it is not an `allowed_tools` choice.
+ */
+function allowedOf(choice) {
+	if (choice?.type !== "allowed_tools") return null;
+	const entries = Array.isArray(choice.allowed_tools?.tools) ? choice.allowed_tools.tools : [];
+	return {
+		mode: choice.allowed_tools?.mode === "required" ? "required" : "auto",
+		names: entries.map((entry) => entry?.function?.name).filter((name) => typeof name === "string")
+	};
+}
+
+/**
+ * The tools and the calling mode of a request: the function declarations (each schema as Gemini takes it), the built-in tools the request or the
+ * upstream names, and `tool_choice` as `functionCallingConfig`: `required` and a named function are `ANY` (the latter with `allowedFunctionNames`),
+ * `none` is `NONE`, and an OpenAI `allowed_tools` choice is `ANY` with the names when its mode is `required`, and otherwise `AUTO` over only the
+ * tools it lists.
+ * @param {any} body - Chat Completions body.
+ * @param {any[]} builtin - Built-in tools to add (`{ googleSearch: {} }`).
+ * @param {string[]} dropped - Collects what was left out.
+ * @returns {{tools?: any[], toolConfig?: any}} The `tools` and `toolConfig` fields.
+ */
+function toolsOf(body, builtin, dropped) {
+	const out = {};
+	const offered = Array.isArray(body.tools) && body.tools.length > 0;
+	const allowed = allowedOf(body.tool_choice);
+	const listed = offered
+		? allowed !== null && allowed.mode === "auto"
+			? body.tools.filter((tool) => allowed.names.includes(tool.function?.name))
+			: body.tools
+		: [];
+	const tools = [];
+	if (listed.length > 0) {
+		tools.push({
+			functionDeclarations: listed.map((tool) => {
+				const schema = tool.function?.parameters;
+				const empty = schema?.type === "object" && Object.keys(schema.properties ?? {}).length === 0;
+				return {
+					name: tool.function?.name,
+					...(tool.function?.description === undefined ? {} : { description: tool.function.description }),
+					...(schema === undefined || schema === null || empty ? {} : { parametersJsonSchema: schemaOf(schema) })
+				};
+			})
+		});
+	}
+	tools.push(...builtin);
+	if (tools.length > 0) out.tools = tools;
+	if (offered) {
+		const choice = body.tool_choice;
+		if (choice === "required") out.toolConfig = { functionCallingConfig: { mode: "ANY" } };
+		else if (choice === "none") out.toolConfig = { functionCallingConfig: { mode: "NONE" } };
+		else if (choice?.type === "function")
+			out.toolConfig = { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [choice.function?.name] } };
+		else if (allowed !== null) {
+			if (allowed.mode === "required") out.toolConfig = { functionCallingConfig: { mode: "ANY", allowedFunctionNames: allowed.names } };
+		} else if (choice !== undefined && choice !== "auto") drop(dropped, "tool_choice");
+	}
+	return out;
+}
+
+/**
+ * Convert a Chat Completions request body to a `generateContent` body (`contents`, `systemInstruction`, `generationConfig`, `tools`, `toolConfig`,
+ * `safetySettings` and `cachedContent`; the model and the choice of streaming belong to the URL, so neither is in the body). `max_tokens`,
+ * `temperature`, `top_p`, `top_k`, `stop`, `seed`, the penalties and `n` become `generationConfig` fields, `response_format` becomes
+ * `responseMimeType` with `responseJsonSchema`, tools become function declarations with their JSON Schema as `parametersJsonSchema`,
+ * `tool_choice` becomes the calling mode, images, files and audio are sent as bytes or as references to files at URLs, `reasoning_effort`
+ * or a thinking budget becomes `thinkingConfig`, `logprobs` and `top_logprobs` become `responseLogprobs` and `logprobs`, and `modalities` and `audio` become
+ * `responseModalities` and `speechConfig`. What Gemini has no field for (`logit_bias`, reasoning text in history that has no signature, ...) is left out and named
+ * in `dropped`. A request without tools has its past tool calls and results written as text.
  * @param {any} body - Chat Completions request body.
- * @param {{ dropped?: string[], sampling?: Record<string, any>, thinkingBudget?: number, marker?: string, model?: string }} [context] - `model` is the model the request goes to (default: the body's `model`), which decides between a thinking budget and a thinking level; `dropped` collects the names of what was left out; `sampling` are extension fields for `generationConfig`; `thinkingBudget` is the token budget of enabled thinking; `marker` is the text that marks a failed tool result.
+ * @param {{ dropped?: string[], sampling?: Record<string, any>, thinkingBudget?: number, thinkingDynamic?: boolean, marker?: string, model?: string, gemini?: any }} [context] - `model` is the model the request goes to (default: the body's `model`), which decides between a thinking budget and a level; `dropped` collects the names of what was left out; `sampling` are extension fields for `generationConfig`; `thinkingBudget` is the token budget of enabled thinking and `thinkingDynamic` says the client asked for the model to decide; `marker` is the text that marks a failed tool result; `gemini` is the `gemini` setting (safety settings, built-in tools, a cached content, output modalities and the thinking control) with `builtin`, the built-in tools the request itself asked for.
  * @returns {any} `generateContent` request body.
+ * @throws {TranslatorError} `invalid_request` for an audio output format Gemini cannot produce.
  */
 export function chatBody(body, context = {}) {
 	const dropped = context.dropped ?? [];
+	const setting = context.gemini ?? {};
 	const offered = Array.isArray(body.tools) && body.tools.length > 0;
 	const { contents, system } = conversationOf(Array.isArray(body.messages) ? body.messages : [], dropped, context.marker, !offered);
 	const out = { contents };
@@ -349,32 +569,54 @@ export function chatBody(body, context = {}) {
 	if (format?.type === "json_object") config.responseMimeType = "application/json";
 	else if (format?.type === "json_schema") {
 		config.responseMimeType = "application/json";
-		if (format.json_schema?.schema !== undefined) config.responseJsonSchema = format.json_schema.schema;
+		if (format.json_schema?.schema !== undefined) config.responseJsonSchema = schemaOf(format.json_schema.schema);
 	} else if (format !== undefined && format !== null && format.type !== "text") drop(dropped, "response_format");
-	const thinking = thinkingOf(body.reasoning_effort, context.thinkingBudget, dropped, context.model ?? body.model);
+	const model = context.model ?? body.model;
+	const thinking = thinkingOf(
+		body.reasoning_effort,
+		{ budget: context.thinkingBudget, dynamic: context.thinkingDynamic, model, control: setting.thinking },
+		dropped
+	);
 	if (thinking !== undefined) config.thinkingConfig = thinking;
+	if (body.logprobs === true) {
+		config.responseLogprobs = true;
+		if (Number.isInteger(body.top_logprobs)) config.logprobs = Math.min(20, Math.max(0, body.top_logprobs));
+	} else if (body.logprobs !== undefined && body.logprobs !== null && body.logprobs !== false) drop(dropped, "logprobs");
+	if (Array.isArray(setting.responseModalities)) config.responseModalities = setting.responseModalities;
+	else if (/-image(?:$|[-@])/.test(String(model))) config.responseModalities = ["TEXT", "IMAGE"];
+	if (Array.isArray(body.modalities)) {
+		const asked = body.modalities.map((name) => MODALITIES[name]).filter((name) => name !== undefined);
+		if (asked.length !== body.modalities.length) drop(dropped, "modalities");
+		if (asked.length > 0) config.responseModalities = asked;
+	}
+	if (setting.imageConfig !== undefined) config.imageConfig = setting.imageConfig;
+	if (setting.speechConfig !== undefined) config.speechConfig = setting.speechConfig;
+	if (setting.mediaResolution !== undefined) config.mediaResolution = setting.mediaResolution;
+	if (body.audio !== undefined && body.audio !== null) {
+		const wanted = String(body.audio.format ?? "wav").toLowerCase();
+		if (!AUDIO_FORMATS.has(wanted)) {
+			throw new TranslatorError(`audio.format: Gemini returns raw PCM audio, which can be given as "wav" or "pcm16", not "${wanted}"`, {
+				code: "invalid_request",
+				param: "audio.format"
+			});
+		}
+		if (typeof body.audio.voice === "string" && body.audio.voice !== "") {
+			config.speechConfig = { voiceConfig: { prebuiltVoiceConfig: { voiceName: body.audio.voice } } };
+		}
+		if (!Array.isArray(body.modalities) && config.responseModalities === undefined) config.responseModalities = ["AUDIO"];
+	}
 	if (Object.keys(config).length > 0) out.generationConfig = config;
-	if (offered) {
-		out.tools = [
-			{
-				functionDeclarations: body.tools.map((tool) => {
-					const schema = tool.function?.parameters;
-					const empty = schema?.type === "object" && Object.keys(schema.properties ?? {}).length === 0;
-					const { $schema: ___omitted, ...clean } = schema ?? {};
-					return {
-						name: tool.function?.name,
-						...(tool.function?.description === undefined ? {} : { description: tool.function.description }),
-						...(schema === undefined || schema === null || empty ? {} : { parametersJsonSchema: clean })
-					};
-				})
+	Object.assign(out, toolsOf(body, [...(setting.tools ?? []), ...(setting.builtin ?? [])], dropped));
+	if (Array.isArray(setting.safetySettings) && setting.safetySettings.length > 0) out.safetySettings = setting.safetySettings;
+	if (typeof setting.cachedContent === "string") {
+		// A request that names a cached content must not carry what the cache holds.
+		out.cachedContent = setting.cachedContent;
+		for (const field of ["systemInstruction", "tools", "toolConfig"]) {
+			if (out[field] !== undefined) {
+				delete out[field];
+				drop(dropped, field);
 			}
-		];
-		const choice = body.tool_choice;
-		if (choice === "required") out.toolConfig = { functionCallingConfig: { mode: "ANY" } };
-		else if (choice === "none") out.toolConfig = { functionCallingConfig: { mode: "NONE" } };
-		else if (choice?.type === "function")
-			out.toolConfig = { functionCallingConfig: { mode: "ANY", allowedFunctionNames: [choice.function?.name] } };
-		else if (choice !== undefined && choice !== "auto") drop(dropped, "tool_choice");
+		}
 	}
 	for (const key of Object.keys(body)) {
 		if (HANDLED.has(key) || SILENT.has(key)) continue;
@@ -386,14 +628,28 @@ export function chatBody(body, context = {}) {
 /**
  * Chat Completions `finish_reason` for a Gemini `finishReason`: `STOP` is `stop`, `MAX_TOKENS` is `length`, the safety, recitation, blocklist,
  * prohibited content, SPII and image safety reasons are `content_filter`, and every other reason (a malformed function call, a missing thought
- * signature, `OTHER`, one this table does not know) is `error`, a failure and not an answer. A reply that called tools is `tool_calls`.
+ * signature, `OTHER`, one this table does not know) is `stop`: the reply ends there, with the text and the calls it has and a note saying why
+ * (see `noteOf`). A reply that called tools is `tool_calls`.
  * @param {string | undefined} reason - Gemini `finishReason`.
  * @param {boolean} calls - Whether the reply carried tool calls.
  * @returns {string} `finish_reason`.
  */
 export function finishOf(reason, calls) {
-	const finish = reason === undefined ? "stop" : Object.hasOwn(FINISH, reason) ? FINISH[reason] : "error";
+	const finish = reason !== undefined && Object.hasOwn(FINISH, reason) ? FINISH[reason] : "stop";
 	return calls && finish === "stop" ? "tool_calls" : finish;
+}
+
+/**
+ * The note that goes at the end of a reply whose `finishReason` is neither a normal end nor a cut-off nor a filter: Gemini's own explanation
+ * (`finishMessage`), or the reason alone.
+ * @param {any} candidate - Gemini candidate.
+ * @returns {string} The note, or an empty string for a reply that ended normally.
+ */
+function noteOf(candidate) {
+	const reason = candidate?.finishReason;
+	if (reason === undefined || Object.hasOwn(FINISH, reason)) return "";
+	const message = typeof candidate.finishMessage === "string" && candidate.finishMessage !== "" ? `: ${candidate.finishMessage}` : "";
+	return `[Gemini ended the reply early (${reason})${message}]`;
 }
 
 /**
@@ -450,16 +706,155 @@ function refusalOf(reason, message, prompt) {
  * The `reasoning_details` item for a thought signature.
  * @param {number} index - Position of the item in the reply.
  * @param {string} signature - `thoughtSignature`.
- * @param {string | undefined} id - Id of the tool call the signature belongs to; none for the text.
+ * @param {{for: "text" | "thought" | "call", id?: string, rest?: number}} place - The part it belongs to: a call (with its id), or the text or the thought (with the characters that follow the part).
  * @returns {any} The item.
  */
-function detailOf(index, signature, id) {
+function detailOf(index, signature, place) {
+	return { type: "reasoning.encrypted", format: FORMAT, index, data: signature, ...place };
+}
+
+/**
+ * Chat Completions `logprobs` for a candidate's `logprobsResult`.
+ * @param {any} result - Gemini `logprobsResult`.
+ * @returns {{content: any[], refusal: null} | undefined} The `logprobs` object, or undefined when the candidate has none.
+ */
+function logprobsOf(result) {
+	if (!Array.isArray(result?.chosenCandidates) || result.chosenCandidates.length === 0) return undefined;
+	const entry = (candidate) => ({
+		token: String(candidate?.token ?? ""),
+		logprob: Number.isFinite(candidate?.logProbability) ? candidate.logProbability : 0,
+		bytes: [...Buffer.from(String(candidate?.token ?? ""))]
+	});
 	return {
-		type: "reasoning.encrypted",
-		format: FORMAT,
-		index,
-		data: signature,
-		...(id === undefined ? { for: "text" } : { for: "call", id })
+		content: result.chosenCandidates.map((candidate, at) => ({
+			...entry(candidate),
+			top_logprobs: (Array.isArray(result.topCandidates?.[at]?.candidates) ? result.topCandidates[at].candidates : []).map(entry)
+		})),
+		refusal: null
+	};
+}
+
+/**
+ * Raw 16-bit PCM audio as a WAV file.
+ * @param {Buffer} pcm - Samples.
+ * @param {number} rate - Sample rate.
+ * @returns {Buffer} The WAV file (mono, 16 bits).
+ */
+function wav(pcm, rate) {
+	const head = Buffer.alloc(44);
+	head.write("RIFF", 0);
+	head.writeUInt32LE(36 + pcm.length, 4);
+	head.write("WAVEfmt ", 8);
+	head.writeUInt32LE(16, 16);
+	head.writeUInt16LE(1, 20);
+	head.writeUInt16LE(1, 22);
+	head.writeUInt32LE(rate, 24);
+	head.writeUInt32LE(rate * 2, 28);
+	head.writeUInt16LE(2, 32);
+	head.writeUInt16LE(16, 34);
+	head.write("data", 36);
+	head.writeUInt32LE(pcm.length, 40);
+	return Buffer.concat([head, pcm]);
+}
+
+/**
+ * The text a code execution part is shown as: the code in a fenced block, or its output in one.
+ * @param {any} part - `executableCode` or `codeExecutionResult` part.
+ * @returns {string} Text.
+ */
+function codeText(part) {
+	if (part.executableCode) {
+		const language =
+			typeof part.executableCode.language === "string" && part.executableCode.language !== "LANGUAGE_UNSPECIFIED"
+				? part.executableCode.language.toLowerCase()
+				: "";
+		return `\n\`\`\`${language}\n${part.executableCode.code ?? ""}\n\`\`\`\n`;
+	}
+	const failed = typeof part.codeExecutionResult.outcome === "string" && part.codeExecutionResult.outcome !== "OUTCOME_OK";
+	return `\n\`\`\`${failed ? "text (failed)" : "text"}\n${part.codeExecutionResult.output ?? ""}\n\`\`\`\n`;
+}
+
+/**
+ * Walks the parts of one candidate and gathers what a Chat Completions message holds. Shared by the JSON and the streamed conversion: a streamed
+ * reply feeds it part by part and asks for the signatures at the end, when the length of the text is known.
+ * @param {{ field?: string, parallel?: boolean, images?: "images" | "text" }} [options] - `parallel` false keeps only the first function call; `images` says whether generated images go in `images` or as markdown in the text.
+ * @returns {{ add: (part: any) => any, finish: () => any }} `add` takes a part and returns what it contributed (`text`, `thought`, `call`, `image`, `audio`, `signature`); `finish` gives the signature items.
+ */
+function gatherer(options = {}) {
+	let text = 0;
+	let thought = 0;
+	let calls = 0;
+	const pending = [];
+	return {
+		add(part) {
+			const got = {};
+			let own = text;
+			let kind = "text";
+			if (part?.functionCall) {
+				if (options.parallel === false && calls > 0) return got;
+				const given = part.functionCall.id;
+				got.call = {
+					index: calls++,
+					id: typeof given === "string" && given !== "" ? given : callId(),
+					type: "function",
+					function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args ?? {}) }
+				};
+			} else if (part?.thought === true && typeof part.text === "string") {
+				got.thought = part.text;
+				thought += part.text.length;
+				own = thought;
+				kind = "thought";
+			} else if (typeof part?.text === "string") {
+				got.text = part.text;
+				text += part.text.length;
+				own = text;
+			} else if (part?.executableCode || part?.codeExecutionResult) {
+				got.text = codeText(part);
+				text += got.text.length;
+				own = text;
+			} else if (typeof part?.inlineData?.data === "string") {
+				const mime = String(part.inlineData.mimeType ?? "");
+				if (mime.startsWith("image/")) got.image = { mime, data: part.inlineData.data };
+				else if (mime.startsWith("audio/")) got.audio = { mime, data: part.inlineData.data };
+			}
+			if (typeof part?.thoughtSignature === "string" && part.thoughtSignature !== "") {
+				got.signature = true;
+				pending.push(
+					got.call === undefined ? { data: part.thoughtSignature, kind, end: own } : { data: part.thoughtSignature, id: got.call.id }
+				);
+			}
+			return got;
+		},
+		finish() {
+			return {
+				signatures: pending.map((entry, index) =>
+					detailOf(
+						index,
+						entry.data,
+						entry.id === undefined
+							? { for: entry.kind, rest: (entry.kind === "thought" ? thought : text) - entry.end }
+							: { for: "call", id: entry.id }
+					)
+				)
+			};
+		}
+	};
+}
+
+/**
+ * The audio of a reply as the `audio` object of a Chat Completions message.
+ * @param {{mime: string, data: string}[]} pieces - The audio parts, in order.
+ * @param {string} format - `wav` or `pcm16`.
+ * @returns {{id: string, data: string, expires_at: number, transcript: string}} The audio object.
+ */
+function audioOf(pieces, format) {
+	const pcm = Buffer.concat(pieces.map((piece) => Buffer.from(piece.data, "base64")));
+	const rate = Number(/rate=(\d+)/.exec(pieces[0].mime)?.[1] ?? 24000);
+	return {
+		id: `audio_${completionId().slice(9)}`,
+		data: (format === "wav" ? wav(pcm, rate) : pcm).toString("base64"),
+		expires_at: 0,
+		transcript: ""
 	};
 }
 
@@ -467,54 +862,61 @@ function detailOf(index, signature, id) {
  * One candidate as a Chat Completions choice.
  * @param {any} candidate - Gemini candidate.
  * @param {number} index - Choice index.
- * @param {string} field - Where the reasoning text goes.
+ * @param {{ field: string, parallel?: boolean, images?: "images" | "text", audio?: string }} options - Where the reasoning goes, whether parallel calls are kept, where generated images go and the audio format asked for.
  * @returns {any} Choice.
  */
-function choiceOf(candidate, index, field) {
+function choiceOf(candidate, index, options) {
+	const gather = gatherer(options);
 	let text = "";
 	let thought = "";
 	const calls = [];
-	const details = [];
+	const images = [];
+	const audio = [];
 	for (const part of Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []) {
-		let id;
-		if (part?.functionCall) {
-			id = typeof part.functionCall.id === "string" && part.functionCall.id !== "" ? part.functionCall.id : callId();
-			calls.push({
-				id,
-				type: "function",
-				function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args ?? {}) }
-			});
-		} else if (typeof part?.text === "string") {
-			if (part.thought === true) thought += part.text;
-			else text += part.text;
-		}
-		if (typeof part?.thoughtSignature === "string" && part.thoughtSignature !== "")
-			details.push(detailOf(details.length, part.thoughtSignature, id));
+		const got = gather.add(part);
+		if (got.text !== undefined) text += got.text;
+		if (got.thought !== undefined) thought += got.thought;
+		// A whole message numbers no tool call: the index is for a stream.
+		if (got.call !== undefined) calls.push({ id: got.call.id, type: got.call.type, function: got.call.function });
+		if (got.image !== undefined) images.push(got.image);
+		if (got.audio !== undefined) audio.push(got.audio);
+	}
+	const finish = finishOf(candidate?.finishReason, calls.length > 0);
+	const note = noteOf(candidate);
+	if (note !== "") text += `${text === "" ? "" : "\n\n"}${note}`;
+	if (options.images === "text") {
+		for (const image of images) text += `${text === "" ? "" : "\n\n"}![image](data:${image.mime};base64,${image.data})`;
 	}
 	const message = { role: "assistant", content: text };
-	if (thought !== "") message[field] = thought;
-	if (details.length > 0) message.reasoning_details = details;
+	if (thought !== "") message[options.field] = thought;
+	const { signatures } = gather.finish();
+	if (signatures.length > 0) message.reasoning_details = signatures;
 	if (calls.length > 0) message.tool_calls = calls;
-	const finish = finishOf(candidate?.finishReason, calls.length > 0);
+	if (images.length > 0 && options.images !== "text") {
+		message.images = images.map((image) => ({ type: "image_url", image_url: { url: `data:${image.mime};base64,${image.data}` } }));
+	}
+	if (audio.length > 0) message.audio = audioOf(audio, options.audio === "pcm16" || options.audio === "pcm" ? "pcm16" : "wav");
 	if (finish === "content_filter") message.refusal = refusalOf(candidate.finishReason, candidate.finishMessage, false);
-	return { index, message, finish_reason: finish };
+	const logprobs = logprobsOf(candidate?.logprobsResult);
+	return { index, message, ...(logprobs === undefined ? {} : { logprobs }), finish_reason: finish };
 }
 
 /**
  * Convert a (non-streaming) `generateContent` reply to a Chat Completions `chat.completion`: text parts are joined into the content, thought
  * parts go in the settings' reasoning field, `functionCall` parts become tool calls (with Gemini's call id when it sent one), thought signatures
- * become `reasoning_details` items (see `FORMAT`) that are sent back with the next request, `finishReason` becomes `finish_reason` and
+ * become `reasoning_details` items (see `FORMAT`) that are sent back with the next request, generated images are `images` (or markdown in the text),
+ * audio is `audio`, code and its output are fenced blocks in the text, `logprobsResult` is `logprobs`, `finishReason` becomes `finish_reason` and
  * `usageMetadata` becomes `usage`. A prompt Gemini blocked (`promptFeedback.blockReason`, no candidates) is an empty reply that was filtered.
  * @param {any} reply - Parsed `generateContent` reply.
- * @param {{ reasoningField?: string, model?: string }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion.
+ * @param {{ reasoningField?: string, model?: string, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `reasoningField` is where the reasoning goes (default `reasoning`); `model` is the model name on the completion; `parallel` false keeps only the first function call; `images` says where generated images go (default `images`); `audio` is the format asked for.
  * @returns {any} `chat.completion` object.
  * @throws {TranslatorError} `invalid_upstream_response` (502) when the reply has no candidate and no block reason.
  */
 export function completion(reply, options = {}) {
-	const field = options.reasoningField ?? "reasoning";
+	const spec = { field: options.reasoningField ?? "reasoning", parallel: options.parallel, images: options.images, audio: options.audio };
 	let choices;
 	if (Array.isArray(reply?.candidates) && reply.candidates.length > 0) {
-		choices = reply.candidates.map((candidate, at) => choiceOf(candidate, candidate.index ?? at, field));
+		choices = reply.candidates.map((candidate, at) => choiceOf(candidate, candidate.index ?? at, spec));
 	} else if (typeof reply?.promptFeedback?.blockReason === "string") {
 		const reason = reply.promptFeedback.blockReason;
 		choices = [
@@ -539,38 +941,45 @@ export function completion(reply, options = {}) {
 /**
  * Create the converter of a `streamGenerateContent` reply's chunks into Chat Completions chunks. Every chunk of the reply is a whole
  * `GenerateContentResponse`: its parts become deltas (a function call arrives whole, so it is one delta), and the chunk with a `finishReason`
- * ends the reply. One chunker is for one reply: it keeps the completion id (so every chunk carries the same one) and the numbering of tool calls.
- * Only the first candidate is streamed. An `error` object in the stream gives one `{ error }` chunk.
- * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk.
- * @returns {{ event: (data: any) => any[], finished: () => boolean, usage: () => any }} `event` gives the chunks one stream chunk produces, `finished` says whether the reply ended (a `finishReason`, a blocked prompt, or a failure) and `usage` is the latest `usageMetadata`.
+ * ends that candidate. One chunker is for one reply: it keeps the completion id (so every chunk carries the same one) and the numbering of tool
+ * calls of each candidate. The signatures of text and thought are given at the end of a candidate, when the length of its text is known. An
+ * `error` object in the stream gives one `{ error }` chunk.
+ * @param {{ model?: string, reasoningField?: string, includeUsage?: boolean, candidates?: number, parallel?: boolean, images?: "images" | "text", audio?: string }} [options] - `model` is the model name on the chunks; `reasoningField` is where the reasoning goes (default `reasoning`); `includeUsage` (default true) adds the final usage chunk; `candidates` is how many candidates are streamed (default 1; the others are ignored); `parallel` false keeps only the first function call of a candidate; `images` says where generated images go; `audio` is the format asked for.
+ * @returns {{ event: (data: any) => any[], finished: () => boolean, usage: () => any }} `event` gives the chunks one stream chunk produces, `finished` says whether every candidate ended (a `finishReason`, a blocked prompt, or a failure) and `usage` is the latest `usageMetadata`.
  */
 export function createChunker(options = {}) {
 	const id = completionId();
 	const created = Math.floor(Date.now() / 1000);
 	const field = options.reasoningField ?? "reasoning";
-	let started = false;
-	let finished = false;
+	const wanted = options.candidates ?? 1;
+	const states = new Map();
+	let failed = false;
+	let blocked = false;
 	let counted = false;
-	let calls = 0;
-	let details = 0;
 	let usage;
-	const make = (delta, finish = null) => ({
+	const state = (index) => {
+		if (!states.has(index)) states.set(index, { started: false, done: false, text: "", gather: gatherer(options), audio: [], calls: 0 });
+		return states.get(index);
+	};
+	const make = (index, delta, finish = null, extra = {}) => ({
 		id,
 		object: "chat.completion.chunk",
 		created,
 		model: options.model,
-		choices: [{ index: 0, delta, finish_reason: finish }]
+		choices: [{ index, delta, ...extra, finish_reason: finish }]
 	});
-	// The first chunk of every reply names the role.
-	const first = () => {
-		if (started) return [];
-		started = true;
-		return [make({ role: "assistant", content: "" })];
+	// The first chunk of every candidate names the role.
+	const first = (index) => {
+		const own = state(index);
+		if (own.started) return [];
+		own.started = true;
+		return [make(index, { role: "assistant", content: "" })];
 	};
+	const ended = () => failed || blocked || (states.size >= 1 && [...states.values()].filter((entry) => entry.done).length >= wanted);
 	return {
 		event(data) {
 			if (data?.error !== undefined && data?.error !== null) {
-				finished = true;
+				failed = true;
 				const status = Number.isInteger(data.error.code) ? data.error.code : 500;
 				return [
 					{
@@ -585,54 +994,72 @@ export function createChunker(options = {}) {
 			}
 			if (data?.usageMetadata !== undefined) usage = data.usageMetadata;
 			const out = [];
-			const candidate = Array.isArray(data?.candidates) ? data.candidates.find((entry) => (entry.index ?? 0) === 0) : undefined;
-			if (candidate === undefined) {
+			const candidates = Array.isArray(data?.candidates) ? data.candidates.filter((entry) => (entry.index ?? 0) < wanted) : [];
+			if (candidates.length === 0) {
 				const reason = data?.promptFeedback?.blockReason;
 				if (typeof reason === "string") {
-					finished = true;
+					blocked = true;
 					out.push(
-						...first(),
-						make({ refusal: refusalOf(reason, data.promptFeedback.blockReasonMessage, true) }),
-						make({}, "content_filter")
+						...first(0),
+						make(0, { refusal: refusalOf(reason, data.promptFeedback.blockReasonMessage, true) }),
+						make(0, {}, "content_filter")
 					);
 				}
-			} else {
+			}
+			for (const candidate of candidates) {
+				const index = candidate.index ?? 0;
+				const own = state(index);
+				if (own.done) continue;
 				for (const part of Array.isArray(candidate.content?.parts) ? candidate.content.parts : []) {
-					let call;
-					if (part?.functionCall) {
-						const given = part.functionCall.id;
-						call = {
-							index: calls++,
-							id: typeof given === "string" && given !== "" ? given : callId(),
-							type: "function",
-							function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args ?? {}) }
-						};
+					const got = own.gather.add(part);
+					if (got.text !== undefined && got.text !== "") {
+						own.text += got.text;
+						out.push(...first(index), make(index, { content: got.text }));
 					}
-					// The text of a part goes out before its signature (the signature closes the part); a call's signature goes before the call.
-					if (call === undefined && typeof part?.text === "string" && part.text !== "") {
-						out.push(...first(), make(part.thought === true ? { [field]: part.text } : { content: part.text }));
+					if (got.thought !== undefined && got.thought !== "") out.push(...first(index), make(index, { [field]: got.thought }));
+					if (got.call !== undefined) {
+						own.calls++;
+						out.push(...first(index), make(index, { tool_calls: [got.call] }));
 					}
-					if (typeof part?.thoughtSignature === "string" && part.thoughtSignature !== "") {
-						out.push(...first(), make({ reasoning_details: [detailOf(details++, part.thoughtSignature, call?.id)] }));
+					if (got.image !== undefined) {
+						if (options.images === "text")
+							out.push(...first(index), make(index, { content: `![image](data:${got.image.mime};base64,${got.image.data})` }));
+						else
+							out.push(
+								...first(index),
+								make(index, { images: [{ type: "image_url", image_url: { url: `data:${got.image.mime};base64,${got.image.data}` } }] })
+							);
 					}
-					if (call) out.push(...first(), make({ tool_calls: [call] }));
+					if (got.audio !== undefined) own.audio.push(got.audio);
 				}
+				const logprobs = logprobsOf(candidate.logprobsResult);
+				if (logprobs !== undefined) out.push(...first(index), make(index, {}, null, { logprobs }));
 				if (typeof candidate.finishReason === "string") {
-					finished = true;
-					const finish = finishOf(candidate.finishReason, calls > 0);
+					own.done = true;
+					const note = noteOf(candidate);
+					if (note !== "") out.push(...first(index), make(index, { content: `${own.text === "" ? "" : "\n\n"}${note}` }));
+					const { signatures } = own.gather.finish();
+					if (signatures.length > 0) out.push(...first(index), make(index, { reasoning_details: signatures }));
+					if (own.audio.length > 0) {
+						out.push(
+							...first(index),
+							make(index, { audio: audioOf(own.audio, options.audio === "pcm16" || options.audio === "pcm" ? "pcm16" : "wav") })
+						);
+					}
+					const finish = finishOf(candidate.finishReason, own.calls > 0);
 					if (finish === "content_filter")
-						out.push(...first(), make({ refusal: refusalOf(candidate.finishReason, candidate.finishMessage, false) }));
-					out.push(...first(), make({}, finish));
+						out.push(...first(index), make(index, { refusal: refusalOf(candidate.finishReason, candidate.finishMessage, false) }));
+					out.push(...first(index), make(index, {}, finish));
 				}
 			}
 			const total = usageOf(usage);
-			if (finished && !counted && total !== undefined && options.includeUsage !== false) {
+			if (ended() && !failed && !counted && total !== undefined && options.includeUsage !== false) {
 				counted = true;
 				out.push({ id, object: "chat.completion.chunk", created, model: options.model, choices: [], usage: total });
 			}
 			return out;
 		},
-		finished: () => finished,
+		finished: ended,
 		usage: () => usage
 	};
 }

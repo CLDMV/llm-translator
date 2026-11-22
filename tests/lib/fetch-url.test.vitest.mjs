@@ -188,6 +188,17 @@ describe("the allow-list and the URL", () => {
 		expect(calls).toHaveLength(0);
 	});
 
+	it("accepts the content types the caller names instead of the default ones", async () => {
+		const gif = Buffer.from("GIF89a");
+		const { modules } = fake(() => ({ body: gif, headers: { "content-type": "image/gif" } }));
+		const types = new Map([["image/gif", "image/gif"]]);
+		const got = await fetchUrl("https://files.example.com/a.gif", { ...base, types }, { modules, lookup: resolveTo(PUBLIC) });
+		expect(got).toMatchObject({ mediaType: "image/gif" });
+		expect(got.bytes.equals(gif)).toBe(true);
+		const refused = await failure(fetchUrl("https://files.example.com/a.gif", base, { modules, lookup: resolveTo(PUBLIC) }));
+		expect(refused).toMatchObject({ kind: "type" });
+	});
+
 	it("compares the host without case or a trailing dot", async () => {
 		const { modules } = fake(() => ({ body: pdf }));
 		const got = await fetchUrl("https://FILES.Example.com./a.pdf", base, { modules, lookup: resolveTo(PUBLIC) });

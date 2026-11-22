@@ -20,6 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { closeAll, collect, fakeTransport, make } from "../helpers/translator.mjs";
 import { completion as chatCompletion, json, sse } from "../helpers/fake-server.mjs";
 import { content, gemini } from "../helpers/gemini.mjs";
+import * as pdf from "../../src/lib/pdf.mjs";
 
 const MODEL = "gemini-2.5-flash";
 const PATH = `/v1beta/models/${MODEL}`;
@@ -187,11 +188,54 @@ describe("OpenAI front", () => {
 		expect(out.body.choices.map((choice) => [choice.index, choice.message.content, choice.finish_reason])).toEqual([[0, "a", "stop"]]);
 	});
 
-	it("n above 1 is answered by fan-out, one request per choice, with no candidateCount", async () => {
-		const { out } = await run("openai", { model: MODEL, n: 2, messages: user }, ok(content([{ text: "a" }])));
-		expect(google.seen).toHaveLength(2);
+	it("n above 1 is candidateCount in one request, up to Gemini's limit of 8, and fan-out above it", async () => {
+		const two = {
+			...content([{ text: "a" }]),
+			candidates: [content([{ text: "a" }]).candidates[0], { index: 1, content: { parts: [{ text: "b" }] }, finishReason: "MAX_TOKENS" }]
+		};
+		const { out } = await run("openai", { model: MODEL, n: 2, messages: user }, ok(two));
+		expect(google.seen).toHaveLength(1);
+		expect(google.seen[0].body.generationConfig.candidateCount).toBe(2);
+		expect(out.body.choices.map((choice) => [choice.index, choice.message.content, choice.finish_reason])).toEqual([
+			[0, "a", "stop"],
+			[1, "b", "length"]
+		]);
+		const withDetails = content([{ text: "a" }], {}, { promptTokenCount: 12, candidatesTokenCount: 5, cachedContentTokenCount: 4 });
+		const many = await run("openai", { model: MODEL, n: 9, messages: user }, ok(withDetails), undefined, "fanout");
+		expect(many.out.body.usage.prompt_tokens_details).toEqual({ cached_tokens: 36 });
+		expect(google.seen).toHaveLength(9);
 		for (const call of google.seen) expect(call.body.generationConfig?.candidateCount).toBeUndefined();
-		expect(out.body.choices.map((choice) => choice.index)).toEqual([0, 1]);
+		expect(many.out.body.choices).toHaveLength(9);
+	});
+
+	it("streams every candidate with its own index", async () => {
+		const { out } = await run(
+			"openai",
+			{ model: MODEL, n: 2, stream: true, messages: user },
+			streamOf([
+				{
+					candidates: [
+						{ index: 0, content: { parts: [{ text: "a" }] } },
+						{ index: 1, content: { parts: [{ text: "b" }] } }
+					]
+				},
+				{
+					candidates: [
+						{ index: 0, finishReason: "STOP" },
+						{ index: 1, finishReason: "STOP" }
+					],
+					usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 2 }
+				}
+			])
+		);
+		const chunks = (await collect(out.stream)).map((entry) => entry.data).filter((entry) => entry !== "[DONE]");
+		const text = (index) =>
+			chunks
+				.filter((entry) => entry.choices[0]?.index === index)
+				.map((entry) => entry.choices[0].delta.content ?? "")
+				.join("");
+		expect([text(0), text(1)]).toEqual(["a", "b"]);
+		expect(chunks.filter((entry) => entry.choices[0]?.finish_reason === "stop").map((entry) => entry.choices[0].index)).toEqual([0, 1]);
 	});
 
 	it("sends thought signatures back through reasoning_details, tool calls and tool results", async () => {
@@ -225,7 +269,7 @@ describe("OpenAI front", () => {
 			{ role: "user", parts: [{ functionResponse: { id: "fc_1", name: "Read", response: { output: "file a" } } }] }
 		]);
 		expect(second.out.body.choices[0].message.reasoning_details).toEqual([
-			{ type: "reasoning.encrypted", format: "google-gemini-v1", index: 0, data: "SIG-TEXT", for: "text" }
+			{ type: "reasoning.encrypted", format: "google-gemini-v1", index: 0, data: "SIG-TEXT", for: "text", rest: 0 }
 		]);
 	});
 
@@ -306,9 +350,12 @@ describe("OpenAI front", () => {
 			message: { refusal: "blocked here" }
 		});
 		expect((await finish({ promptFeedback: { blockReason: "OTHER" } })).body.choices[0].finish_reason).toBe("content_filter");
-		expect((await finish(content([{ text: "x" }], { finishReason: "MALFORMED_FUNCTION_CALL" }))).body.choices[0].finish_reason).toBe(
-			"error"
-		);
+		expect(
+			(await finish(content([{ text: "x" }], { finishReason: "MALFORMED_FUNCTION_CALL", finishMessage: "bad call" }))).body.choices[0]
+		).toMatchObject({
+			finish_reason: "stop",
+			message: { content: "x\n\n[Gemini ended the reply early (MALFORMED_FUNCTION_CALL): bad call]" }
+		});
 		const empty = await finish({});
 		expect(empty.status).toBe(502);
 		expect(empty.body.error.message).toMatch(/no message/);
@@ -354,7 +401,7 @@ describe("Anthropic front", () => {
 			thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 }
 		});
 		expect(call.body.toolConfig).toEqual({ functionCallingConfig: { mode: "ANY" } });
-		expect(call.body.contents[0].parts.map((part) => Object.keys(part)[0])).toEqual(["text", "inlineData", "text"]);
+		expect(call.body.contents[0].parts.map((part) => Object.keys(part)[0])).toEqual(["text", "inlineData", "fileData"]);
 		expect(call.body.model).toBeUndefined();
 		expect(out.body).toMatchObject({
 			type: "message",
@@ -527,7 +574,7 @@ describe("Anthropic front", () => {
 		expect(await out.usage).toMatchObject({ input_tokens: 12, output_tokens: 9, cache_read_input_tokens: 8, complete: true });
 	});
 
-	it("an error in the stream, a malformed finish and a stream cut short each end with an error event", async () => {
+	it("an error in the stream and a stream cut short each end with an error event, and a malformed finish ends the turn with a note", async () => {
 		const failed = await run(
 			"anthropic",
 			{ ...body, stream: true },
@@ -542,7 +589,10 @@ describe("Anthropic front", () => {
 			{ ...body, stream: true },
 			streamOf([content([], { finishReason: "MALFORMED_FUNCTION_CALL" }, null)])
 		);
-		expect((await collect(malformed.out.stream)).at(-1)).toMatchObject({ event: "error" });
+		const events = await collect(malformed.out.stream);
+		expect(events.at(-1).event).toBe("message_stop");
+		expect(delta(events, "text_delta", "text")).toBe("[Gemini ended the reply early (MALFORMED_FUNCTION_CALL)]");
+		expect(events.find((entry) => entry.event === "message_delta").data.delta.stop_reason).toBe("end_turn");
 		const cut = await run("anthropic", { ...body, stream: true }, streamOf([content([{ text: "a" }], { finishReason: undefined }, null)]));
 		expect((await collect(cut.out.stream)).at(-1)).toMatchObject({
 			event: "error",
@@ -550,11 +600,15 @@ describe("Anthropic front", () => {
 		});
 	});
 
-	it("a filtered reply is a refusal, and a failure finish is an error", async () => {
+	it("a filtered reply is a refusal, and another finish reason ends the turn with a note", async () => {
 		const refused = await run("anthropic", body, ok(content([], { finishReason: "SAFETY", finishMessage: "not allowed" })));
 		expect(refused.out.body).toMatchObject({ stop_reason: "refusal", stop_details: { type: "refusal", explanation: "not allowed" } });
 		const failed = await run("anthropic", body, ok(content([], { finishReason: "OTHER" })));
-		expect(failed.out.status).toBe(502);
+		expect(failed.out.status).toBe(200);
+		expect(failed.out.body).toMatchObject({
+			stop_reason: "end_turn",
+			content: [{ type: "text", text: "[Gemini ended the reply early (OTHER)]" }]
+		});
 	});
 });
 
@@ -751,5 +805,341 @@ describe("driver leaves", () => {
 		});
 		expect(error(404, body, { state: { protocol: "openai.chat" } })).toBe(body);
 		expect(error(404, body)).toBe(body);
+	});
+});
+
+describe("tools, settings and tool choice", () => {
+	const read = { name: "Read", input_schema: { type: "object", properties: { path: { type: "string" } } } };
+	const chatRead = { type: "function", function: { name: "Read", parameters: read.input_schema } };
+	const chatWrite = {
+		type: "function",
+		function: { name: "Write", parameters: { type: "object", properties: { text: { type: "string" } } } }
+	};
+
+	it("Anthropic server tools become Gemini's built-in tools, with no note for the ones that were mapped", async () => {
+		const api = await apiFor("anthropic");
+		google.use(ok(content([{ text: "x" }])));
+		const sent = await api.request({
+			model: MODEL,
+			max_tokens: 8,
+			messages: user,
+			tools: [
+				read,
+				{ type: "web_search_20250305", name: "web_search" },
+				{ type: "code_execution_20250522", name: "code_execution" },
+				{ type: "web_fetch_20250910", name: "web_fetch" },
+				{ type: "web_search_20260101", name: "again" },
+				{ type: "bash_20250124", name: "bash" }
+			]
+		});
+		expect(sent.body.tools.map((entry) => Object.keys(entry)[0])).toEqual([
+			"functionDeclarations",
+			"googleSearch",
+			"codeExecution",
+			"urlContext"
+		]);
+		expect(sent.state.convert.dropped).toEqual(["tool:bash"]);
+	});
+
+	it("the gemini setting adds built-in tools and safety settings, and a cached content replaces what it holds", async () => {
+		const safety = [{ category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_ONLY_HIGH" }];
+		const settings = { gemini: { tools: [{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }], safetySettings: safety } };
+		const { call } = await run(
+			"openai",
+			{ model: MODEL, tools: [chatRead], messages: user },
+			ok(content([{ text: "x" }])),
+			{ settings },
+			"gemini-setting"
+		);
+		expect(call.body.tools.map((entry) => Object.keys(entry)[0])).toEqual(["functionDeclarations", "computerUse"]);
+		expect(call.body.safetySettings).toEqual(safety);
+		const cached = await run(
+			"openai",
+			{ model: MODEL, tools: [chatRead], messages: [{ role: "system", content: "s" }, ...user] },
+			ok(content([{ text: "x" }])),
+			{ settings: { gemini: { cachedContent: "cachedContents/abc" } } },
+			"cached-setting"
+		);
+		expect(cached.call.body).toEqual({ contents: [{ role: "user", parts: [{ text: "hi" }] }], cachedContent: "cachedContents/abc" });
+	});
+
+	it("allowed_tools picks a calling mode or the tools offered, and parallel_tool_calls false keeps one call", async () => {
+		const two = content([
+			{ functionCall: { id: "a", name: "Read", args: {} }, thoughtSignature: "A" },
+			{ functionCall: { id: "b", name: "Write", args: {} } }
+		]);
+		const only = { type: "allowed_tools", allowed_tools: { mode: "required", tools: [{ type: "function", function: { name: "Read" } }] } };
+		const parallel = await run("openai", { model: MODEL, tools: [chatRead, chatWrite], tool_choice: only, messages: user }, ok(two));
+		expect(parallel.call.body.toolConfig).toEqual({ functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["Read"] } });
+		expect(parallel.out.body.choices[0].message.tool_calls.map((entry) => entry.id)).toEqual(["a", "b"]);
+		const single = await run(
+			"openai",
+			{ model: MODEL, tools: [chatRead, chatWrite], parallel_tool_calls: false, messages: user },
+			ok(two),
+			undefined,
+			"single"
+		);
+		expect(single.out.body.choices[0].message.tool_calls.map((entry) => entry.id)).toEqual(["a"]);
+		const anthropic = await run(
+			"anthropic",
+			{ model: MODEL, max_tokens: 8, tools: [read], tool_choice: { type: "auto", disable_parallel_tool_use: true }, messages: user },
+			ok(two),
+			undefined,
+			"single-anthropic"
+		);
+		expect(anthropic.out.body.content.filter((block) => block.type === "tool_use").map((block) => block.id)).toEqual(["a"]);
+		const filtered = await run(
+			"openai",
+			{
+				model: MODEL,
+				tools: [chatRead, chatWrite],
+				tool_choice: { ...only, allowed_tools: { ...only.allowed_tools, mode: "auto" } },
+				messages: user
+			},
+			ok(content([{ text: "x" }]))
+		);
+		expect(filtered.call.body.tools[0].functionDeclarations.map((entry) => entry.name)).toEqual(["Read"]);
+	});
+
+	it("returns log probabilities on the OpenAI front", async () => {
+		const reply = content([{ text: "hi" }], {
+			logprobsResult: {
+				chosenCandidates: [{ token: "hi", logProbability: -0.5 }],
+				topCandidates: [{ candidates: [{ token: "hi", logProbability: -0.5 }] }]
+			}
+		});
+		const { out, call } = await run("openai", { model: MODEL, logprobs: true, top_logprobs: 3, messages: user }, ok(reply));
+		expect(call.body.generationConfig).toEqual({ responseLogprobs: true, logprobs: 3 });
+		expect(out.body.choices[0].logprobs.content[0]).toMatchObject({ token: "hi", logprob: -0.5, top_logprobs: [{ token: "hi" }] });
+		const streamed = await run("openai", { model: MODEL, stream: true, logprobs: true, messages: user }, streamOf([reply]));
+		const chunks = (await collect(streamed.out.stream)).map((entry) => entry.data).filter((entry) => entry !== "[DONE]");
+		expect(chunks.find((entry) => entry.choices[0]?.logprobs).choices[0].logprobs.content[0].token).toBe("hi");
+	});
+});
+
+describe("thinking, signatures and finish reasons", () => {
+	it("adaptive thinking is a dynamic budget, and the gemini.thinking setting decides for a model the name does not tell", async () => {
+		const body = { model: MODEL, max_tokens: 64, thinking: { type: "adaptive" }, messages: user };
+		const dynamic = await run("anthropic", body, ok(content([{ text: "x" }])));
+		expect(dynamic.call.body.generationConfig.thinkingConfig).toEqual({ includeThoughts: true, thinkingBudget: -1 });
+		const none = await run(
+			"anthropic",
+			{ ...body, model: "gemini-2.5-pro", thinking: { type: "disabled" } },
+			ok(content([{ text: "x" }])),
+			undefined,
+			"pro"
+		);
+		expect(none.call.body.generationConfig.thinkingConfig).toEqual({ thinkingBudget: 128 });
+		const tuned = await run(
+			"openai",
+			{ model: "my-tuned", reasoning_effort: "high", messages: user },
+			ok(content([{ text: "x" }])),
+			{ settings: { gemini: { thinking: "level" } } },
+			"level"
+		);
+		expect(tuned.call.body.generationConfig.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: "HIGH" });
+	});
+
+	it("puts a text signature back where its part ended, and a signed thought part back as a thought part", async () => {
+		const first = await run(
+			"openai",
+			{ model: MODEL, messages: user },
+			ok(content([{ text: "reasoned", thought: true, thoughtSignature: "TH" }, { text: "ab", thoughtSignature: "S" }, { text: "cd" }]))
+		);
+		const message = first.out.body.choices[0].message;
+		expect(message.content).toBe("abcd");
+		expect(message.reasoning_details.map((item) => [item.for, item.data, item.rest])).toEqual([
+			["thought", "TH", 0],
+			["text", "S", 2]
+		]);
+		const second = await run(
+			"openai",
+			{ model: MODEL, messages: [...user, message, { role: "user", content: "more" }] },
+			ok(content([{ text: "x" }]))
+		);
+		expect(second.call.body.contents[1].parts).toEqual([
+			{ text: "reasoned", thought: true, thoughtSignature: "TH" },
+			{ text: "ab", thoughtSignature: "S" },
+			{ text: "cd" }
+		]);
+	});
+});
+
+describe("images, audio and code", () => {
+	const gif = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+	beforeAll(async () => {
+		await pdf.load();
+	});
+
+	it("sends a GIF as a PNG, an image at a URL and a PDF at a URL as references", async () => {
+		const { call } = await run(
+			"anthropic",
+			{
+				model: MODEL,
+				max_tokens: 8,
+				messages: [
+					{
+						role: "user",
+						content: [
+							{ type: "image", source: { type: "base64", media_type: "image/gif", data: gif } },
+							{ type: "image", source: { type: "url", url: "https://example.com/a.webp" } },
+							{ type: "document", source: { type: "url", url: "https://example.com/paper" } }
+						]
+					}
+				]
+			},
+			ok(content([{ text: "x" }]))
+		);
+		const parts = call.body.contents[0].parts;
+		expect(parts[0].inlineData.mimeType).toBe("image/png");
+		expect(parts[1]).toEqual({ fileData: { fileUri: "https://example.com/a.webp", mimeType: "image/webp" } });
+		expect(parts[2]).toEqual({ fileData: { fileUri: "https://example.com/paper", mimeType: "application/pdf" } });
+	});
+
+	it("returns generated images as images on the OpenAI front and as markdown on the Anthropic front", async () => {
+		const reply = content([{ text: "here" }, { inlineData: { mimeType: "image/png", data: "AAAA" } }]);
+		const openai = await run("openai", { model: "gemini-2.5-flash-image", messages: user }, ok(reply));
+		expect(openai.call.body.generationConfig.responseModalities).toEqual(["TEXT", "IMAGE"]);
+		expect(openai.out.body.choices[0].message.images).toEqual([{ type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }]);
+		const anthropic = await run(
+			"anthropic",
+			{ model: MODEL, max_tokens: 8, messages: user },
+			ok(reply),
+			{ settings: { gemini: { responseModalities: ["TEXT", "IMAGE"] } } },
+			"image"
+		);
+		expect(anthropic.call.body.generationConfig.responseModalities).toEqual(["TEXT", "IMAGE"]);
+		expect(anthropic.out.body.content[0].text).toBe("here\n\n![image](data:image/png;base64,AAAA)");
+	});
+
+	it("asks for audio output and returns it as a WAV file, and refuses a format it cannot make", async () => {
+		const reply = content([{ inlineData: { mimeType: "audio/L16;codec=pcm;rate=24000", data: "AQID" } }]);
+		const { out, call } = await run(
+			"openai",
+			{ model: "gemini-2.5-flash-preview-tts", modalities: ["audio"], audio: { voice: "Kore", format: "wav" }, messages: user },
+			ok(reply)
+		);
+		expect(call.body.generationConfig).toEqual({
+			responseModalities: ["AUDIO"],
+			speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } }
+		});
+		expect(Buffer.from(out.body.choices[0].message.audio.data, "base64").subarray(0, 4).toString()).toBe("RIFF");
+		const streamed = await run(
+			"openai",
+			{ model: MODEL, stream: true, audio: { format: "pcm16" }, messages: user },
+			streamOf([content([{ inlineData: { mimeType: "audio/L16;rate=24000", data: "AQID" } }])]),
+			undefined,
+			"audio-stream"
+		);
+		const chunks = (await collect(streamed.out.stream)).map((entry) => entry.data).filter((entry) => entry !== "[DONE]");
+		expect([...Buffer.from(chunks.find((entry) => entry.choices[0]?.delta?.audio).choices[0].delta.audio.data, "base64")]).toEqual([
+			1, 2, 3
+		]);
+		const mp3 = await run("openai", { model: MODEL, audio: { format: "mp3" }, messages: user }, ok(reply));
+		expect(mp3.out.status).toBe(400);
+		expect(mp3.out.body.error.message).toMatch(/audio\.format/);
+	});
+
+	it("sends audio the client gave, and writes code and its output into the text", async () => {
+		const { call, out } = await run(
+			"openai",
+			{ model: MODEL, messages: [{ role: "user", content: [{ type: "input_audio", input_audio: { data: "QUJD", format: "mp3" } }] }] },
+			ok(
+				content([
+					{ executableCode: { language: "PYTHON", code: "print(1)" } },
+					{ codeExecutionResult: { outcome: "OUTCOME_OK", output: "1" } }
+				])
+			)
+		);
+		expect(call.body.contents[0].parts[0]).toEqual({ inlineData: { mimeType: "audio/mp3", data: "QUJD" } });
+		expect(out.body.choices[0].message.content).toBe("\n```python\nprint(1)\n```\n\n```text\n1\n```\n");
+	});
+});
+
+describe("cached contents for a cache_control breakpoint", () => {
+	const system = [{ type: "text", text: "You are careful. ".repeat(400), cache_control: { type: "ephemeral" } }];
+	const ask = (text, extra = {}) => ({ model: MODEL, max_tokens: 8, system, messages: [{ role: "user", content: text }], ...extra });
+	const cachedHandler = (made) => (call, res) => {
+		if (call.url === "/v1beta/cachedContents") {
+			made.push(call.body);
+			return json(res, 200, { name: `cachedContents/c${made.length}` });
+		}
+		return json(res, 200, content([{ text: "ok" }]));
+	};
+
+	it("creates the cache once, sends only what follows it, and reuses it for the next request", async () => {
+		const made = [];
+		const api = await apiFor("anthropic", {}, "cache");
+		google.use(cachedHandler(made));
+		const first = await api.send(ask("one"));
+		expect(first.status).toBe(200);
+		expect(google.seen.map((entry) => entry.url)).toEqual(["/v1beta/cachedContents", `${PATH}:generateContent`]);
+		expect(made[0]).toMatchObject({ model: `models/${MODEL}`, ttl: "300s", contents: [] });
+		expect(made[0].systemInstruction.parts[0].text).toContain("You are careful.");
+		expect(google.seen[1].body).toEqual({
+			contents: [{ role: "user", parts: [{ text: "one" }] }],
+			generationConfig: { maxOutputTokens: 8 },
+			cachedContent: "cachedContents/c1"
+		});
+		await api.send(ask("two"));
+		expect(google.seen.map((entry) => entry.url).filter((url) => url === "/v1beta/cachedContents")).toHaveLength(1);
+		expect(google.seen.at(-1).body.cachedContent).toBe("cachedContents/c1");
+		const streamed = await api.send(ask("three", { stream: true }));
+		google.seen.length = 0;
+		await collect(streamed.stream);
+		expect(made).toHaveLength(1);
+	});
+
+	it("caches the messages before the breakpoint, with the ttl it names, and counts tokens on the whole prompt", async () => {
+		const made = [];
+		const api = await apiFor("anthropic", {}, "cache-messages");
+		google.use(cachedHandler(made));
+		const body = {
+			model: MODEL,
+			max_tokens: 8,
+			messages: [
+				{ role: "user", content: [{ type: "text", text: "long document ".repeat(500), cache_control: { type: "ephemeral", ttl: "1h" } }] },
+				{ role: "assistant", content: "noted" },
+				{ role: "user", content: "question" }
+			]
+		};
+		await api.send(body);
+		expect(made[0]).toMatchObject({ ttl: "3600s" });
+		expect(made[0].contents).toHaveLength(1);
+		expect(google.seen[1].body.contents.map((entry) => entry.role)).toEqual(["model", "user"]);
+		google.seen.length = 0;
+		await api.token.count(body);
+		expect(google.seen.map((entry) => entry.url)).toEqual([`${PATH}:countTokens`]);
+	});
+
+	it("sends the request whole when the cache cannot be made, and does not ask again", async () => {
+		const api = await apiFor("anthropic", {}, "cache-refused");
+		const refuse = (call, res) =>
+			call.url === "/v1beta/cachedContents"
+				? json(res, 400, { error: { code: 400, message: "Cached content is too small", status: "INVALID_ARGUMENT" } })
+				: json(res, 200, content([{ text: "ok" }]));
+		google.use(refuse);
+		const out = await api.send(ask("one"));
+		expect(out.status).toBe(200);
+		expect(google.seen[1].body.systemInstruction.parts[0].text).toContain("You are careful.");
+		expect(google.seen[1].body.cachedContent).toBeUndefined();
+		await api.send(ask("two"));
+		expect(google.seen.filter((entry) => entry.url === "/v1beta/cachedContents")).toHaveLength(1);
+	});
+
+	it("does not cache when the gemini setting turns it off or names a cached content itself", async () => {
+		const off = await run("anthropic", ask("one"), ok(content([{ text: "ok" }])), { settings: { gemini: { cache: false } } }, "cache-off");
+		expect(google.seen.map((entry) => entry.url)).toEqual([`${PATH}:generateContent`]);
+		expect(off.call.body.systemInstruction).toBeDefined();
+		const named = await run(
+			"anthropic",
+			ask("one"),
+			ok(content([{ text: "ok" }])),
+			{ settings: { gemini: { cachedContent: "cachedContents/mine" } } },
+			"cache-named"
+		);
+		expect(google.seen.map((entry) => entry.url)).toEqual([`${PATH}:generateContent`]);
+		expect(named.call.body.cachedContent).toBe("cachedContents/mine");
 	});
 });

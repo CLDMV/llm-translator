@@ -56,6 +56,14 @@ export function available() {
 }
 
 /**
+ * The loaded `@napi-rs/canvas` module, for code that decodes or draws images (a GIF turned into a PNG for Gemini).
+ * @returns {any | null} The module, or null when it is not loaded.
+ */
+export function canvasModule() {
+	return canvas;
+}
+
+/**
  * Load lazily when `load()` has never run, then require unpdf.
  * @returns {Promise<void>} Resolves when unpdf is usable.
  */
