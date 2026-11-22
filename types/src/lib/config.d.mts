@@ -67,7 +67,7 @@ export type UpstreamConfig = {
      */
     sessionToken?: string;
     /**
-     * Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"`, `"ollama.chat"` and `"bedrock.converse"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third, `"native"` and `"ollama"` the fourth and `"converse"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
+     * Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"`, `"ollama.chat"`, `"bedrock.converse"`, `"google.gemini"` and `"cohere.chat"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third, `"native"` and `"ollama"` the fourth, `"converse"` the fifth, `"gemini"` and `"google"` the sixth and `"cohere"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
      */
     api?: string;
     /**

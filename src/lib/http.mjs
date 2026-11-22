@@ -33,7 +33,7 @@ export function join(base, path) {
  * and the model (Azure OpenAI puts the deployment and `api-version` there); otherwise `info().paths[kind]` is used, with the standard
  * OpenAI path for `responses`, `embeddings` and `models` when the driver does not name one.
  * @param {any} driver - Driver record (`info` and the optional `path` leaf).
- * @param {"chat" | "messages" | "responses" | "converse" | "embeddings" | "models"} kind - Which call.
+ * @param {"chat" | "messages" | "responses" | "converse" | "gemini" | "embeddings" | "models"} kind - Which call.
  * @param {any} endpoint - Runtime endpoint.
  * @param {string} [model] - The upstream's model name for the request.
  * @param {string} [protocol] - The protocol the request goes over.

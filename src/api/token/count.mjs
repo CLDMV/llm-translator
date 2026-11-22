@@ -38,6 +38,8 @@ export async function count(body, options = {}) {
 		? await driver.count({
 				endpoint,
 				request: prepared.body,
+				path: prepared.path,
+				state: prepared.state,
 				transport: c.state.transport,
 				signal: options.signal,
 				timeout: c.config.detectTimeout

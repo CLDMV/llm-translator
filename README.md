@@ -17,18 +17,17 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.14.0 (November 2026)
+### Latest: v0.15.0 (November 2026)
 
-- **Claude on Google Vertex AI and Amazon Bedrock** — new `vertex` and `bedrock` drivers. Vertex AI gets its access tokens from a service account, gcloud's credentials, a token or `getToken`, or the metadata server. Bedrock signs with SigV4 or uses a Bedrock API key, sends Claude through InvokeModel and other models through the new Converse protocol (`api: "converse"`), and decodes AWS's event stream. No new dependencies.
-- **URL documents** — `documentUrls: { allow: [...] }` downloads `document` blocks with a `url` source and converts them like inline PDFs or text. Off by default, with host allow-listing, public-address checks pinned to the connection, re-checked redirects and size, time and count limits.
-- [View full v0.14.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.14.0.md)
+- **Gemini and Cohere native protocols** — `api: "gemini"` sends a Gemini upstream over Google's own `generateContent` API, with PDFs sent whole, thinking budgets or levels per model, and thought signatures kept across tool turns. A new `cohere` driver talks to Cohere's Compatibility API by default and to its v2 chat API with `api: "cohere"`. Both work from either front, and `auto` behaves as before.
+- [View full v0.15.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.15.0.md)
 
 ### Recent Releases
 
+- **v0.14.0** (November 2026) — Claude on Google Vertex AI and Amazon Bedrock, Bedrock's Converse protocol, and opt-in downloading of URL documents ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.14.0.md))
 - **v0.13.0** (November 2026) — the OpenAI Responses API as a front and as an upstream, and one per-upstream `api` setting that defaults to `auto` ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.13.0.md))
 - **v0.12.0** (November 2026) — Prometheus `/metrics`, HTTPS, per-key rate limits and CORS for the built-in server, and failed tool results marked by default over Chat Completions ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.12.0.md))
 - **v0.11.0** (November 2026) — native constrained decoding (JSON Schema, regex, choice, grammar), `clear_tool_uses` context edits, `cache_salt` and `prompt_cache_key` hints, and host-first binding for hosted APIs ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.11.0.md))
-- **v0.10.0** (November 2026) — native `/v1/messages` for vLLM, readiness probes and LoRA adapters, Groq, Together, Fireworks, xAI and Gemini drivers, and Ollama's native `/api/chat` ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.10.0.md))
 
 📚 **For complete version history and detailed release notes, see the [docs/changelog/](https://github.com/CLDMV/llm-translator/tree/master/docs/changelog/) folder.**
 

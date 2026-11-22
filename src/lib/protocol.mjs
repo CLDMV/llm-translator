@@ -23,9 +23,11 @@ export const CHAT = "openai.chat";
 export const RESPONSES = "openai.responses";
 export const OLLAMA = "ollama.chat";
 export const CONVERSE = "bedrock.converse";
+export const GEMINI = "google.gemini";
+export const COHERE = "cohere.chat";
 
 /** The canonical protocol ids, in the order the docs list them. */
-export const IDS = [MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE];
+export const IDS = [MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, GEMINI, COHERE];
 
 /** Every accepted spelling of the `api` setting and the canonical id it stands for. */
 export const ALIASES = Object.freeze({
@@ -45,7 +47,12 @@ export const ALIASES = Object.freeze({
 	native: OLLAMA,
 	ollama: OLLAMA,
 	[CONVERSE]: CONVERSE,
-	converse: CONVERSE
+	converse: CONVERSE,
+	[GEMINI]: GEMINI,
+	gemini: GEMINI,
+	google: GEMINI,
+	[COHERE]: COHERE,
+	cohere: COHERE
 });
 
 /**

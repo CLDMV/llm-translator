@@ -14,17 +14,23 @@
  */
 
 /**
- * @fileoverview Gemini (OpenAI-compatible endpoint) driver: request normalizer (Chat Completions body).
+ * @fileoverview Gemini driver: request normalizer (a Chat Completions body for the OpenAI-compatible endpoint, a `generateContent` body for the native API).
  * @module @cldmv/llm-translator/driver/gemini
  */
 import { trim } from "../../../lib/presets.mjs";
+import { GEMINI } from "../../../lib/protocol.mjs";
 
 /**
- * Drop tool fields when there are no tools, and the fields Gemini (OpenAI-compatible endpoint) rejects (each recorded in `state.dropped`).
- * @param {any} body - Chat Completions request body.
- * @param {any} [context] - `{ state }`.
+ * Drop tool fields when there are no tools, and the fields Gemini (OpenAI-compatible endpoint) rejects (each recorded in `state.dropped`). A
+ * native `generateContent` body loses `model` and `stream` instead: the URL carries both, and the API rejects fields it does not know.
+ * @param {any} body - Chat Completions or `generateContent` request body.
+ * @param {any} [context] - `{ state, protocol }`.
  * @returns {any} Normalized body.
  */
 export function request(body, context) {
+	if (context?.protocol === GEMINI) {
+		const { model: ___model, stream: ___stream, ...rest } = body;
+		return rest;
+	}
 	return trim("gemini", body, context);
 }

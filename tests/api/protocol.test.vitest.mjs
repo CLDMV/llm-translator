@@ -24,7 +24,9 @@ import { closeAll, collect, fakeTransport, make } from "../helpers/translator.mj
 import {
 	ALIASES,
 	CHAT,
+	COHERE,
 	CONVERSE,
+	GEMINI,
 	MESSAGES,
 	OLLAMA,
 	RESPONSES,
@@ -150,6 +152,11 @@ describe("lib/protocol", () => {
 				"ollama",
 				CONVERSE,
 				"converse",
+				GEMINI,
+				"gemini",
+				"google",
+				COHERE,
+				"cohere",
 				"auto"
 			].sort()
 		);
@@ -165,13 +172,16 @@ describe("lib/protocol", () => {
 			native: OLLAMA,
 			ollama: OLLAMA,
 			converse: CONVERSE,
+			gemini: GEMINI,
+			google: GEMINI,
+			cohere: COHERE,
 			auto: "auto"
 		};
 		for (const [name, id] of Object.entries(expected)) {
 			expect(canonical(name)).toBe(id);
 			expect(canonical(name.toUpperCase())).toBe(id);
 		}
-		for (const id of [MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE]) expect(canonical(id)).toBe(id);
+		for (const id of [MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, GEMINI, COHERE]) expect(canonical(id)).toBe(id);
 		for (const bad of ["grpc", "", "toString", 3, null, undefined, {}]) expect(canonical(bad)).toBeUndefined();
 	});
 
@@ -208,12 +218,13 @@ describe("the api setting", () => {
 		expect(api.status().upstreams[0]).toMatchObject({ api: "auto", protocols: [MESSAGES, CHAT, RESPONSES] });
 	});
 
-	it("accepts every canonical id and alias, and stores the canonical one", async () => {
-		for (const [name, id] of Object.entries(ALIASES)) {
-			const backend = id === OLLAMA ? "ollama" : id === CONVERSE ? "bedrock" : "vllm";
-			const { api } = await build({ url, backend, models: ["qwen"], api: name });
-			expect(api.status().upstreams[0].api, name).toBe(id);
-		}
+	it.each(Object.entries(ALIASES))("accepts the alias %s and stores the canonical id %s", async (name, id) => {
+		const backend = id === OLLAMA ? "ollama" : id === CONVERSE ? "bedrock" : id === GEMINI ? "gemini" : id === COHERE ? "cohere" : "vllm";
+		const { api } = await build({ url, backend, models: ["qwen"], api: name });
+		expect(api.status().upstreams[0].api, name).toBe(id);
+	});
+
+	it("accepts an alias in any case", async () => {
 		const { api } = await build(vllm({ api: "Codex" }));
 		expect(api.status().upstreams[0].api).toBe(RESPONSES);
 	});
@@ -243,9 +254,11 @@ describe("the api setting", () => {
 		expect(speaks.ollama).toEqual([CHAT, RESPONSES, OLLAMA]);
 		expect(speaks.anthropic).toEqual([MESSAGES]);
 		expect(speaks.bedrock).toEqual([MESSAGES, CONVERSE]);
+		expect(speaks.gemini).toEqual([CHAT, GEMINI]);
+		expect(speaks.cohere).toEqual([CHAT, COHERE]);
 		for (const name of ["openai", "compatible", "lmstudio", "llamacpp", "sglang", "localai"])
 			expect(speaks[name], name).toEqual([CHAT, RESPONSES]);
-		for (const name of ["azure", "groq", "fireworks", "xai", "openrouter", "deepseek", "gemini", "mistral", "tgi", "together"]) {
+		for (const name of ["azure", "groq", "fireworks", "xai", "openrouter", "deepseek", "mistral", "tgi", "together"]) {
 			expect(speaks[name], name).toEqual([CHAT]);
 		}
 	});

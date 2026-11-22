@@ -21,7 +21,7 @@
  */
 import { resolve } from "./settings.mjs";
 import * as vllm from "./vllm.mjs";
-import { MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, candidates, frontOf } from "./protocol.mjs";
+import { MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, GEMINI, COHERE, candidates, frontOf } from "./protocol.mjs";
 import { claude } from "./bedrock.mjs";
 
 /**
@@ -76,6 +76,16 @@ export function capture(self, context, frontOverride) {
 		anthropic: self.convert.bedrock.converse.to.anthropic.messages,
 		openai: self.convert.bedrock.converse.to.openai.chat
 	};
+	const toGemini = {
+		anthropic: self.convert.anthropic.messages.to.google.gemini,
+		openai: self.convert.openai.chat.to.google.gemini
+	};
+	const fromGemini = {
+		anthropic: self.convert.google.gemini.to.anthropic.messages,
+		openai: self.convert.google.gemini.to.openai.chat
+	};
+	const toCohere = { anthropic: self.convert.anthropic.messages.to.cohere.chat, openai: self.convert.openai.chat.to.cohere.chat };
+	const fromCohere = { anthropic: self.convert.cohere.chat.to.anthropic.messages, openai: self.convert.cohere.chat.to.openai.chat };
 	const front = frontOverride ?? config.front;
 	const drivers = collect(self.driver);
 	const nativeProtocol = front === "anthropic" ? MESSAGES : CHAT;
@@ -87,6 +97,10 @@ export function capture(self, context, frontOverride) {
 	const ollama = { request: toOllama[front].request, response: fromOllama[front].response, stream: fromOllama[front].stream };
 	// An endpoint on Amazon Bedrock's Converse API: the request is converted to Converse's body, the reply (a JSON object or event stream frames) from it.
 	const converse = { request: toConverse[front].request, response: fromConverse[front].response, stream: fromConverse[front].stream };
+	// An endpoint on Google's native Gemini API: the request is converted to a `generateContent` body, the reply (a JSON object or SSE chunks) from it.
+	const gemini = { request: toGemini[front].request, response: fromGemini[front].response, stream: fromGemini[front].stream };
+	// An endpoint on Cohere's v2 chat API: the request is converted to Cohere's body, the reply (a JSON object or Server-Sent Events) from it.
+	const cohere = { request: toCohere[front].request, response: fromCohere[front].response, stream: fromCohere[front].stream };
 	// An endpoint on the Responses API: the request goes through the front's Responses request converter, the reply (a JSON object or SSE
 	// events) is read as Chat Completions first (and, for the Anthropic front, converted from there).
 	const fromResponses =
@@ -104,6 +118,8 @@ export function capture(self, context, frontOverride) {
 	const convertersFor = (protocol) => {
 		if (protocol === OLLAMA) return ollama;
 		if (protocol === CONVERSE) return converse;
+		if (protocol === GEMINI) return gemini;
+		if (protocol === COHERE) return cohere;
 		if (protocol === nativeProtocol) return null;
 		if (protocol === RESPONSES) return responses;
 		return convert;
@@ -172,14 +188,14 @@ export function capture(self, context, frontOverride) {
 		/**
 		 * Resolve the effective settings for an endpoint: endpoint > global > probed > driver > defaults. Given the protocol a request goes over, the Responses
 		 * API also turns `reasoningRoundTrip` on (below the driver and the config, so an explicit setting still wins): a stateless Responses call needs its
-		 * encrypted reasoning items back between turns.
+		 * encrypted reasoning items back between turns. So does Gemini's native API, whose thought signatures must come back with tool turns.
 		 * @param {any} endpoint - Runtime endpoint.
 		 * @param {string} [protocol] - The protocol of the request.
 		 * @returns {any} Resolved settings.
 		 */
 		settings: (endpoint, protocol) =>
 			resolve(
-				protocol === RESPONSES ? { reasoningRoundTrip: true } : undefined,
+				protocol === RESPONSES || protocol === GEMINI ? { reasoningRoundTrip: true } : undefined,
 				endpoint.driverSettings,
 				endpoint.probed,
 				config.settings,
