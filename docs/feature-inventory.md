@@ -269,6 +269,6 @@ Source: design contract and landscape pitfalls. Rows marked implemented are desc
 
 ## Totals
 
-177 features: 129 implemented, 7 partial, 16 not implemented, 25 out of scope.
+177 features: 134 implemented, 7 partial, 11 not implemented, 25 out of scope.
 
 Issue drafts exist for every not implemented and every partial feature. Each issue lists the identifiers it covers.
