@@ -241,6 +241,8 @@ describe("resolve", () => {
 	test("bodies without messages, and without references, come back as they are", async () => {
 		const store = await setup();
 		expect(await anthropic(store, undefined)).toBeUndefined();
+		const referencing = user({ type: "image", source: file("file_pngpngpng") });
+		expect(await anthropic(null, referencing)).toBe(referencing);
 		expect(await anthropic(store, { model: "m" })).toEqual({ model: "m" });
 		const plain = {
 			model: "m",

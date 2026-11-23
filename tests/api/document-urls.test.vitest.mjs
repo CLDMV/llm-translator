@@ -214,3 +214,42 @@ describe("fetching URL documents", () => {
 		expect(seen[0]).toMatchObject({ kind: "fetched", level: "debug", bytes: 16, mediaType: "text/plain", url: `${base}/notes.txt` });
 	});
 });
+
+describe("a Responses input_file by URL", () => {
+	const request = (path) => ({
+		model: "m",
+		messages: [{ role: "user", content: [{ type: "file", file: { file_url: `${base}${path}`, filename: "n.txt" } }] }]
+	});
+
+	it("is fetched like a URL document when documentUrls is on, and is a note when it is off", async () => {
+		const on = await make({
+			front: "openai",
+			upstreams: [{ name: "u", url: "http://u.test", backend: "compatible" }],
+			detect: false,
+			settings: { documentUrls: open }
+		});
+		const sent = await on.request(request("/notes.txt"));
+		expect(sent.body.messages[0].content[0]).toEqual({
+			type: "file",
+			file: { file_data: `data:text/plain;base64,${Buffer.from("plain notes body").toString("base64")}`, filename: "n.txt" }
+		});
+		expect(hits).toEqual(["/notes.txt"]);
+		const off = await make({ front: "openai", upstreams: [{ name: "u", url: "http://u.test", backend: "compatible" }], detect: false });
+		hits.length = 0;
+		const refused = await off.request(request("/notes.txt"));
+		expect(refused.body.messages[0].content[0].text).toContain("documents referenced by URL cannot be fetched by the translator");
+		expect(hits).toEqual([]);
+	});
+
+	it("keeps the allow-list: a host that is not listed is a note", async () => {
+		const api = await make({
+			front: "openai",
+			upstreams: [{ name: "u", url: "http://u.test", backend: "compatible" }],
+			detect: false,
+			settings: { documentUrls: { allow: ["files.example.com"] } }
+		});
+		const sent = await api.request(request("/notes.txt"));
+		expect(sent.body.messages[0].content[0].text).toContain("could not be fetched");
+		expect(hits).toEqual([]);
+	});
+});

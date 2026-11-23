@@ -315,11 +315,16 @@ function messageOf(item, at) {
 				image_url: { url, ...(typeof part.detail === "string" && part.detail !== "auto" ? { detail: part.detail } : {}) }
 			});
 		} else if (part?.type === "input_file" && role === "user") {
-			// The same `file` part Chat Completions has: a stored file by `file_id`, or the bytes as a `file_data` data URL.
+			// The same `file` part Chat Completions has: a stored file by `file_id`, the bytes as a `file_data` data URL, or a `file_url` (which only counts when
+			// it is the only source, and which the root api fetches like a URL document).
 			const file = {};
 			for (const key of ["file_id", "file_data", "filename"]) if (typeof part[key] === "string") file[key] = part[key];
-			if (file.file_id === undefined && file.file_data === undefined) {
-				throw new TranslatorError(`${where}: a file must carry file_id or file_data`, { code: "unsupported_content", param: where });
+			if (file.file_id === undefined && file.file_data === undefined && typeof part.file_url === "string") file.file_url = part.file_url;
+			if (file.file_id === undefined && file.file_data === undefined && file.file_url === undefined) {
+				throw new TranslatorError(`${where}: a file must carry file_id, file_data or file_url`, {
+					code: "unsupported_content",
+					param: where
+				});
 			}
 			parts.push({ type: "file", file });
 		} else {

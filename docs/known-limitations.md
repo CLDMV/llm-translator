@@ -92,7 +92,7 @@ The converters favour a faithful, explicit result over a clever guess. Where som
 ## Responses front
 
 - The Responses API is served statelessly, on the OpenAI front only. `previous_response_id`, `conversation`, `store: true`, `background: true`, stored prompts and `item_reference` input items are refused ([#8](https://github.com/CLDMV/llm-translator/issues/8)); hosted tools and their `*_call` items are refused ([#9](https://github.com/CLDMV/llm-translator/issues/9)). There are no `GET`, `DELETE` or cancel routes for responses.
-- Only function tools, text and image (`image_url`) input are mapped. `input_file` and `input_image` by `file_id` or `file_data` are mapped (see [protocol-support.md](protocol-support.md#24-files-a-to-o-and-o-to-a)); `input_audio`, `input_file` by `file_url` and custom tools are refused.
+- Only function tools, text and image (`image_url`) input are mapped. `input_file` and `input_image` by `file_id` or `file_data` are mapped (see [protocol-support.md](protocol-support.md#24-files-a-to-o-and-o-to-a)); `input_file` by `file_url` is fetched only when `documentUrls` is on (a note otherwise); `input_audio` and custom tools are refused.
 - Reasoning is returned as a summary part, never as raw `reasoning_text`. A reasoning item is replayed to the upstream only with `reasoningRoundTrip`; otherwise it is dropped.
 - A `<think>` block in the content of an OpenAI-protocol upstream is not split into a reasoning item (the Anthropic-front conversions do that, a pass-through chat reply does not).
 - `top_logprobs`, `max_tool_calls`, `truncation: "auto"` and `context_management` are dropped; `logprobs` on output text is always empty.

@@ -275,12 +275,12 @@ function dataUrl(file) {
  * An id the store holds always becomes content: the upstream does not have the file. An id it does not hold is the front's `file_not_found` (404) when
  * `strict`, and is left as it is otherwise (a request forwarded as it is may name files of the upstream's own).
  * @param {any} body - Client request body.
- * @param {{ front: "anthropic" | "openai", store: { get: (id: string) => Promise<any> }, strict: boolean }} options - Front, store, and whether unknown ids are an error.
+ * @param {{ front: "anthropic" | "openai", store: { get: (id: string) => Promise<any> } | null, strict: boolean }} options - Front, store (null when the Files API is off: nothing to resolve), and whether unknown ids are an error.
  * @returns {Promise<any>} The body; the same object when nothing was resolved.
  * @throws {TranslatorError} `file_not_found` (404), or 400 `invalid_file_type` when a file is not what its block needs.
  */
 export async function resolve(body, { front, store, strict }) {
-	if (!Array.isArray(body?.messages)) return body;
+	if (store === null || !Array.isArray(body?.messages)) return body;
 	const found = new Map();
 	const lookup = async (id) => {
 		if (!found.has(id)) found.set(id, await store.get(id));

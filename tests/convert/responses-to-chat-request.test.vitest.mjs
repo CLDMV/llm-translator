@@ -42,7 +42,8 @@ describe("input", () => {
 					content: [
 						{ type: "input_image", file_id: "file-aaaaaaaaaaaa", detail: "low" },
 						{ type: "input_file", file_id: "file-bbbbbbbbbbbb", filename: "a.pdf" },
-						{ type: "input_file", file_data: "data:application/pdf;base64,AA", filename: "b.pdf", file_url: "https://x/ignored" }
+						{ type: "input_file", file_data: "data:application/pdf;base64,AA", filename: "b.pdf", file_url: "https://x/ignored" },
+						{ type: "input_file", file_url: "https://x/c.pdf" }
 					]
 				}
 			]
@@ -50,7 +51,8 @@ describe("input", () => {
 		expect(body.messages[0].content).toEqual([
 			{ type: "image_url", image_url: { url: "file-aaaaaaaaaaaa", detail: "low" } },
 			{ type: "file", file: { file_id: "file-bbbbbbbbbbbb", filename: "a.pdf" } },
-			{ type: "file", file: { file_data: "data:application/pdf;base64,AA", filename: "b.pdf" } }
+			{ type: "file", file: { file_data: "data:application/pdf;base64,AA", filename: "b.pdf" } },
+			{ type: "file", file: { file_url: "https://x/c.pdf" } }
 		]);
 		refused(
 			{ model: "m", input: [{ role: "assistant", content: [{ type: "input_file", file_id: "file-aaaaaaaaaaaa" }] }] },
