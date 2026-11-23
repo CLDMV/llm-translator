@@ -1,0 +1,72 @@
+{
+	"tool": {
+		"type": "computer_20241022",
+		"name": "computer",
+		"display_width_px": 1024,
+		"display_height_px": 768,
+		"display_number": 1
+	},
+	"functions": [
+		{
+			"name": "computer",
+			"description": "Control a computer's screen, mouse and keyboard. Choose an action; take a screenshot to see the screen. The display is 1024 by 768 pixels; coordinates are pixels from the top left corner. It is X display number 1.",
+			"parameters": {
+				"type": "object",
+				"properties": {
+					"action": {
+						"type": "string",
+						"enum": [
+							"key",
+							"type",
+							"mouse_move",
+							"left_click",
+							"left_click_drag",
+							"right_click",
+							"middle_click",
+							"double_click",
+							"screenshot",
+							"cursor_position"
+						],
+						"description": "The action to take."
+					},
+					"coordinate": {
+						"type": "array",
+						"items": {
+							"type": "integer"
+						},
+						"minItems": 2,
+						"maxItems": 2,
+						"description": "[x, y] in pixels: where to click, move to or scroll (and where a drag ends)."
+					},
+					"text": {
+						"type": "string",
+						"description": "The text to type (type), the key or key combination such as ctrl+s (key, hold_key), or modifier keys held during a click or scroll."
+					},
+					"start_coordinate": {
+						"type": "array",
+						"items": {
+							"type": "integer"
+						},
+						"minItems": 2,
+						"maxItems": 2,
+						"description": "left_click_drag only: [x, y] where the drag starts."
+					},
+					"scroll_direction": {
+						"type": "string",
+						"enum": ["up", "down", "left", "right"],
+						"description": "scroll only: the direction."
+					},
+					"scroll_amount": {
+						"type": "integer",
+						"description": "scroll only: how far to scroll, in scroll clicks."
+					},
+					"duration": {
+						"type": "number",
+						"description": "hold_key and wait only: seconds."
+					}
+				},
+				"required": ["action"]
+			}
+		}
+	]
+}

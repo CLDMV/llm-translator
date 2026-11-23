@@ -55,6 +55,18 @@ describe("token.count", () => {
 		}
 	});
 
+	it("counts the schema a typed Anthropic tool is replaced with, not the bare typed entry", async () => {
+		const api = await make({ upstreams: [{ url: "http://a.test", backend: "compatible" }], detect: false });
+		const bare = { model: "m", max_tokens: 8, messages: [{ role: "user", content: "hi" }] };
+		const none = (await api.token.count(bare)).input_tokens;
+		const typed = (await api.token.count({ ...bare, tools: [{ type: "text_editor_20250728", name: "str_replace_based_edit_tool" }] }))
+			.input_tokens;
+		// The entry sent by the client is a few characters; the substituted function carries the whole input schema.
+		expect(typed - none).toBeGreaterThan(200);
+		const memory = (await api.token.count({ ...bare, tools: [{ type: "memory_20250818", name: "memory" }] })).input_tokens;
+		expect(memory - none).toBeGreaterThan(300);
+	});
+
 	it("estimates one token per four characters for drivers without a tokenizer", async () => {
 		const api = await make({ front: "openai", upstreams: [{ url: "http://a.test", backend: "compatible" }], detect: false });
 		const messages = [{ role: "user", content: "x".repeat(100) }];

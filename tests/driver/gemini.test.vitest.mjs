@@ -830,7 +830,7 @@ describe("tools, settings and tool choice", () => {
 				{ type: "code_execution_20250522", name: "code_execution" },
 				{ type: "web_fetch_20250910", name: "web_fetch" },
 				{ type: "web_search_20260101", name: "again" },
-				{ type: "bash_20250124", name: "bash" }
+				{ type: "bash_29990101", name: "bash" }
 			]
 		});
 		expect(sent.body.tools.map((entry) => Object.keys(entry)[0])).toEqual([

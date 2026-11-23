@@ -27,6 +27,7 @@ import { createBudget, unsign } from "../../../../../../../lib/thinking.mjs";
 import { clearToolUses, valid as validEdit } from "../../../../../../../lib/context.mjs";
 import { sourceOf, tag } from "../../../../../../../lib/citations.mjs";
 import { plan, scan } from "../../../../../../../lib/toolsearch.mjs";
+import { emulate, prompts } from "../../../../../../../lib/clienttools.mjs";
 
 const HANDLED = new Set([
 	"model",
@@ -88,7 +89,10 @@ export async function request(body, settings, context) {
 		: (id) => id;
 	// Every tool name is fitted in request order before anything else, whether or not the tool is offered, so a name's wire form never
 	// depends on which deferred tools happen to be loaded.
-	for (const tool of body.tools ?? []) if (tool.type === undefined || tool.type === "custom") fit(tool.name);
+	for (const tool of body.tools ?? []) {
+		if (tool.type === undefined || tool.type === "custom") fit(tool.name);
+		else for (const fn of emulate(tool) ?? []) fit(fn.name);
+	}
 	const found = scan(body.messages, new Set((body.tools ?? []).map((tool) => tool.name)));
 	const offered = plan(body.tools ?? [], found, s, body.tool_choice);
 	state.toolSearch = { mode: s.toolSearch, loaded: offered.loaded, hidden: offered.hidden, stubbed: offered.stubbed, capped: found.capped };
@@ -102,7 +106,8 @@ export async function request(body, settings, context) {
 	}
 
 	const out = /** @type {any} */ ({ model: body.model });
-	const system = textOf(body.system, s);
+	// Anthropic adds text to the system prompt for some of its client tools (memory, computer); with those tools substituted, the translator does.
+	const system = [textOf(body.system, s), ...prompts(offered.offer)].filter((part) => part !== "").join("\n\n");
 	const conversation = await convertMessages(
 		body.messages,
 		s,
@@ -550,7 +555,24 @@ function convertTools(tools, s, state, fit) {
 	const out = [];
 	for (const tool of tools) {
 		if (tool.type !== undefined && tool.type !== "custom") {
-			drop(state, `tool:${tool.name}`);
+			// Anthropic's client tools (bash, text editor, computer, memory) have no schema in the request: the function tools that stand for them
+			// are offered instead (see `lib/clienttools`). Any other typed tool (a server tool, a version without a schema here) is dropped.
+			const stand = emulate(tool);
+			if (stand === null) drop(state, `tool:${tool.name}`);
+			else {
+				for (const fn of stand) {
+					const wire = fit(fn.name);
+					if (fn.toolset !== undefined) (state.toolsets ??= {})[wire] = fn.toolset;
+					out.push({
+						type: "function",
+						function: {
+							name: wire,
+							description: fn.description,
+							parameters: s.toolSchema === "sanitize" ? sanitize(fn.parameters) : fn.parameters
+						}
+					});
+				}
+			}
 			continue;
 		}
 		if (tool.defer_loading === true && s.deferredTools === "drop") {

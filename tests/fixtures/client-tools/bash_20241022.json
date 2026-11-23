@@ -1,0 +1,25 @@
+{
+	"tool": {
+		"type": "bash_20241022",
+		"name": "bash"
+	},
+	"functions": [
+		{
+			"name": "bash",
+			"description": "Run a command in a persistent bash session. Working directory, environment variables and files carry over between calls. Set restart to true to start a fresh session.",
+			"parameters": {
+				"type": "object",
+				"properties": {
+					"command": {
+						"type": "string",
+						"description": "The bash command to run. Required unless restart is true."
+					},
+					"restart": {
+						"type": "boolean",
+						"description": "Set to true to restart the bash session."
+					}
+				}
+			}
+		}
+	]
+}
