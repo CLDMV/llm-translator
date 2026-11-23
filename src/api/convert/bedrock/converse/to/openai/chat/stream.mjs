@@ -35,6 +35,7 @@ export async function* stream(source, state, settings) {
 	const chunker = createChunker({
 		model: state?.model,
 		reasoningField: resolve(settings).reasoningField,
+		jsonTool: state?.jsonTool,
 		includeUsage: state?.includeUsage ?? true
 	});
 	const failure = (message, type = "api_error") => ({ data: { error: { message, type, param: null, code: null } } });

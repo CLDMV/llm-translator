@@ -24,17 +24,18 @@ const EVENT_STREAM = "application/vnd.amazon.eventstream";
 
 /**
  * Authenticate a call: a Bedrock API key (the upstream's `apiKey` or `AWS_BEARER_TOKEN_BEDROCK`) is sent as a bearer token, and otherwise the
- * call is signed with SigV4 from the upstream's access keys or the `AWS_*` environment variables (see `lib/bedrock`). The signature covers the
+ * call is signed with SigV4 from the upstream's access keys, the `AWS_*` environment variables or the AWS credential chain (see `lib/bedrock`). The signature covers the
  * exact JSON text of the body, which is what the transport sends.
- * @param {any} context - `{ endpoint, method, url, headers, body, stream }`.
- * @returns {Record<string, string>} The headers to send.
+ * The `anthropic-beta` and `anthropic-version` headers of a client are not sent: InvokeModel takes both in the body (`anthropic_beta`, `anthropic_version`; see the `request` leaf).
+ * @param {any} context - `{ endpoint, method, url, headers, body, stream, transport, timeout, signal }`; the last three are for the credential lookups of the AWS chain.
+ * @returns {Promise<Record<string, string>>} The headers to send.
  * @throws {import("../../../lib/errors.mjs").TranslatorError} `missing_credentials` or `missing_region` (500).
  */
-export function sign({ endpoint, method, url, headers, body, stream }) {
-	return authenticate(endpoint, {
-		method,
-		url,
-		headers: { ...headers, accept: stream ? EVENT_STREAM : "application/json" },
-		body: JSON.stringify(body)
-	});
+export function sign({ endpoint, method, url, headers, body, stream, transport, timeout, signal }) {
+	const { "anthropic-beta": ___beta, "anthropic-version": ___version, ...rest } = headers;
+	return authenticate(
+		endpoint,
+		{ method, url, headers: { ...rest, accept: stream ? EVENT_STREAM : "application/json" }, body: JSON.stringify(body) },
+		{ transport, timeout, signal }
+	);
 }

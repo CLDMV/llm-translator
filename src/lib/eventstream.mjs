@@ -203,6 +203,37 @@ function failure(headers, payload) {
 }
 
 /**
+ * The `{ event, data }` message of one frame (see {@link events} for the two kinds).
+ * @param {{headers: Record<string, any>, payload: Buffer}} frame - A parsed frame.
+ * @param {"invoke" | "converse"} kind - Which API the stream comes from.
+ * @returns {{event: string, data: any}} Message.
+ * @throws {TranslatorError} `invalid_stream_data` (502) when a payload is not JSON.
+ */
+function message({ headers, payload }, kind) {
+	const type = headers[":message-type"];
+	if (type === "exception" || type === "error") return failure(headers, payload);
+	if (kind === "converse") return { event: headers[":event-type"], data: json(payload) };
+	const { bytes } = json(payload);
+	const data = json(Buffer.from(String(bytes), "base64"));
+	delete data["amazon-bedrock-invocationMetrics"];
+	return { event: data.type, data };
+}
+
+/**
+ * Create an incremental decoder of an event stream into `{ event, data }` messages (the pieces {@link events} is made of, for a reader that sees
+ * the bytes chunk by chunk, such as the capture of a stream's raw text).
+ * @param {"invoke" | "converse"} kind - Which API the stream comes from.
+ * @returns {{ push: (chunk: Uint8Array) => {event: string, data: any}[], flush: () => void }} Decoder; `push` and `flush` throw as {@link createParser} does, and `push` also throws `invalid_stream_data` (502) for a payload that is not JSON.
+ */
+export function createDecoder(kind) {
+	const parser = createParser();
+	return {
+		push: (chunk) => parser.push(chunk).map((frame) => message(frame, kind)),
+		flush: () => parser.flush()
+	};
+}
+
+/**
  * Convert an event stream to `{ event, data }` messages: the shape SSE parsing gives, so the stream converters read it like a Server-Sent Events stream.
  * - `"invoke"` (`InvokeModelWithResponseStream`): each `chunk` event carries `{ "bytes": "<base64>" }`, which decodes to one Anthropic stream event; the message is that event, named by its `type`. Bedrock's `amazon-bedrock-invocationMetrics` field is removed.
  * - `"converse"` (`ConverseStream`): each event is named by its `:event-type` header (`messageStart`, `contentBlockDelta`, ...) and its payload is the data.
@@ -213,17 +244,7 @@ function failure(headers, payload) {
  */
 export async function* events(source, kind) {
 	try {
-		for await (const { headers, payload } of frames(source)) {
-			const type = headers[":message-type"];
-			if (type === "exception" || type === "error") yield failure(headers, payload);
-			else if (kind === "converse") yield { event: headers[":event-type"], data: json(payload) };
-			else {
-				const { bytes } = json(payload);
-				const data = json(Buffer.from(String(bytes), "base64"));
-				delete data["amazon-bedrock-invocationMetrics"];
-				yield { event: data.type, data };
-			}
-		}
+		for await (const frame of frames(source)) yield message(frame, kind);
 	} catch (cause) {
 		// A stream that cannot be read (a bad checksum, a cut frame, a dropped connection) ends like one that failed: with an error message.
 		yield { event: "error", data: { type: "error", error: { type: cause.type ?? "api_error", message: cause.message } } };

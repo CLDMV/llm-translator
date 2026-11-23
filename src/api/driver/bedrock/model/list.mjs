@@ -44,9 +44,13 @@ export async function list({ endpoint, transport, signal, timeout }) {
 	let headers;
 	try {
 		url = listUrl(endpoint.url);
-		headers = authenticate(endpoint, { method: "GET", url, headers: { accept: "application/json" }, body: "" });
+		headers = await authenticate(
+			endpoint,
+			{ method: "GET", url, headers: { accept: "application/json" }, body: "" },
+			{ transport, timeout, signal }
+		);
 	} catch {
-		// A base URL that does not parse, or an upstream with no credential or region: there is nothing to ask.
+		// A base URL that does not parse, or an upstream with no credential or region, or a credential source that fails: there is nothing to ask.
 		return null;
 	}
 	const result = await http.json(transport, url, { method: "GET", headers, signal, timeout });
