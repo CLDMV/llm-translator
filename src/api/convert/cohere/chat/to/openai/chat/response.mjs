@@ -30,7 +30,7 @@ import { completion, folded } from "../../../../../../../lib/cohere.mjs";
  * @throws {import("../../../../../../../lib/errors.mjs").TranslatorError} When the reply has no message or ends in a failure.
  */
 export function response(reply, state, settings) {
-	const out = completion(reply, { reasoningField: resolve(settings).reasoningField, model: state?.model });
+	const out = completion(reply, { reasoningField: resolve(settings).reasoningField, model: state?.model, state });
 	if (state) state.upstreamUsage = folded(reply.usage);
 	return out;
 }

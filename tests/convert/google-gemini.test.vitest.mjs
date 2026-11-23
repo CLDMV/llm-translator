@@ -39,13 +39,13 @@ const text = [
 const sse = (list) => list.map((entry) => `data: ${JSON.stringify(entry)}\n\n`).join("");
 
 describe("request converters", () => {
-	it("Chat Completions: needs messages, keeps the error marker unless toolErrors is off", () => {
-		expect(() => fromChat({ model: "m" })).toThrow(/messages: Field required/);
-		expect(() => fromChat(null)).toThrow(/messages: Field required/);
-		const on = fromChat({ model: "m", tools: chatTools, messages: result }, {});
+	it("Chat Completions: needs messages, keeps the error marker unless toolErrors is off", async () => {
+		await expect(fromChat({ model: "m" })).rejects.toThrow(/messages: Field required/);
+		await expect(fromChat(null)).rejects.toThrow(/messages: Field required/);
+		const on = await fromChat({ model: "m", tools: chatTools, messages: result }, {});
 		expect(on.body.contents[0].parts[0].functionResponse.response).toEqual({ error: "bad" });
 		expect(on.state).toMatchObject({ front: "openai", model: "m", stream: false, includeUsage: false });
-		const off = fromChat(
+		const off = await fromChat(
 			{ model: "m", tools: chatTools, stream: true, stream_options: { include_usage: true }, messages: result },
 			{ toolErrors: false, sampling: { topK: 3 } }
 		);
@@ -81,6 +81,88 @@ describe("request converters", () => {
 			const plain = await fromAnthropic({ model: "m", max_tokens: 5, metadata: { sampling: asked }, messages }, { sampling: { a: 1 } });
 			expect(plain.body.generationConfig).toMatchObject({ a: 1 });
 		}
+	});
+});
+
+describe("request converters: documents, server tools, thinking and the cache plan", () => {
+	const pdf = { type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0=" } };
+	const pdfUrl = { type: "document", source: { type: "url", url: "https://example.com/p.pdf" } };
+	const text = { type: "document", source: { type: "text", media_type: "text/plain", data: "plain words" } };
+	const withDocs = {
+		model: "m",
+		max_tokens: 5,
+		messages: [{ role: "user", content: [{ type: "text", text: "read" }, pdf, pdfUrl, text] }]
+	};
+	const parts = (out) => out.body.contents[0].parts;
+
+	it("sends PDFs whole and expands other documents, unless the settings say otherwise", async () => {
+		const out = await fromAnthropic(withDocs);
+		expect(parts(out).map((part) => Object.keys(part)[0])).toEqual(["text", "inlineData", "fileData", "text"]);
+		expect(parts(out)[2].fileData).toEqual({ fileUri: "https://example.com/p.pdf", mimeType: "application/pdf" });
+		expect(parts(out)[3].text).toContain("plain words");
+		const note = await fromAnthropic(withDocs, { documents: "note" });
+		expect(JSON.stringify(parts(note))).not.toMatch(/inlineData|fileData/);
+		const own = await fromAnthropic(withDocs, { documentConverter: () => [{ type: "text", text: "converted" }] });
+		expect(JSON.stringify(parts(own))).not.toMatch(/inlineData|fileData/);
+		const none = await fromAnthropic(withDocs, { images: false });
+		expect(JSON.stringify(parts(none))).not.toContain("inlineData");
+	});
+
+	it("maps server tools to built-in tools, adaptive thinking to a dynamic budget, and keeps the parallel and candidate state", async () => {
+		const out = await fromAnthropic(
+			{
+				model: "m",
+				max_tokens: 5,
+				thinking: { type: "adaptive" },
+				tool_choice: { type: "auto", disable_parallel_tool_use: true },
+				tools: [
+					...tools,
+					{ type: "web_search_20250305", name: "web_search" },
+					{ type: "weird_1", name: "weird" },
+					{ type: 5, name: "odd" }
+				],
+				messages
+			},
+			{},
+			{ model: "gemini-2.5-flash" }
+		);
+		expect(out.body.tools.map((entry) => Object.keys(entry)[0])).toEqual(["functionDeclarations", "googleSearch"]);
+		expect(out.body.generationConfig.thinkingConfig).toEqual({ includeThoughts: true, thinkingBudget: -1 });
+		expect(out.state).toMatchObject({ parallel: false, candidates: 1 });
+		expect(out.state.dropped).toEqual(["tool:weird", "tool:odd"]);
+		const plain = await fromAnthropic({ model: "m", max_tokens: 5, messages });
+		expect(plain.state.parallel).toBe(true);
+		expect(plain.state.cache).toBeUndefined();
+	});
+
+	it("plans a cached content for a cache_control breakpoint, and not when the setting or the prefix says no", async () => {
+		const system = [{ type: "text", text: "Be careful. ".repeat(500), cache_control: { type: "ephemeral", ttl: "1h" } }];
+		const body = { model: "m", max_tokens: 5, system, messages };
+		const planned = await fromAnthropic(body);
+		expect(planned.state.cache).toMatchObject({ count: 0, ttl: 3600, systemInstruction: planned.body.systemInstruction });
+		expect((await fromAnthropic(body, { documents: "note" })).state.cache).toMatchObject({ count: 0 });
+		expect((await fromAnthropic(body, { gemini: { cache: false } })).state.cache).toBeUndefined();
+		expect((await fromAnthropic(body, { gemini: { cachedContent: "cachedContents/a" } })).state.cache).toBeUndefined();
+		const small = await fromAnthropic({ ...body, system: [{ type: "text", text: "short", cache_control: { type: "ephemeral" } }] });
+		expect(small.state.cache).toBeUndefined();
+		const tail = await fromAnthropic({
+			model: "m",
+			max_tokens: 5,
+			messages: [{ role: "user", content: [{ type: "text", text: "x".repeat(5000), cache_control: { type: "ephemeral" } }] }]
+		});
+		expect(tail.state.cache).toBeUndefined();
+	});
+
+	it("Chat Completions: keeps n, parallel_tool_calls and the audio format on the state, and sends the gemini setting", async () => {
+		const out = await fromChat(
+			{ model: "m", messages, n: 3, parallel_tool_calls: false, audio: { format: "pcm16" } },
+			{ gemini: { safetySettings: [{ category: "c", threshold: "t" }] } },
+			{ model: "gemini-2.5-flash" }
+		);
+		expect(out.state).toMatchObject({ candidates: 3, parallel: false, audio: "pcm16" });
+		expect(out.body.safetySettings).toHaveLength(1);
+		expect((await fromChat({ model: "m", messages, n: 50 })).state.candidates).toBe(8);
+		expect((await fromChat({ model: "m", messages })).state).toMatchObject({ candidates: 1, parallel: true });
 	});
 });
 

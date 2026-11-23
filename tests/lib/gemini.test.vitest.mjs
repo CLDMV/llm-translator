@@ -97,7 +97,7 @@ describe("chatBody: messages", () => {
 				stop: "END",
 				stream_options: { include_usage: true },
 				user: "u",
-				logprobs: true
+				logit_bias: { 1: 5 }
 			},
 			{ dropped, sampling: { candidateCount: 1, temperature: 2 } }
 		);
@@ -120,7 +120,7 @@ describe("chatBody: messages", () => {
 				stopSequences: ["END"]
 			}
 		});
-		expect(dropped).toEqual(["messages.other", "logprobs"]);
+		expect(dropped).toEqual(["messages.other", "logit_bias"]);
 		expect(chatBody({ messages: [{ role: "user", content: "x" }], max_tokens: 3, stop: ["a", "b"], n: 3 }).generationConfig).toEqual({
 			maxOutputTokens: 3,
 			stopSequences: ["a", "b"],
@@ -128,9 +128,20 @@ describe("chatBody: messages", () => {
 		});
 		expect(chatBody({ messages: [{ role: "user", content: "x" }], n: 1, temperature: null, stop: null }).generationConfig).toBeUndefined();
 		expect(chatBody({}).contents).toEqual([]);
+		const quiet = [];
+		chatBody({ messages: [], metadata: { a: 1 }, store: true, service_tier: "auto", user: "u", stream_options: {} }, { dropped: quiet });
+		expect(quiet).toEqual([]);
+		expect(
+			chatBody({
+				messages: [
+					{ role: "user", content: null },
+					{ role: "user", content: 5 }
+				]
+			}).contents
+		).toEqual([]);
 	});
 
-	it("sends base64 images and files as bytes and says so when it cannot send an image", () => {
+	it("sends images, files and audio as bytes or as references, and says so when it cannot send one", () => {
 		const dropped = [];
 		const out = chatBody(
 			{
@@ -140,13 +151,26 @@ describe("chatBody: messages", () => {
 						content: [
 							{ type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } },
 							{ type: "image_url", image_url: `data:image/jpeg;base64,${PNG}` },
-							{ type: "image_url", image_url: { url: "https://example.com/a.png" } },
+							{ type: "image_url", image_url: { url: "https://example.com/a.png?sig=1" } },
 							{ type: "image_url" },
 							{ type: "image_url", image_url: { url: `data:image/gif;base64,${PNG}` } },
 							{ type: "image_url", image_url: { url: `data:application/pdf;base64,${PNG}` } },
+							{ type: "image_url", image_url: { url: "https://example.com/image" } },
+							{ type: "image_url", image_url: { url: "https://example.com/a.gif" } },
+							{ type: "image_url", image_url: { url: "gs://bucket/o.webp" } },
+							{ type: "image_url", image_url: { url: "https://generativelanguage.googleapis.com/v1beta/files/abc" } },
+							{ type: "image_url", image_url: { url: "https://example.com/doc", mime_type: "application/pdf" } },
+							{ type: "image_url", image_url: { url: "https://example.com/x", mime_type: "image/gif" } },
+							{ type: "image_url", image_url: { url: "ftp://example.com/a.png" } },
 							{ type: "file", file: { file_data: `data:application/pdf;base64,${PNG}` } },
+							{ type: "file", file: { file_id: "https://example.com/a.pdf" } },
+							{ type: "file", file: { file_id: "https://www.youtube.com/watch?v=abc" } },
 							{ type: "file", file: { file_id: "f" } },
-							{ type: "input_audio" },
+							{ type: "file" },
+							{ type: "input_audio", input_audio: { data: "QUJD", format: "MP3" } },
+							{ type: "input_audio", input_audio: { data: "QUJD" } },
+							{ type: "input_audio", input_audio: { data: "QUJD", format: "xyz" } },
+							{ type: "input_audio", input_audio: {} },
 							{}
 						]
 					}
@@ -154,15 +178,28 @@ describe("chatBody: messages", () => {
 			},
 			{ dropped }
 		);
-		const parts = out.contents[0].parts;
-		expect(parts[0]).toEqual({ inlineData: { mimeType: "image/png", data: PNG } });
-		expect(parts[1]).toEqual({ inlineData: { mimeType: "image/jpeg", data: PNG } });
-		expect(parts[2].text).toMatch(/does not fetch URLs/);
-		expect(parts[3].text).toMatch(/does not fetch URLs/);
-		expect(parts[4].text).toMatch(/does not fetch URLs/);
-		expect(parts[5]).toEqual({ inlineData: { mimeType: "application/pdf", data: PNG } });
-		expect(parts[6]).toEqual({ inlineData: { mimeType: "application/pdf", data: PNG } });
-		expect(parts).toHaveLength(7);
+		const note = expect.stringMatching(/Gemini cannot read it/);
+		expect(out.contents[0].parts).toEqual([
+			{ inlineData: { mimeType: "image/png", data: PNG } },
+			{ inlineData: { mimeType: "image/jpeg", data: PNG } },
+			{ fileData: { fileUri: "https://example.com/a.png?sig=1", mimeType: "image/png" } },
+			{ text: note },
+			{ text: note },
+			{ inlineData: { mimeType: "application/pdf", data: PNG } },
+			{ fileData: { fileUri: "https://example.com/image", mimeType: "image/jpeg" } },
+			{ text: note },
+			{ fileData: { fileUri: "gs://bucket/o.webp", mimeType: "image/webp" } },
+			{ fileData: { fileUri: "https://generativelanguage.googleapis.com/v1beta/files/abc" } },
+			{ fileData: { fileUri: "https://example.com/doc", mimeType: "application/pdf" } },
+			{ text: note },
+			{ text: note },
+			{ inlineData: { mimeType: "application/pdf", data: PNG } },
+			{ fileData: { fileUri: "https://example.com/a.pdf", mimeType: "application/pdf" } },
+			{ fileData: { fileUri: "https://www.youtube.com/watch?v=abc" } },
+			{ inlineData: { mimeType: "audio/mp3", data: "QUJD" } },
+			{ inlineData: { mimeType: "audio/wav", data: "QUJD" } },
+			{ inlineData: { mimeType: "audio/xyz", data: "QUJD" } }
+		]);
 		expect(dropped).toEqual(["image_url", "content.file", "content.input_audio", "content.part"]);
 	});
 });
@@ -243,7 +280,7 @@ describe("chatBody: tools", () => {
 		expect(JSON.stringify(failed.contents)).toContain("[Tool Read failed: missing]");
 	});
 
-	it("leaves a schema out when the tool takes nothing, drops $schema, and keeps the rest", () => {
+	it("gives each tool schema as Gemini takes it, and leaves it out when the tool takes nothing", () => {
 		const out = chatBody({
 			messages: [{ role: "user", content: "x" }],
 			tools: [
@@ -255,10 +292,15 @@ describe("chatBody: tools", () => {
 					type: "function",
 					function: {
 						name: "e",
-						parameters: { $schema: "x", type: "object", properties: { v: { type: "string" } }, additionalProperties: false }
+						parameters: {
+							$schema: "x",
+							type: "object",
+							properties: { v: { type: "string", pattern: "^a", default: "a" } },
+							additionalProperties: false
+						}
 					}
 				},
-				{ type: "function", function: { name: "f", parameters: { anyOf: [{ type: "string" }] } } }
+				{ type: "function", function: { name: "f", parameters: { oneOf: [{ type: "string" }] } } }
 			]
 		});
 		expect(out.tools[0].functionDeclarations).toEqual([
@@ -271,9 +313,11 @@ describe("chatBody: tools", () => {
 		]);
 	});
 
-	it("maps tool_choice to the calling mode", () => {
-		const call = (tool_choice, dropped = []) =>
-			chatBody({ messages: [{ role: "user", content: "x" }], tools: [tool], tool_choice }, { dropped }).toolConfig;
+	it("maps tool_choice to the calling mode, and allowed_tools to a mode or to the tools it lists", () => {
+		const two = [tool, { type: "function", function: { name: "Write", parameters: { type: "object" } } }];
+		const ask = (tool_choice, dropped = []) =>
+			chatBody({ messages: [{ role: "user", content: "x" }], tools: two, tool_choice }, { dropped });
+		const call = (tool_choice, dropped) => ask(tool_choice, dropped).toolConfig;
 		expect(call("required")).toEqual({ functionCallingConfig: { mode: "ANY" } });
 		expect(call("none")).toEqual({ functionCallingConfig: { mode: "NONE" } });
 		expect(call({ type: "function", function: { name: "Read" } })).toEqual({
@@ -281,15 +325,40 @@ describe("chatBody: tools", () => {
 		});
 		expect(call("auto")).toBeUndefined();
 		expect(call(undefined)).toBeUndefined();
+		const only = (mode) => ({
+			type: "allowed_tools",
+			allowed_tools: { mode, tools: [{ type: "function", function: { name: "Read" } }, {}, null] }
+		});
+		expect(call(only("required"))).toEqual({ functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["Read"] } });
+		expect(call(only("auto"))).toBeUndefined();
+		expect(ask(only("auto")).tools[0].functionDeclarations.map((entry) => entry.name)).toEqual(["Read"]);
+		expect(ask(only("required")).tools[0].functionDeclarations).toHaveLength(2);
+		const bare = ask({ type: "allowed_tools" });
+		expect(bare.tools).toBeUndefined();
+		expect(bare.toolConfig).toBeUndefined();
 		const dropped = [];
-		expect(call({ type: "allowed_tools" }, dropped)).toBeUndefined();
+		expect(call({ type: "weird" }, dropped)).toBeUndefined();
 		expect(dropped).toEqual(["tool_choice"]);
 		expect(chatBody({ messages: [], tool_choice: "required" }).toolConfig).toBeUndefined();
 	});
+
+	it("adds the built-in tools of the setting and of the request, with or without function tools", () => {
+		const gemini = { tools: [{ googleSearch: {} }], builtin: [{ codeExecution: {} }] };
+		const mixed = chatBody({ messages: [{ role: "user", content: "x" }], tools: [tool] }, { gemini });
+		expect(mixed.tools.map((entry) => Object.keys(entry)[0])).toEqual(["functionDeclarations", "googleSearch", "codeExecution"]);
+		const alone = chatBody({ messages, tool_choice: "required" }, { gemini });
+		expect(alone.tools).toEqual([{ googleSearch: {} }, { codeExecution: {} }]);
+		expect(alone.toolConfig).toBeUndefined();
+		expect(JSON.stringify(alone.contents)).not.toContain("functionCall");
+		expect(chatBody({ messages: [{ role: "user", content: "x" }] }, { gemini: { builtin: [{ urlContext: {} }] } }).tools).toEqual([
+			{ urlContext: {} }
+		]);
+	});
 });
 
-describe("chatBody: thinking and structured output", () => {
+describe("chatBody: thinking", () => {
 	const ask = (extra, context, dropped = []) => chatBody({ messages: [{ role: "user", content: "x" }], ...extra }, { dropped, ...context });
+	const thinking = (model, extra, context) => ask({ model, ...extra }, context).generationConfig?.thinkingConfig;
 
 	it("an explicit budget wins over an effort", () => {
 		expect(ask({ reasoning_effort: "low" }, { thinkingBudget: 2000 }).generationConfig.thinkingConfig).toEqual({
@@ -313,9 +382,33 @@ describe("chatBody: thinking and structured output", () => {
 		expect(dropped).toEqual(["reasoning_effort"]);
 	});
 
+	it("keeps a budget inside the range of its 2.5 family: Pro cannot be switched off, Flash-Lite thinks in at least 512 tokens", () => {
+		expect(thinking("gemini-2.5-pro", { reasoning_effort: "none" })).toEqual({ thinkingBudget: 128 });
+		expect(thinking("gemini-2.5-pro", { reasoning_effort: "minimal" })).toEqual({ includeThoughts: true, thinkingBudget: 512 });
+		expect(thinking("gemini-2.5-pro", {}, { thinkingBudget: 50 })).toEqual({ includeThoughts: true, thinkingBudget: 128 });
+		expect(thinking("gemini-2.5-pro", {}, { thinkingBudget: 0 })).toEqual({ includeThoughts: true, thinkingBudget: 128 });
+		expect(thinking("gemini-2.5-pro", {}, { thinkingBudget: 99999 })).toEqual({ includeThoughts: true, thinkingBudget: 32768 });
+		expect(thinking("models/gemini-2.5-flash-lite", { reasoning_effort: "none" })).toEqual({ thinkingBudget: 512 });
+		expect(thinking("gemini-2.5-flash-lite", {}, { thinkingBudget: 100 })).toEqual({ includeThoughts: true, thinkingBudget: 512 });
+		expect(thinking("gemini-2.5-flash", { reasoning_effort: "none" })).toEqual({ thinkingBudget: 0 });
+		expect(thinking("gemini-2.5-flash", {}, { thinkingBudget: 30000 })).toEqual({ includeThoughts: true, thinkingBudget: 24576 });
+		expect(thinking("gemini-2.5-flash-preview-05-20", {}, { thinkingBudget: 30000 })).toEqual({
+			includeThoughts: true,
+			thinkingBudget: 24576
+		});
+		expect(thinking("gemini-2.5-flashy", {}, { thinkingBudget: 30000 })).toEqual({ includeThoughts: true, thinkingBudget: 30000 });
+	});
+
+	it("asks for dynamic thinking: a budget of -1, or the model's own default level", () => {
+		expect(thinking("gemini-2.5-flash", {}, { thinkingDynamic: true })).toEqual({ includeThoughts: true, thinkingBudget: -1 });
+		expect(thinking("gemini-2.5-pro", { reasoning_effort: "dynamic" })).toEqual({ includeThoughts: true, thinkingBudget: -1 });
+		expect(thinking("gemini-3-flash-preview", {}, { thinkingDynamic: true })).toEqual({ includeThoughts: true });
+		expect(thinking("gemini-3-flash-preview", { reasoning_effort: "dynamic" })).toEqual({ includeThoughts: true });
+	});
+
 	it("a Gemini 3 model gets a thinking level, moved to one the model has, and never a budget", () => {
-		const level = (model, extra, context) => ask({ model, ...extra }, context).generationConfig?.thinkingConfig;
 		const flash = "gemini-3-flash-preview";
+		const level = (model, extra, context) => thinking(model, extra, context);
 		expect(level(flash, { reasoning_effort: "minimal" })).toEqual({ includeThoughts: true, thinkingLevel: "MINIMAL" });
 		expect(level(flash, { reasoning_effort: "low" })).toEqual({ includeThoughts: true, thinkingLevel: "LOW" });
 		expect(level(flash, { reasoning_effort: "medium" })).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
@@ -345,12 +438,29 @@ describe("chatBody: thinking and structured output", () => {
 		expect(level("alias", { reasoning_effort: "low" }, { model: flash })).toEqual({ includeThoughts: true, thinkingLevel: "LOW" });
 	});
 
-	it("maps response_format to a MIME type and a JSON Schema", () => {
+	it("the gemini.thinking setting says what a model that is not recognized by its name takes", () => {
+		const control = (thinking_, model, extra = { reasoning_effort: "medium" }) =>
+			thinking(model, extra, { gemini: { thinking: thinking_ } });
+		expect(control("level", "my-tuned-model")).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
+		expect(control("level", "gemini-exp-1206")).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
+		expect(control("level", "gemini-2.0-flash")).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
+		expect(control("budget", "gemini-3-flash-preview")).toEqual({ includeThoughts: true, thinkingBudget: 8192 });
+		expect(control("auto", "my-tuned-model")).toEqual({ includeThoughts: true, thinkingBudget: 8192 });
+		expect(control("auto", "gemini-2.0-flash")).toEqual({ includeThoughts: true, thinkingBudget: 8192 });
+	});
+});
+
+describe("chatBody: structured output, logprobs, modalities, audio and the settings", () => {
+	const ask = (extra, context, dropped = []) => chatBody({ messages: [{ role: "user", content: "x" }], ...extra }, { dropped, ...context });
+
+	it("maps response_format to a MIME type and a JSON Schema as Gemini takes it", () => {
 		const format = (response_format, dropped = []) => ask({ response_format }, {}, dropped).generationConfig;
 		expect(format({ type: "json_object" })).toEqual({ responseMimeType: "application/json" });
-		expect(format({ type: "json_schema", json_schema: { name: "o", schema: { type: "object" } } })).toEqual({
+		expect(
+			format({ type: "json_schema", json_schema: { name: "o", schema: { $schema: "x", type: "object", oneOf: [{ type: "string" }] } } })
+		).toEqual({
 			responseMimeType: "application/json",
-			responseJsonSchema: { type: "object" }
+			responseJsonSchema: { type: "object", anyOf: [{ type: "string" }] }
 		});
 		expect(format({ type: "json_schema", json_schema: { name: "o" } })).toEqual({ responseMimeType: "application/json" });
 		expect(format({ type: "text" })).toBeUndefined();
@@ -359,12 +469,106 @@ describe("chatBody: thinking and structured output", () => {
 		expect(format({ type: "xml" }, dropped)).toBeUndefined();
 		expect(dropped).toEqual(["response_format"]);
 	});
+
+	it("maps logprobs and top_logprobs", () => {
+		const config = (extra, dropped = []) => ask(extra, {}, dropped).generationConfig;
+		expect(config({ logprobs: true })).toEqual({ responseLogprobs: true });
+		expect(config({ logprobs: true, top_logprobs: 5 })).toEqual({ responseLogprobs: true, logprobs: 5 });
+		expect(config({ logprobs: true, top_logprobs: 99 })).toEqual({ responseLogprobs: true, logprobs: 20 });
+		expect(config({ logprobs: true, top_logprobs: -3 })).toEqual({ responseLogprobs: true, logprobs: 0 });
+		expect(config({ logprobs: true, top_logprobs: "x" })).toEqual({ responseLogprobs: true });
+		expect(config({ logprobs: false })).toBeUndefined();
+		expect(config({ logprobs: null })).toBeUndefined();
+		const dropped = [];
+		expect(config({ logprobs: "yes" }, dropped)).toBeUndefined();
+		expect(dropped).toEqual(["logprobs"]);
+	});
+
+	it("maps modalities, audio output and the image model default", () => {
+		const config = (extra, context, dropped = []) => ask(extra, context, dropped).generationConfig;
+		expect(config({ modalities: ["text", "image"] })).toEqual({ responseModalities: ["TEXT", "IMAGE"] });
+		const dropped = [];
+		expect(config({ modalities: ["text", "video"] }, {}, dropped)).toEqual({ responseModalities: ["TEXT"] });
+		expect(config({ modalities: ["video"] }, {}, dropped)).toBeUndefined();
+		expect(dropped).toEqual(["modalities"]);
+		expect(config({ model: "gemini-2.5-flash-image" })).toEqual({ responseModalities: ["TEXT", "IMAGE"] });
+		expect(config({ model: "gemini-2.5-flash" })).toBeUndefined();
+		expect(config({ model: "x" }, { model: "gemini-3-pro-image-preview" })).toEqual({ responseModalities: ["TEXT", "IMAGE"] });
+		expect(config({ model: "gemini-2.5-flash-image", modalities: ["image"] })).toEqual({ responseModalities: ["IMAGE"] });
+		expect(config({ audio: { voice: "Kore", format: "wav" } })).toEqual({
+			responseModalities: ["AUDIO"],
+			speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } }
+		});
+		expect(config({ modalities: ["text", "audio"], audio: { format: "pcm16" } })).toEqual({ responseModalities: ["TEXT", "AUDIO"] });
+		expect(config({ audio: { voice: "", format: "PCM" } })).toEqual({ responseModalities: ["AUDIO"] });
+		expect(config({ audio: {} }, { gemini: { responseModalities: ["TEXT", "AUDIO"] } })).toEqual({ responseModalities: ["TEXT", "AUDIO"] });
+		expect(() => ask({ audio: { format: "aac" } })).toThrow(/audio\.format/);
+		expect(chatBody({ messages: [], audio: null }).generationConfig).toBeUndefined();
+	});
+
+	it("sends the settings: modalities, image and speech config, media resolution, safety settings", () => {
+		const safety = [{ category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }];
+		const out = ask(
+			{ audio: { voice: "Puck" } },
+			{
+				gemini: {
+					responseModalities: ["TEXT"],
+					imageConfig: { aspectRatio: "1:1" },
+					speechConfig: { languageCode: "en-US" },
+					mediaResolution: "MEDIA_RESOLUTION_LOW",
+					safetySettings: safety
+				}
+			}
+		);
+		expect(out.generationConfig).toEqual({
+			responseModalities: ["TEXT"],
+			imageConfig: { aspectRatio: "1:1" },
+			speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
+			mediaResolution: "MEDIA_RESOLUTION_LOW"
+		});
+		expect(out.safetySettings).toEqual(safety);
+		expect(ask({}, { gemini: { safetySettings: [], speechConfig: { a: 1 } } }).safetySettings).toBeUndefined();
+		expect(ask({}, { gemini: { speechConfig: { a: 1 } } }).generationConfig).toEqual({ speechConfig: { a: 1 } });
+	});
+
+	it("a cached content replaces what it holds: the system instruction, the tools and the tool config", () => {
+		const dropped = [];
+		const out = chatBody(
+			{
+				messages: [
+					{ role: "system", content: "s" },
+					{ role: "user", content: "x" }
+				],
+				tools: [tool],
+				tool_choice: "required"
+			},
+			{ dropped, gemini: { cachedContent: "cachedContents/abc" } }
+		);
+		expect(out.cachedContent).toBe("cachedContents/abc");
+		expect(out.systemInstruction).toBeUndefined();
+		expect(out.tools).toBeUndefined();
+		expect(out.toolConfig).toBeUndefined();
+		expect(dropped).toEqual(["systemInstruction", "tools", "toolConfig"]);
+		const bare = [];
+		expect(chatBody({ messages: [{ role: "user", content: "x" }] }, { dropped: bare, gemini: { cachedContent: "c" } })).toEqual({
+			contents: [{ role: "user", parts: [{ text: "x" }] }],
+			cachedContent: "c"
+		});
+		expect(bare).toEqual([]);
+	});
 });
 
 describe("chatBody: thought signatures", () => {
 	const detail = (extra) => ({ type: "reasoning.encrypted", format: FORMAT, index: 0, ...extra });
+	const assistant = (extra) =>
+		chatBody({
+			messages: [
+				{ role: "user", content: "x" },
+				{ role: "assistant", ...extra }
+			]
+		}).contents[1]?.parts;
 
-	it("sends each signature back on the part it came from", () => {
+	it("sends each signature back on the part it came from, and the first call of a turn with none gets the placeholder", () => {
 		const dropped = [];
 		const out = chatBody(
 			{
@@ -404,6 +608,54 @@ describe("chatBody: thought signatures", () => {
 		]);
 		expect(out.contents).toHaveLength(2);
 		expect(dropped).toEqual([]);
+	});
+
+	it("puts a signature where its part ended in the text, counted from the end, so trimmed text still lines up", () => {
+		expect(
+			assistant({
+				content: "ABCDEF",
+				reasoning_details: [detail({ data: "S1", for: "text", rest: 3 }), detail({ data: "S2", for: "text", rest: 0 })]
+			})
+		).toEqual([
+			{ text: "ABC", thoughtSignature: "S1" },
+			{ text: "DEF", thoughtSignature: "S2" }
+		]);
+		expect(assistant({ content: "ABCDEF", reasoning_details: [detail({ data: "S", for: "text", rest: 2 })] })).toEqual([
+			{ text: "ABCD", thoughtSignature: "S" },
+			{ text: "EF" }
+		]);
+		expect(assistant({ content: "CDEF", reasoning_details: [detail({ data: "S", for: "text", rest: 2 })] })).toEqual([
+			{ text: "CD", thoughtSignature: "S" },
+			{ text: "EF" }
+		]);
+		expect(assistant({ content: "AB", reasoning_details: [detail({ data: "S", for: "text", rest: 9 })] })).toEqual([
+			{ text: "", thoughtSignature: "S" },
+			{ text: "AB" }
+		]);
+		expect(
+			assistant({
+				content: [
+					{ type: "text", text: "AB" },
+					{ type: "text", text: "CD" }
+				],
+				reasoning_details: [detail({ data: "S", for: "text", rest: 0 }), detail({ data: "Z", for: "text", rest: -1 })]
+			})
+		).toEqual([{ text: "ABCD", thoughtSignature: "S" }]);
+		expect(assistant({ content: "", reasoning_details: [detail({ data: "S", for: "text", rest: 0 })] })).toBeUndefined();
+	});
+
+	it("sends a signed thought back as a thought part and leaves unsigned thought text out", () => {
+		expect(assistant({ content: "A", reasoning: "think", reasoning_details: [detail({ data: "TH", for: "thought", rest: 0 })] })).toEqual([
+			{ text: "think", thought: true, thoughtSignature: "TH" },
+			{ text: "A" }
+		]);
+		expect(assistant({ content: "A", reasoning: "onetwo", reasoning_details: [detail({ data: "TH", for: "thought", rest: 3 })] })).toEqual([
+			{ text: "one", thought: true, thoughtSignature: "TH" },
+			{ text: "A" }
+		]);
+		expect(
+			assistant({ content: "A", reasoning_content: "think", reasoning_details: [detail({ data: "S", for: "text", rest: 0 })] })
+		).toEqual([{ text: "A", thoughtSignature: "S" }]);
 	});
 
 	it("a first function call with no signature gets Google's placeholder, once per model turn, and a real signature is kept", () => {
@@ -447,7 +699,8 @@ describe("finishOf, usageOf and folded", () => {
 			expect(finishOf(reason, false), reason).toBe("content_filter");
 		}
 		for (const reason of ["MALFORMED_FUNCTION_CALL", "OTHER", "MISSING_THOUGHT_SIGNATURE", "SOMETHING_NEW", "toString"]) {
-			expect(finishOf(reason, false), reason).toBe("error");
+			expect(finishOf(reason, false), reason).toBe("stop");
+			expect(finishOf(reason, true), reason).toBe("tool_calls");
 		}
 	});
 
@@ -486,21 +739,252 @@ describe("finishOf, usageOf and folded", () => {
 	});
 });
 
+describe("cache creation tokens", () => {
+	const meta = { promptTokenCount: 1600, candidatesTokenCount: 5, cachedContentTokenCount: 1500 };
+
+	it("reports what a request wrote as cache_write_tokens, out of the cached count, and as creation in the Anthropic shape", () => {
+		expect(usageOf(meta)).toMatchObject({ prompt_tokens: 1600, prompt_tokens_details: { cached_tokens: 1500 } });
+		expect(usageOf(meta, 1500)).toEqual({
+			prompt_tokens: 1600,
+			completion_tokens: 5,
+			total_tokens: 1605,
+			prompt_tokens_details: { cache_write_tokens: 1500 }
+		});
+		expect(usageOf(meta, 1000).prompt_tokens_details).toEqual({ cached_tokens: 500, cache_write_tokens: 1000 });
+		expect(usageOf({ promptTokenCount: 5, candidatesTokenCount: 1 }, 7).prompt_tokens_details).toEqual({ cache_write_tokens: 7 });
+		expect(folded(meta, 1500)).toEqual({
+			input_tokens: 100,
+			output_tokens: 5,
+			cache_read_input_tokens: 0,
+			cache_creation_input_tokens: 1500
+		});
+		expect(folded(meta)).toMatchObject({ cache_read_input_tokens: 1500, cache_creation_input_tokens: 0 });
+	});
+
+	it("puts them on a completion and on the stream's usage chunk", () => {
+		const reply = { candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }], usageMetadata: meta };
+		expect(completion(reply, { cacheCreated: 1500 }).usage.prompt_tokens_details).toEqual({ cache_write_tokens: 1500 });
+		const chunker = createChunker({ cacheCreated: 1500 });
+		const out = chunker.event({ ...reply });
+		expect(out.at(-1).usage.prompt_tokens_details).toEqual({ cache_write_tokens: 1500 });
+	});
+});
+
+describe("computer use in the conversion", () => {
+	const size = { width: 2000, height: 1000 };
+	const reply = (parts) => ({ candidates: [{ index: 0, content: { parts }, finishReason: "STOP" }] });
+	const fn = (name, args, id, thoughtSignature) => ({
+		functionCall: { id, name, args },
+		...(thoughtSignature === undefined ? {} : { thoughtSignature })
+	});
+	const computer = { size, custom: new Set(["click"]) };
+
+	it("writes the history as function calls when the only tool is the computer tool, with the screenshot in the response", () => {
+		const shots = new Map([["a", { mimeType: "image/png", data: "AAAA" }]]);
+		const body = {
+			messages: [
+				{ role: "user", content: "go" },
+				{
+					role: "assistant",
+					content: "",
+					tool_calls: [{ id: "a", type: "function", function: { name: "take_screenshot", arguments: "{}" } }]
+				},
+				{ role: "tool", tool_call_id: "a", content: "OK" }
+			]
+		};
+		const out = chatBody(body, { computer: { images: shots } });
+		expect(out.contents[1].parts[0].functionCall).toMatchObject({ id: "a", name: "take_screenshot" });
+		expect(out.contents[2].parts[0].functionResponse).toEqual({
+			id: "a",
+			name: "take_screenshot",
+			response: { output: "OK" },
+			parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }]
+		});
+		expect(JSON.stringify(chatBody(body).contents)).toContain("[Called tool take_screenshot");
+	});
+
+	it("turns Gemini's actions into computer calls with the ids of one Gemini call, and signs the call it came from", () => {
+		const out = completion(
+			reply([fn("type", { text: "hi", press_enter: true }, "g1", "SIG"), fn("click", { x: 1, y: 1 }, "own"), fn("wait", {}, "g3")]),
+			{ computer }
+		);
+		const calls = out.choices[0].message.tool_calls;
+		expect(calls.map((call) => [call.id, call.function.name, JSON.parse(call.function.arguments)])).toEqual([
+			["g1__0of2", "computer", { action: "type", text: "hi" }],
+			["g1__1of2", "computer", { action: "key", text: "Return" }],
+			["own", "click", { x: 1, y: 1 }],
+			["g3", "computer", { action: "wait", duration: 1 }]
+		]);
+		expect(out.choices[0].message.reasoning_details).toEqual([
+			{ type: "reasoning.encrypted", format: FORMAT, index: 0, data: "SIG", for: "call", id: "g1" }
+		]);
+	});
+
+	it("gives the signature of a key held for a click to the click, and keeps a signature the click has itself", () => {
+		const held = completion(
+			reply([
+				fn("key_down", { key: "Control" }, "d", "SIG-D"),
+				fn("click", { x: 500, y: 500 }, "c"),
+				fn("key_up", { key: "Control" }, "u")
+			]),
+			{
+				computer: { size, custom: new Set() }
+			}
+		).choices[0].message;
+		expect(held.tool_calls.map((call) => call.id)).toEqual(["c"]);
+		expect(held.reasoning_details).toEqual([
+			{ type: "reasoning.encrypted", format: FORMAT, index: 0, data: "SIG-D", for: "call", id: "c" }
+		]);
+		const own = completion(
+			reply([
+				fn("key_down", { key: "Control" }, "d", "SIG-D"),
+				fn("click", { x: 500, y: 500 }, "c", "SIG-C"),
+				fn("key_up", { key: "Control" }, "u")
+			]),
+			{
+				computer: { size, custom: new Set() }
+			}
+		).choices[0].message;
+		expect(own.reasoning_details.map((item) => item.data)).toEqual(["SIG-C"]);
+		expect(() => completion(reply([fn("key_down", { key: "Control" }, "d")]), { computer: { size, custom: new Set() } })).toThrow(
+			/never closes it/
+		);
+	});
+
+	it("names the toolset's calls by the member, with no action in the input", () => {
+		const toolset = { size, custom: new Set(), shape: "toolset", enabled: new Set(["type", "key", "left_click"]) };
+		const out = completion(reply([fn("type", { text: "hi", press_enter: true }, "g1"), fn("click", { x: 500, y: 500 }, "g2")]), {
+			computer: toolset
+		});
+		expect(out.choices[0].message.tool_calls.map((call) => [call.id, call.function.name, JSON.parse(call.function.arguments)])).toEqual([
+			["g1__0of2", "type", { text: "hi" }],
+			["g1__1of2", "key", { text: "Return" }],
+			["g2", "left_click", { coordinate: [1000, 500] }]
+		]);
+		expect(() => completion(reply([fn("wait", {}, "g3")]), { computer: toolset })).toThrow(
+			/wait needs wait, which the client switched off/
+		);
+	});
+
+	it("keeps only the first action without parallel calls, and leaves a reply alone without the computer option", () => {
+		const two = reply([fn("take_screenshot", {}, "a"), fn("wait", {}, "b")]);
+		expect(completion(two, { computer, parallel: false }).choices[0].message.tool_calls).toHaveLength(1);
+		expect(completion(two).choices[0].message.tool_calls.map((call) => call.function.name)).toEqual(["take_screenshot", "wait"]);
+	});
+
+	it("streams the same calls, one chunk each", () => {
+		const chunker = createChunker({ computer });
+		const out = chunker.event({
+			candidates: [{ index: 0, content: { parts: [fn("type", { text: "hi", press_enter: true }, "g1", "SIG")] }, finishReason: "STOP" }]
+		});
+		const calls = out.flatMap((entry) => entry.choices[0]?.delta?.tool_calls ?? []);
+		expect(calls.map((call) => [call.index, call.id])).toEqual([
+			[0, "g1__0of2"],
+			[1, "g1__1of2"]
+		]);
+		expect(out.find((entry) => entry.choices[0]?.delta?.reasoning_details).choices[0].delta.reasoning_details[0]).toMatchObject({
+			for: "call",
+			id: "g1"
+		});
+	});
+});
+
+describe("grounding and citations in the conversion", () => {
+	const metadata = {
+		groundingMetadata: {
+			groundingChunks: [{ web: { uri: "https://a.example", title: "A" } }],
+			groundingSupports: [{ segment: { startIndex: 6, endIndex: 11 }, groundingChunkIndices: [0] }]
+		}
+	};
+	const reply = (parts, extra = {}) => ({ candidates: [{ index: 0, content: { parts }, finishReason: "STOP", ...metadata, ...extra }] });
+
+	it("a completion carries the annotations, over text parts that follow each other and across a code block", () => {
+		const out = completion(reply([{ text: "Hello " }, { text: "world" }]));
+		expect(out.choices[0].message.annotations).toEqual([
+			{
+				type: "url_citation",
+				url_citation: { start_index: 6, end_index: 11, title: "A", url: "https://a.example" },
+				citation: { kind: "web", url: "https://a.example", title: "A", span: { start: 6, end: 11 } }
+			}
+		]);
+		const code = completion(
+			reply([{ text: "Hi" }, { executableCode: { language: "PYTHON", code: "x" } }, { text: " yes there" }], {
+				groundingMetadata: {
+					...metadata.groundingMetadata,
+					groundingSupports: [{ segment: { startIndex: 1, endIndex: 4, partIndex: 1 }, groundingChunkIndices: [0] }]
+				}
+			})
+		);
+		const content = code.choices[0].message.content;
+		const span = code.choices[0].message.annotations[0].citation.span;
+		expect(content.slice(span.start, span.end)).toBe("yes");
+		expect(completion(reply([{ text: "x", thought: true }, { text: "Hello world" }])).choices[0].message.annotations).toHaveLength(1);
+		expect(completion(reply([{ text: "Hello world" }], { groundingMetadata: undefined })).choices[0].message.annotations).toBeUndefined();
+	});
+
+	it("the citations setting none leaves them out", () => {
+		expect(completion(reply([{ text: "Hello world" }]), { citations: "none" }).choices[0].message.annotations).toBeUndefined();
+		expect(completion(reply([{ text: "Hello world" }]), { citations: "auto" }).choices[0].message.annotations).toHaveLength(1);
+		const chunker = createChunker({ citations: "none" });
+		expect(chunker.event(reply([{ text: "Hello world" }])).some((entry) => entry.choices[0]?.delta?.annotations)).toBe(false);
+	});
+
+	it("a stream gives them in one chunk before the finish, from the latest metadata seen, spans in the streamed content", () => {
+		const chunker = createChunker({});
+		const first = chunker.event({
+			candidates: [{ index: 0, content: { parts: [{ text: "Hello " }] }, groundingMetadata: { groundingChunks: [] } }]
+		});
+		const second = chunker.event({
+			candidates: [{ index: 0, content: { parts: [{ text: "world" }] }, finishReason: "STOP", ...metadata }]
+		});
+		expect(first.some((entry) => entry.choices[0]?.delta?.annotations)).toBe(false);
+		const chunk = second.find((entry) => entry.choices[0]?.delta?.annotations);
+		expect(chunk.choices[0].delta.annotations[0].citation.span).toEqual({ start: 6, end: 11 });
+		const at = second.indexOf(chunk);
+		expect(second[at + 1].choices[0].finish_reason).toBe("stop");
+		const none = createChunker({});
+		expect(
+			none
+				.event({ candidates: [{ index: 0, content: { parts: [{ text: "x" }] }, finishReason: "STOP" }] })
+				.some((entry) => entry.choices[0]?.delta?.annotations)
+		).toBe(false);
+	});
+});
+
+describe("generated audio as a link", () => {
+	const audio = { inlineData: { mimeType: "audio/L16;codec=pcm;rate=24000", data: Buffer.from([1, 2]).toString("base64") } };
+	const reply = { candidates: [{ index: 0, content: { parts: [audio] }, finishReason: "STOP" }] };
+
+	it("is a data URI in the text for a front with no place for audio, in the format's MIME type", () => {
+		expect(completion(reply, { images: "text" }).choices[0].message.content).toMatch(/^\[audio\]\(data:audio\/wav;base64,UklGR/);
+		const pcm = completion(reply, { images: "text", audio: "pcm16" }).choices[0].message;
+		expect(pcm.content).toBe(`[audio](data:audio/L16;base64,${Buffer.from([1, 2]).toString("base64")})`);
+		expect(pcm.audio).toBeUndefined();
+		const chunker = createChunker({ images: "text", audio: "pcm" });
+		const out = chunker.event({ candidates: [{ index: 0, content: { parts: [{ text: "x" }, audio] }, finishReason: "STOP" }] });
+		expect(out.map((entry) => entry.choices[0]?.delta?.content).filter(Boolean)).toEqual(["x", "\n\n[audio](data:audio/L16;base64,AQI=)"]);
+	});
+});
+
 describe("completion", () => {
 	const reply = (parts, extra = {}) => ({
 		candidates: [{ index: 0, content: { role: "model", parts }, finishReason: "STOP", ...extra }],
 		usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 4 }
 	});
 
-	it("joins text, splits thoughts, makes tool calls and carries signatures", () => {
+	it("joins text, splits thoughts, makes tool calls and carries signatures with where they were", () => {
 		const out = completion(
 			reply([
-				{ text: "plan", thought: true },
+				{ text: "plan", thought: true, thoughtSignature: "TH" },
 				{ text: "Hello " },
 				{ text: "world", thoughtSignature: "T" },
 				{ functionCall: { id: "fc1", name: "Read", args: { path: "a" } }, thoughtSignature: "C" },
 				{ functionCall: { name: "Read" } },
-				{ inlineData: { mimeType: "image/png", data: PNG } },
+				{ inlineData: { mimeType: "video/mp4", data: "AAAA" } },
+				{ inlineData: { mimeType: "image/png" } },
+				{ inlineData: { data: "AAAA" } },
+				{ fileData: { fileUri: "x" } },
+				{ thoughtSignature: "" },
 				null
 			]),
 			{ model: "asked", reasoningField: "reasoning_content" }
@@ -511,13 +995,140 @@ describe("completion", () => {
 		expect(message.tool_calls[0]).toEqual({ id: "fc1", type: "function", function: { name: "Read", arguments: '{"path":"a"}' } });
 		expect(message.tool_calls[1].id).toMatch(/^call_/);
 		expect(message.tool_calls[1].function.arguments).toBe("{}");
+		expect(message.images).toBeUndefined();
 		expect(message.reasoning_details).toEqual([
-			{ type: "reasoning.encrypted", format: FORMAT, index: 0, data: "T", for: "text" },
-			{ type: "reasoning.encrypted", format: FORMAT, index: 1, data: "C", for: "call", id: "fc1" }
+			{ type: "reasoning.encrypted", format: FORMAT, index: 0, data: "TH", for: "thought", rest: 0 },
+			{ type: "reasoning.encrypted", format: FORMAT, index: 1, data: "T", for: "text", rest: 0 },
+			{ type: "reasoning.encrypted", format: FORMAT, index: 2, data: "C", for: "call", id: "fc1" }
 		]);
 		expect(out.choices[0].finish_reason).toBe("tool_calls");
 		expect(completion(reply([{ text: "x" }])).choices[0].message.content).toBe("x");
 		expect(completion(reply([{ text: "x" }])).model).toBeUndefined();
+	});
+
+	it("counts the text that follows a signed part, so it can be put back where it was", () => {
+		const out = completion(reply([{ text: "ab", thoughtSignature: "S" }, { text: "cd" }]));
+		expect(out.choices[0].message.reasoning_details).toEqual([
+			{ type: "reasoning.encrypted", format: FORMAT, index: 0, data: "S", for: "text", rest: 2 }
+		]);
+	});
+
+	it("keeps only the first function call without parallel calls", () => {
+		const parts = [
+			{ functionCall: { id: "a", name: "Read" }, thoughtSignature: "A" },
+			{ functionCall: { id: "b", name: "Read" }, thoughtSignature: "B" }
+		];
+		const kept = completion(reply(parts), { parallel: false }).choices[0].message;
+		expect(kept.tool_calls.map((call) => call.id)).toEqual(["a"]);
+		expect(kept.reasoning_details.map((item) => item.data)).toEqual(["A"]);
+		expect(completion(reply(parts), { parallel: true }).choices[0].message.tool_calls).toHaveLength(2);
+	});
+
+	it("writes code and its output as fenced blocks in the text", () => {
+		const out = completion(
+			reply([
+				{ text: "Let me compute." },
+				{ executableCode: { language: "PYTHON", code: "print(1)" } },
+				{ codeExecutionResult: { outcome: "OUTCOME_OK", output: "1" } },
+				{ executableCode: { language: "LANGUAGE_UNSPECIFIED", code: "x" } },
+				{ executableCode: {} },
+				{ codeExecutionResult: { outcome: "OUTCOME_FAILED", output: "boom" } },
+				{ codeExecutionResult: {} }
+			])
+		);
+		expect(out.choices[0].message.content).toBe(
+			"Let me compute.\n```python\nprint(1)\n```\n\n```text\n1\n```\n\n```\nx\n```\n\n```\n\n```\n\n```text (failed)\nboom\n```\n\n```text\n\n```\n"
+		);
+	});
+
+	it("returns generated images as images, or as markdown in the text for a front that has no place for them", () => {
+		const parts = [{ text: "here" }, { inlineData: { mimeType: "image/png", data: "AAAA" } }];
+		const message = completion(reply(parts)).choices[0].message;
+		expect(message.images).toEqual([{ type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } }]);
+		expect(message.content).toBe("here");
+		const text = completion(reply(parts), { images: "text" }).choices[0].message;
+		expect(text.images).toBeUndefined();
+		expect(text.content).toBe("here\n\n![image](data:image/png;base64,AAAA)");
+		expect(
+			completion(reply([{ inlineData: { mimeType: "image/png", data: "AAAA" } }]), { images: "text" }).choices[0].message.content
+		).toBe("![image](data:image/png;base64,AAAA)");
+	});
+
+	it("returns audio as a WAV file, or as the raw PCM, from every audio part", () => {
+		const parts = [
+			{ inlineData: { mimeType: "audio/L16;codec=pcm;rate=16000", data: Buffer.from([1, 2, 3, 4]).toString("base64") } },
+			{ inlineData: { mimeType: "audio/L16;codec=pcm;rate=16000", data: Buffer.from([5, 6]).toString("base64") } }
+		];
+		const wav = completion(reply(parts)).choices[0].message.audio;
+		expect(wav).toMatchObject({ id: expect.stringMatching(/^audio_/), expires_at: 0, transcript: "" });
+		const bytes = Buffer.from(wav.data, "base64");
+		expect(bytes.subarray(0, 4).toString()).toBe("RIFF");
+		expect(bytes.subarray(8, 12).toString()).toBe("WAVE");
+		expect(bytes.readUInt32LE(24)).toBe(16000);
+		expect(bytes.readUInt32LE(40)).toBe(6);
+		expect([...bytes.subarray(44)]).toEqual([1, 2, 3, 4, 5, 6]);
+		const raw = completion(reply(parts), { audio: "pcm16" }).choices[0].message.audio;
+		expect([...Buffer.from(raw.data, "base64")]).toEqual([1, 2, 3, 4, 5, 6]);
+		expect([...Buffer.from(completion(reply(parts), { audio: "pcm" }).choices[0].message.audio.data, "base64")]).toHaveLength(6);
+		const defaulted = completion(reply([{ inlineData: { mimeType: "audio/wav", data: "AAAA" } }]), { audio: "wav" }).choices[0].message
+			.audio;
+		expect(Buffer.from(defaulted.data, "base64").readUInt32LE(24)).toBe(24000);
+	});
+
+	it("returns log probabilities", () => {
+		const out = completion(
+			reply([{ text: "hi" }], {
+				logprobsResult: {
+					chosenCandidates: [{ token: "h", tokenId: 1, logProbability: -0.1 }, { token: "i" }, null],
+					topCandidates: [
+						{
+							candidates: [
+								{ token: "h", logProbability: -0.1 },
+								{ token: "j", logProbability: -2 }
+							]
+						},
+						{ candidates: "x" }
+					]
+				}
+			})
+		);
+		expect(out.choices[0].logprobs).toEqual({
+			content: [
+				{
+					token: "h",
+					logprob: -0.1,
+					bytes: [104],
+					top_logprobs: [
+						{ token: "h", logprob: -0.1, bytes: [104] },
+						{ token: "j", logprob: -2, bytes: [106] }
+					]
+				},
+				{ token: "i", logprob: 0, bytes: [105], top_logprobs: [] },
+				{ token: "", logprob: 0, bytes: [], top_logprobs: [] }
+			],
+			refusal: null
+		});
+		expect(completion(reply([{ text: "hi" }], { logprobsResult: { chosenCandidates: [] } })).choices[0].logprobs).toBeUndefined();
+		expect(completion(reply([{ text: "hi" }], { logprobsResult: {} })).choices[0].logprobs).toBeUndefined();
+		const bare = completion(reply([{ text: "hi" }], { logprobsResult: { chosenCandidates: [{ token: "a", logProbability: -1 }] } }));
+		expect(bare.choices[0].logprobs.content[0].top_logprobs).toEqual([]);
+	});
+
+	it("ends a reply that stopped for another reason with what it has and a note, not a failure", () => {
+		const note = (extra, parts = [{ text: "partial" }]) => completion(reply(parts, extra)).choices[0];
+		const message = note({ finishReason: "MALFORMED_FUNCTION_CALL", finishMessage: "bad call" });
+		expect(message).toMatchObject({
+			finish_reason: "stop",
+			message: { content: "partial\n\n[Gemini ended the reply early (MALFORMED_FUNCTION_CALL): bad call]" }
+		});
+		expect(note({ finishReason: "OTHER" }, []).message.content).toBe("[Gemini ended the reply early (OTHER)]");
+		expect(note({ finishReason: "NEW_REASON", finishMessage: "" }, []).message.content).toBe("[Gemini ended the reply early (NEW_REASON)]");
+		expect(note({ finishReason: "TOO_MANY_TOOL_CALLS" }, [{ functionCall: { id: "a", name: "R" } }])).toMatchObject({
+			finish_reason: "tool_calls"
+		});
+		expect(note({ finishReason: "STOP" }).message.content).toBe("partial");
+		expect(note({ finishReason: undefined }).message.content).toBe("partial");
+		expect(note({ finishReason: "MAX_TOKENS" })).toMatchObject({ finish_reason: "length", message: { content: "partial" } });
 	});
 
 	it("reads every candidate, an empty one and one filtered with its own explanation", () => {
@@ -555,7 +1166,7 @@ describe("completion", () => {
 describe("createChunker", () => {
 	const chunk = (parts, extra = {}, more = {}) => ({ candidates: [{ index: 0, content: { role: "model", parts }, ...extra }], ...more });
 
-	it("streams text, thoughts and a whole function call, one id, then the usage chunk", () => {
+	it("streams text, thoughts and a whole function call, one id, the signatures at the end, then the usage chunk", () => {
 		const chunker = createChunker({ model: "asked", reasoningField: "reasoning_content" });
 		const out = [
 			...chunker.event(chunk([{ text: "think", thought: true }, { text: "Hel" }])),
@@ -580,17 +1191,51 @@ describe("createChunker", () => {
 		const deltas = out.filter((entry) => entry.choices.length > 0).map((entry) => entry.choices[0].delta);
 		expect(deltas.filter((delta) => delta.reasoning_content).map((delta) => delta.reasoning_content)).toEqual(["think"]);
 		expect(deltas.filter((delta) => delta.content).map((delta) => delta.content)).toEqual(["Hel", "lo"]);
-		expect(deltas.filter((delta) => delta.reasoning_details).map((delta) => delta.reasoning_details[0])).toEqual([
-			{ type: "reasoning.encrypted", format: FORMAT, index: 0, data: "T", for: "text" },
-			expect.objectContaining({ index: 1, data: "C", for: "call", id: expect.stringMatching(/^call_/) })
-		]);
 		const calls = deltas.flatMap((delta) => delta.tool_calls ?? []);
 		expect(calls.map((call) => call.index)).toEqual([0, 1]);
 		expect(calls[0]).toMatchObject({ type: "function", function: { name: "Read", arguments: '{"p":1}' } });
 		expect(calls[1]).toMatchObject({ id: "fc2", function: { arguments: "{}" } });
-		expect(out.find((entry) => entry.choices[0]?.finish_reason).choices[0].finish_reason).toBe("tool_calls");
+		const signatures = deltas.flatMap((delta) => delta.reasoning_details ?? []);
+		expect(signatures).toEqual([
+			{ type: "reasoning.encrypted", format: FORMAT, index: 0, data: "T", for: "text", rest: 0 },
+			{ type: "reasoning.encrypted", format: FORMAT, index: 1, data: "C", for: "call", id: calls[0].id }
+		]);
+		// The signatures come after the text, in the chunk before the finish chunk.
+		const at = out.findIndex((entry) => entry.choices[0]?.delta?.reasoning_details);
+		expect(out[at + 1].choices[0].finish_reason).toBe("tool_calls");
 		expect(out.at(-1)).toMatchObject({ choices: [], model: "asked", usage: { prompt_tokens: 5, completion_tokens: 2 } });
 		expect(chunker.usage()).toEqual({ promptTokenCount: 5, candidatesTokenCount: 2 });
+	});
+
+	it("streams several candidates with their own index, tool calls and finish, and ends when every one has", () => {
+		const chunker = createChunker({ candidates: 2 });
+		const first = chunker.event({
+			candidates: [
+				{ index: 0, content: { parts: [{ text: "a" }] } },
+				{ index: 1, content: { parts: [{ functionCall: { id: "x", name: "R" } }] } },
+				{ index: 2, content: { parts: [{ text: "ignored" }] }, finishReason: "STOP" }
+			]
+		});
+		expect(first.map((entry) => entry.choices[0].index)).toEqual([0, 0, 1, 1]);
+		expect(chunker.finished()).toBe(false);
+		const second = chunker.event({
+			candidates: [{ index: 0, finishReason: "STOP" }],
+			usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+		});
+		expect(second.map((entry) => entry.choices[0]?.finish_reason)).toEqual(["stop"]);
+		expect(chunker.finished()).toBe(false);
+		const third = chunker.event({
+			candidates: [
+				{ index: 1, finishReason: "STOP" },
+				{ index: 0, content: { parts: [{ text: "late" }] } }
+			]
+		});
+		expect(third.map((entry) => [entry.choices[0]?.index, entry.choices[0]?.finish_reason])).toEqual([
+			[1, "tool_calls"],
+			[undefined, undefined]
+		]);
+		expect(third.at(-1).usage).toEqual({ prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 });
+		expect(chunker.finished()).toBe(true);
 	});
 
 	it("sends the usage once, even when it arrives after the finish, and not when it is not asked for", () => {
@@ -608,14 +1253,62 @@ describe("createChunker", () => {
 		).toBe(false);
 	});
 
-	it("ends with a refusal when the reply is filtered, and with an error finish for a failure", () => {
+	it("ends with a refusal when the reply is filtered, and with a note and a normal finish for another reason", () => {
 		const filtered = createChunker();
 		const out = filtered.event(chunk([], { finishReason: "SAFETY", finishMessage: "no" }));
 		expect(out.map((entry) => entry.choices[0].delta.refusal ?? entry.choices[0].finish_reason)).toEqual([null, "no", "content_filter"]);
-		const failed = createChunker();
-		const end = failed.event(chunk([], { finishReason: "MALFORMED_FUNCTION_CALL" }));
-		expect(end.at(-1).choices[0].finish_reason).toBe("error");
-		expect(failed.finished()).toBe(true);
+		const odd = createChunker();
+		const end = odd.event(chunk([{ text: "so far" }], { finishReason: "MALFORMED_FUNCTION_CALL", finishMessage: "bad call" }));
+		expect(end.at(-1).choices[0].finish_reason).toBe("stop");
+		expect(end.find((entry) => entry.choices[0].delta.content?.includes("ended the reply early")).choices[0].delta.content).toBe(
+			"\n\n[Gemini ended the reply early (MALFORMED_FUNCTION_CALL): bad call]"
+		);
+		expect(odd.finished()).toBe(true);
+		const bare = createChunker();
+		expect(bare.event(chunk([], { finishReason: "OTHER" })).find((entry) => entry.choices[0].delta.content).choices[0].delta.content).toBe(
+			"[Gemini ended the reply early (OTHER)]"
+		);
+	});
+
+	it("streams log probabilities, generated images and audio, and keeps only the first call without parallel calls", () => {
+		const chunker = createChunker({ images: "images", audio: "wav", parallel: false });
+		const out = [
+			...chunker.event(
+				chunk(
+					[
+						{ inlineData: { mimeType: "image/png", data: "AAAA" } },
+						{ inlineData: { mimeType: "audio/L16;rate=24000", data: "AQI=" } },
+						{ functionCall: { id: "a", name: "R" } },
+						{ functionCall: { id: "b", name: "R" } }
+					],
+					{
+						logprobsResult: { chosenCandidates: [{ token: "x", logProbability: -1 }] }
+					}
+				)
+			),
+			...chunker.event(chunk([], { finishReason: "STOP" }))
+		];
+		expect(out.find((entry) => entry.choices[0].delta.images).choices[0].delta.images[0].image_url.url).toBe("data:image/png;base64,AAAA");
+		expect(out.flatMap((entry) => entry.choices[0]?.delta?.tool_calls ?? []).map((call) => call.id)).toEqual(["a"]);
+		expect(out.find((entry) => entry.choices[0].logprobs).choices[0].logprobs.content[0].token).toBe("x");
+		const audio = out.find((entry) => entry.choices[0].delta.audio).choices[0].delta.audio;
+		expect(Buffer.from(audio.data, "base64").subarray(0, 4).toString()).toBe("RIFF");
+		const text = createChunker({ images: "text", audio: "pcm16" });
+		const second = [
+			...text.event(
+				chunk(
+					[{ inlineData: { mimeType: "image/png", data: "AAAA" } }, { inlineData: { mimeType: "audio/L16;rate=24000", data: "AQI=" } }],
+					{ finishReason: "STOP" }
+				)
+			)
+		];
+		expect(second.find((entry) => entry.choices[0].delta.content?.includes("![image]")).choices[0].delta.content).toBe(
+			"![image](data:image/png;base64,AAAA)"
+		);
+		expect(second.some((entry) => entry.choices[0].delta.audio)).toBe(false);
+		expect(second.find((entry) => entry.choices[0].delta.content?.includes("[audio]")).choices[0].delta.content).toBe(
+			`[audio](data:audio/L16;base64,AQI=)`
+		);
 	});
 
 	it("a blocked prompt ends the reply, and an error object in the stream is one error chunk", () => {
@@ -632,19 +1325,22 @@ describe("createChunker", () => {
 			{ error: { message: "slow", type: "invalid_request_error", param: null, code: 429 } }
 		]);
 		expect(throttled.finished()).toBe(true);
+		expect(throttled.event({ usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } })).toEqual([]);
 		expect(createChunker().event({ error: { message: "boom" } })[0].error).toMatchObject({ type: "server_error", code: 500 });
 	});
 
-	it("ignores other candidates and chunks it has nothing to say about", () => {
+	it("ignores chunks it has nothing to say about, and a candidate that already ended", () => {
 		const chunker = createChunker();
 		expect(chunker.event({ candidates: [{ index: 1, content: { parts: [{ text: "other" }] }, finishReason: "STOP" }] })).toEqual([]);
 		expect(chunker.event({ candidates: "nope" })).toEqual([]);
 		expect(chunker.event({ promptFeedback: {} })).toEqual([]);
 		expect(chunker.event(chunk("nope"))).toEqual([]);
-		expect(chunker.event({ candidates: [{ content: { parts: [{ text: "no index" }] } }] })).toHaveLength(2);
 		expect(chunker.event(null)).toEqual([]);
 		expect(chunker.event("[DONE]")).toEqual([]);
 		expect(chunker.finished()).toBe(false);
+		expect(chunker.event({ candidates: [{ content: { parts: [{ text: "no index" }] } }] })).toHaveLength(2);
 		expect(chunker.event(chunk([{ text: "x" }]))).toHaveLength(1);
+		chunker.event(chunk([], { finishReason: "STOP" }));
+		expect(chunker.event(chunk([{ text: "after the end" }]))).toEqual([]);
 	});
 });

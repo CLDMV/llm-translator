@@ -17,6 +17,8 @@
  * @fileoverview Cohere driver: host detection, URL layout, the Compatibility API normalizer, the model list, and the native `/v2/chat` protocol (`api: "cohere"`) for both fronts: request bodies, replies, SSE streaming (whole or split), usage, errors and configuration.
  */
 import { afterAll, describe, expect, it } from "vitest";
+import { response as toResponses } from "../../src/api/convert/openai/chat/to/openai/responses/response.mjs";
+import { stream as toResponsesStream } from "../../src/api/convert/openai/chat/to/openai/responses/stream.mjs";
 import { closeAll, collect, fakeTransport, make } from "../helpers/translator.mjs";
 import { readable, slices } from "../helpers/streams.mjs";
 
@@ -45,11 +47,11 @@ const streamEvents = [
 	{ type: "content-delta", index: 0, delta: { message: { content: { thinking: "Let me " } } } },
 	{ type: "content-delta", index: 0, delta: { message: { content: { thinking: "look." } } } },
 	{ type: "content-end", index: 0 },
+	{ type: "tool-plan-delta", delta: { message: { tool_plan: "I will read." } } },
 	{ type: "content-start", index: 1, delta: { message: { content: { type: "text", text: "" } } } },
 	{ type: "content-delta", index: 1, delta: { message: { content: { text: "Sure, " } } } },
 	{ type: "content-delta", index: 1, delta: { message: { content: { text: "reading." } } } },
 	{ type: "content-end", index: 1 },
-	{ type: "tool-plan-delta", delta: { message: { tool_plan: "I will read." } } },
 	{
 		type: "tool-call-start",
 		index: 0,
@@ -128,7 +130,7 @@ describe("detection and layout", () => {
 	});
 });
 
-describe("Compatibility API (api: auto)", () => {
+describe("Compatibility API (api: openai)", () => {
 	const chatReply = {
 		id: "c",
 		object: "chat.completion",
@@ -136,7 +138,7 @@ describe("Compatibility API (api: auto)", () => {
 		choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
 		usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 }
 	};
-	const compat = (front) => apiFor(front, { api: "auto", url: "https://api.cohere.com/compatibility/v1" });
+	const compat = (front) => apiFor(front, { api: "openai", url: "https://api.cohere.com/compatibility/v1" });
 
 	it("sends Chat Completions to /compatibility/v1/chat/completions with the key, and drops what the API rejects", async () => {
 		const { api, transport, use } = await compat("openai");
@@ -144,7 +146,6 @@ describe("Compatibility API (api: auto)", () => {
 		const out = await api.send({
 			model: "command-a",
 			messages: user,
-			n: 2,
 			logit_bias: { 1: 1 },
 			stream_options: { include_usage: true },
 			reasoning_effort: "low",
@@ -282,7 +283,7 @@ describe("Anthropic front: request", () => {
 				},
 				{
 					role: "assistant",
-					content: "ok",
+					tool_plan: "ok",
 					tool_calls: [{ id: "toolu_1", type: "function", function: { name: "Read", arguments: '{"path":"/a"}' } }]
 				},
 				{ role: "tool", tool_call_id: "toolu_1", content: "body" }
@@ -303,7 +304,11 @@ describe("Anthropic front: request", () => {
 		use(() => ({ body: reply({}) }));
 		const ask = async (extra) => (await api.request({ model: "command-a", max_tokens: 8, messages: user, ...extra })).body;
 		expect((await ask({ thinking: { type: "disabled" } })).thinking).toEqual({ type: "disabled" });
-		expect((await ask({ thinking: { type: "adaptive" }, output_config: { effort: "high" } })).thinking).toEqual({ type: "enabled" });
+		expect((await ask({ thinking: { type: "adaptive" }, output_config: { effort: "high" } })).thinking).toEqual({
+			type: "enabled",
+			token_budget: 16384
+		});
+		expect((await ask({ thinking: { type: "enabled", budget_tokens: 3000 } })).thinking).toEqual({ type: "enabled", token_budget: 3000 });
 		expect(await ask({})).not.toHaveProperty("thinking");
 		const schema = { type: "object", properties: { a: { type: "string" } } };
 		expect((await ask({ output_config: { format: { type: "json_schema", schema } } })).response_format).toEqual({
@@ -316,7 +321,7 @@ describe("Anthropic front: request", () => {
 		expect(await ask({ metadata: { sampling: null } })).toMatchObject({ seed: 1 });
 	});
 
-	it("names a tool choice Cohere cannot take", async () => {
+	it("forces a named tool by offering only that tool", async () => {
 		const { api, use } = await apiFor("anthropic");
 		use(() => ({ body: reply({}) }));
 		const two = [tool, { ...tool, name: "Write" }];
@@ -325,10 +330,19 @@ describe("Anthropic front: request", () => {
 			max_tokens: 8,
 			messages: user,
 			tools: two,
-			tool_choice: { type: "tool", name: "Read" }
+			tool_choice: { type: "tool", name: "Write" }
 		});
-		expect(sent.body).not.toHaveProperty("tool_choice");
-		expect(sent.state.convert.dropped).toContain("tool_choice");
+		expect(sent.body.tool_choice).toBe("REQUIRED");
+		expect(sent.body.tools.map((entry) => entry.function.name)).toEqual(["Write"]);
+		const none = await api.request({
+			model: "command-a",
+			max_tokens: 8,
+			messages: user,
+			tools: two,
+			tool_choice: { type: "tool", name: "Nope" }
+		});
+		expect(none.body).not.toHaveProperty("tool_choice");
+		expect(none.state.convert.dropped).toContain("tool_choice");
 	});
 });
 
@@ -420,7 +434,7 @@ describe("Anthropic front: streaming", () => {
 				.filter((delta) => delta.type === "text_delta")
 				.map((delta) => delta.text)
 				.join("")
-		).toBe("Sure, reading.");
+		).toBe("I will read.\n\nSure, reading.");
 		expect(
 			deltas
 				.filter((delta) => delta.type === "input_json_delta")
@@ -475,6 +489,7 @@ describe("OpenAI front", () => {
 			stream: false,
 			messages: [
 				{ role: "system", content: "s" },
+				{ role: "system", content: expect.any(String) },
 				{ role: "user", content: [{ type: "text", text: "see" }] },
 				{ role: "assistant", tool_calls: [{ id: "call_1", type: "function", function: { name: "Read", arguments: '{"p":1}' } }] },
 				{ role: "tool", tool_call_id: "call_1", content: "r" }
@@ -490,7 +505,9 @@ describe("OpenAI front", () => {
 			presence_penalty: 0.2,
 			thinking: { type: "disabled" }
 		});
-		expect(sent.state.convert.dropped).toEqual(["response_format", "n"]);
+		expect(sent.state.convert.dropped).toEqual(["n"]);
+		expect(sent.body.messages.map((message) => message.role)).toEqual(["system", "system", "user", "assistant", "tool"]);
+		expect(sent.body.messages[1].content).toMatch(/only a valid JSON object/);
 	});
 
 	it("a body without messages is an invalid request", async () => {
@@ -553,7 +570,7 @@ describe("OpenAI front", () => {
 		expect(chunks.every((chunk) => chunk.model === "command-a")).toBe(true);
 		expect(chunks[0].choices[0].delta).toEqual({ role: "assistant", content: "" });
 		expect(chunks.map((chunk) => chunk.choices[0]?.delta.reasoning ?? "").join("")).toBe("Let me look.");
-		expect(chunks.map((chunk) => chunk.choices[0]?.delta.content ?? "").join("")).toBe("Sure, reading.");
+		expect(chunks.map((chunk) => chunk.choices[0]?.delta.content ?? "").join("")).toBe("I will read.\n\nSure, reading.");
 		const calls = chunks.flatMap((chunk) => chunk.choices[0]?.delta.tool_calls ?? []);
 		expect(calls).toEqual([
 			{ index: 0, id: "Read_1", type: "function", function: { name: "Read", arguments: "" } },
@@ -587,11 +604,429 @@ describe("OpenAI front", () => {
 });
 
 describe("token counting", () => {
-	it("estimates the prompt, since /v1/tokenize takes raw text only", async () => {
+	const tokenize = (handler) => (target, init) =>
+		new URL(target).pathname === "/v1/tokenize" ? handler(JSON.parse(init.body)) : { body: reply({}) };
+
+	it("counts the prompt text with Cohere's tokenizer, in pieces of at most 65,536 characters", async () => {
 		const { api, use, transport } = await apiFor("anthropic");
-		use(() => ({ body: reply({}) }));
-		const out = await api.token.count({ model: "command-a", max_tokens: 8, messages: user });
-		expect(out.input_tokens).toBeGreaterThan(0);
+		use(tokenize((body) => ({ body: { tokens: Array.from({ length: Math.ceil(body.text.length / 10) }), token_strings: [] } })));
+		const small = await api.token.count({ model: "command-a", max_tokens: 8, messages: user });
+		expect(small.input_tokens).toBe(1);
+		const call = transport.calls[0];
+		expect(call.url).toBe("https://api.cohere.com/v1/tokenize");
+		expect(call.init.headers.authorization).toBe("Bearer k");
+		expect(JSON.parse(call.init.body)).toEqual({ text: "hi", model: "command-a" });
+		transport.calls.length = 0;
+		const big = await api.token.count({ model: "command-a", max_tokens: 8, messages: [{ role: "user", content: "x".repeat(70000) }] });
+		expect(transport.calls).toHaveLength(2);
+		expect(big.input_tokens).toBe(Math.ceil(65536 / 10) + Math.ceil(4464 / 10));
+	});
+
+	it("estimates when Cohere does not answer or the prompt is too long for 16 calls", async () => {
+		const { api, use, transport } = await apiFor("anthropic");
+		use(tokenize(() => ({ status: 500, body: {} })));
+		expect((await api.token.count({ model: "command-a", max_tokens: 8, messages: user })).input_tokens).toBeGreaterThan(0);
+		use(tokenize(() => ({ body: { nope: 1 } })));
+		expect((await api.token.count({ model: "command-a", max_tokens: 8, messages: user })).input_tokens).toBeGreaterThan(0);
+		use(tokenize(() => ({ body: { tokens: [] } })));
+		await api.token.count({ model: "command-a", max_tokens: 8, messages: [{ role: "user", content: "x".repeat(65536 * 16 + 1) }] });
 		expect(transport.calls).toEqual([]);
+	});
+});
+
+describe("documents and citations", () => {
+	const document = {
+		type: "document",
+		title: "Notes",
+		source: { type: "text", media_type: "text/plain", data: "alpha beta gamma" },
+		citations: { enabled: true }
+	};
+	const found = {
+		type: "search_result",
+		source: "https://s.test/a",
+		title: "Page",
+		content: [{ type: "text", text: "delta" }],
+		citations: { enabled: true }
+	};
+	const cited = (sources, extra = {}) => ({
+		start: 6,
+		end: 9,
+		text: "big",
+		type: "TEXT_CONTENT",
+		content_index: 0,
+		sources,
+		...extra
+	});
+	const hello = (citations, extra = {}) =>
+		reply({ content: [{ type: "text", text: "Hello big world" }], citations }, { finish_reason: "COMPLETE", ...extra });
+
+	it("sends a document that asks for citations as a Cohere document, and cites it as a char_location of the document", async () => {
+		const { api, use } = await apiFor("anthropic");
+		use(() => ({ body: hello([cited([{ type: "document", id: "doc_0", document: { id: "doc_0", text: "alpha beta" } }])]) }));
+		const body = {
+			model: "command-a",
+			max_tokens: 64,
+			messages: [{ role: "user", content: [document, { type: "text", text: "What is beta?" }] }]
+		};
+		const sent = await api.request(body);
+		expect(sent.body.documents).toEqual([{ id: "doc_0", data: { title: "Notes", text: expect.stringContaining("alpha beta gamma") } }]);
+		expect(sent.body.messages).toEqual([{ role: "user", content: [{ type: "text", text: "What is beta?" }] }]);
+		const out = await api.send(body);
+		expect(out.body.content.map((block) => block.text)).toEqual(["Hello ", "big", " world"]);
+		const citation = out.body.content[1].citations[0];
+		expect(citation).toMatchObject({
+			type: "char_location",
+			cited_text: "alpha beta",
+			document_index: 0,
+			document_title: "Notes",
+			start_char_index: 0,
+			end_char_index: sent.state.convert.documents.doc_0.length
+		});
+	});
+
+	it("cites a search result in a tool result as a search_result_location, and a tool output as the tool call's result", async () => {
+		const { api, use } = await apiFor("anthropic");
+		use(() => ({
+			body: hello([
+				cited([{ type: "document", id: "result_0", document: { text: "delta" } }]),
+				cited([{ type: "tool", id: "toolu_1:0", tool_output: { a: 1 } }], { start: 0, end: 5 })
+			])
+		}));
+		const body = {
+			model: "command-a",
+			max_tokens: 64,
+			tools: [tool],
+			messages: [
+				{ role: "user", content: "find" },
+				{ role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read", input: {} }] },
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: [found] }] }
+			]
+		};
+		const sent = await api.request(body);
+		const result = sent.body.messages.at(-1);
+		expect(result).toEqual({
+			role: "tool",
+			tool_call_id: "toolu_1",
+			content: [{ type: "document", document: { id: "result_0", data: { title: "Page", source: "https://s.test/a", text: "delta" } } }]
+		});
+		const out = await api.send(body);
+		const citations = out.body.content.flatMap((block) => block.citations ?? []);
+		// The citation of "Hello" (the tool output) comes before the one of "big" in the text.
+		expect(citations).toEqual([
+			{
+				type: "search_result_location",
+				cited_text: '{"a":1}',
+				source: "toolu_1",
+				title: null,
+				search_result_index: 0,
+				start_block_index: 0,
+				end_block_index: 1
+			},
+			{
+				type: "search_result_location",
+				cited_text: "delta",
+				source: "https://s.test/a",
+				title: "Page",
+				search_result_index: 0,
+				start_block_index: 0,
+				end_block_index: 1
+			}
+		]);
+	});
+
+	it("sends an OpenAI client's documents and citation options as they are, and gives the citations back as annotations", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: hello([cited([{ type: "document", id: "mine", document: { title: "Mine", text: "snippet" } }])]) }));
+		const body = {
+			model: "command-a",
+			messages: user,
+			documents: [{ id: "mine", data: { title: "Mine", text: "snippet" } }],
+			citation_options: { mode: "ACCURATE" }
+		};
+		const sent = await api.request(body);
+		expect(sent.body).toMatchObject({ documents: body.documents, citation_options: { mode: "ACCURATE" } });
+		const out = await api.send(body);
+		const [annotation] = out.body.choices[0].message.annotations;
+		expect(annotation).toMatchObject({
+			type: "citation",
+			citation: { kind: "document", id: "mine", title: "Mine", text: "snippet", span: { start: 6, end: 9 } }
+		});
+	});
+
+	it("streams citations as citations_delta events on the open text block, and as annotation chunks", async () => {
+		const events = [
+			{ type: "message-start", id: "r1", delta: { message: { role: "assistant" } } },
+			{ type: "content-start", index: 0, delta: { message: { content: { type: "text", text: "" } } } },
+			{ type: "content-delta", index: 0, delta: { message: { content: { text: "Hello big world" } } } },
+			{
+				type: "citation-start",
+				index: 0,
+				delta: { message: { citations: cited([{ type: "document", id: "doc_0", document: { text: "alpha" } }]) } }
+			},
+			{ type: "citation-end", index: 0 },
+			{ type: "content-end", index: 0 },
+			{ type: "message-end", delta: { finish_reason: "COMPLETE", usage: { tokens: { input_tokens: 1, output_tokens: 1 } } } }
+		];
+		const body = {
+			model: "command-a",
+			max_tokens: 64,
+			stream: true,
+			messages: [{ role: "user", content: [document, { type: "text", text: "q" }] }]
+		};
+		const anthropic = await apiFor("anthropic");
+		anthropic.use(raw(sse(events)));
+		const out = await anthropic.api.send(body);
+		const list = await collect(out.stream);
+		const citation = list.find((event) => event.data?.delta?.type === "citations_delta");
+		expect(citation.data.delta.citation).toMatchObject({ type: "char_location", cited_text: "alpha", document_index: 0 });
+		expect(list.findIndex((event) => event === citation)).toBeLessThan(list.findIndex((event) => event.event === "content_block_stop"));
+		const chat = await apiFor("openai");
+		chat.use(raw(sse(events)));
+		const chunks = (
+			await collect(
+				(await chat.api.send({ model: "command-a", stream: true, documents: [{ id: "doc_0", data: { text: "alpha" } }], messages: user }))
+					.stream
+			)
+		).map((event) => event.data);
+		const annotated = chunks.find((chunk) => chunk !== "[DONE]" && chunk.choices[0]?.delta.annotations);
+		expect(annotated.choices[0].delta.annotations[0].citation).toMatchObject({ kind: "document", id: "doc_0", span: { start: 6, end: 9 } });
+	});
+});
+
+describe("tool plans, parallel calls, logprobs, cached tokens and failed tool results", () => {
+	const calls = [
+		{ id: "Read_1", type: "function", function: { name: "Read", arguments: '{"path":"/a"}' } },
+		{ id: "Read_2", type: "function", function: { name: "Read", arguments: '{"path":"/b"}' } }
+	];
+
+	it("returns the tool plan as the text before the tool calls, and sends it back as the plan of the turn", async () => {
+		const { api, use } = await apiFor("anthropic");
+		use(() => ({ body: reply({ tool_plan: "I will read it.", content: [], tool_calls: [calls[0]] }, { finish_reason: "TOOL_CALL" }) }));
+		const body = { model: "command-a", max_tokens: 64, tools: [tool], messages: user };
+		const out = await api.send(body);
+		expect(out.body.content.map((block) => [block.type, block.text])).toEqual([
+			["text", "I will read it."],
+			["tool_use", undefined]
+		]);
+		const next = await api.request({
+			...body,
+			messages: [
+				...user,
+				{ role: "assistant", content: out.body.content },
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "Read_1", content: "file body" }] }
+			]
+		});
+		expect(next.body.messages[1]).toEqual({ role: "assistant", tool_plan: "I will read it.", tool_calls: [calls[0]] });
+	});
+
+	it("keeps the first tool call only when the client switched parallel calls off", async () => {
+		const reply2 = { body: reply({ content: [], tool_calls: calls }, { finish_reason: "TOOL_CALL" }) };
+		const anthropic = await apiFor("anthropic");
+		anthropic.use(() => reply2);
+		const one = await anthropic.api.send({
+			model: "command-a",
+			max_tokens: 64,
+			tools: [tool],
+			tool_choice: { type: "auto", disable_parallel_tool_use: true },
+			messages: user
+		});
+		expect(one.body.content.filter((block) => block.type === "tool_use")).toHaveLength(1);
+		const many = await anthropic.api.send({ model: "command-a", max_tokens: 64, tools: [tool], messages: user });
+		expect(many.body.content.filter((block) => block.type === "tool_use")).toHaveLength(2);
+	});
+
+	it("sends logprobs and returns the log probabilities", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: reply({}, { logprobs: [{ token_ids: [5], text: "hi", logprobs: [-0.25] }] }) }));
+		const body = { model: "command-a", messages: user, logprobs: true, top_logprobs: 2 };
+		const sent = await api.request(body);
+		expect(sent.body.logprobs).toBe(true);
+		expect(sent.state.convert.dropped).toEqual(["top_logprobs"]);
+		const out = await api.send(body);
+		expect(out.body.choices[0].logprobs.content[0]).toMatchObject({ token: "hi", logprob: -0.25 });
+	});
+
+	it("reports the cached tokens in the OpenAI usage and as cache reads for the Anthropic client", async () => {
+		const usage = { tokens: { input_tokens: 100, output_tokens: 5 }, cached_tokens: 30 };
+		const chat = await apiFor("openai");
+		chat.use(() => ({ body: reply({}, { usage }) }));
+		expect((await chat.api.send({ model: "command-a", messages: user })).body.usage.prompt_tokens_details).toEqual({ cached_tokens: 30 });
+		const anthropic = await apiFor("anthropic");
+		anthropic.use(() => ({ body: reply({}, { usage }) }));
+		expect((await anthropic.api.send({ model: "command-a", max_tokens: 8, messages: user })).body.usage).toMatchObject({
+			input_tokens: 70,
+			cache_read_input_tokens: 30,
+			output_tokens: 5
+		});
+	});
+
+	it("sends a failed tool result as an error object", async () => {
+		const { api, use } = await apiFor("anthropic");
+		use(() => ({ body: reply({}) }));
+		const sent = await api.request({
+			model: "command-a",
+			max_tokens: 8,
+			tools: [tool],
+			messages: [
+				...user,
+				{ role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] },
+				{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", is_error: true, content: "no such file" }] }
+			]
+		});
+		expect(sent.body.messages.at(-1)).toEqual({ role: "tool", tool_call_id: "t1", content: '{"error":"no such file"}' });
+	});
+
+	it("moves values into Cohere's ranges, and the state says which", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: reply({}) }));
+		const sent = await api.request({ model: "command-a", messages: user, frequency_penalty: 2, top_p: 1 });
+		expect(sent.body).toMatchObject({ frequency_penalty: 1, p: 0.99 });
+		expect(sent.state.convert.clamped).toEqual(["p", "frequency_penalty"]);
+		expect((await api.request({ model: "command-a", messages: user })).state.convert).not.toHaveProperty("clamped");
+	});
+});
+
+describe("auto routing and several choices", () => {
+	it("sends a request over cohere.chat when it needs something only that protocol has, and over the Compatibility API otherwise", async () => {
+		const { api, use } = await apiFor("anthropic", { api: "auto" });
+		use(() => ({ body: reply({}) }));
+		const plain = await api.request({ model: "command-a", max_tokens: 8, messages: user });
+		expect(plain.url).toBe("https://api.cohere.com/compatibility/v1/chat/completions");
+		const budget = await api.request({
+			model: "command-a",
+			max_tokens: 8,
+			messages: user,
+			thinking: { type: "enabled", budget_tokens: 2048 }
+		});
+		expect(budget.url).toBe("https://api.cohere.com/v2/chat");
+		expect(budget.body.thinking).toEqual({ type: "enabled", token_budget: 2048 });
+		const doc = await api.request({
+			model: "command-a",
+			max_tokens: 8,
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "document", source: { type: "text", media_type: "text/plain", data: "x" }, citations: { enabled: true } }]
+				}
+			]
+		});
+		expect(doc.url).toBe("https://api.cohere.com/v2/chat");
+		const chat = await apiFor("openai", { api: "auto" });
+		chat.use(() => ({ body: reply({}) }));
+		expect((await chat.api.request({ model: "command-a", messages: user, logprobs: true })).url).toBe("https://api.cohere.com/v2/chat");
+		expect((await chat.api.request({ model: "command-a", messages: user })).url).toBe(
+			"https://api.cohere.com/compatibility/v1/chat/completions"
+		);
+	});
+
+	it("answers n above 1 with parallel requests over the Compatibility API, which has no n", async () => {
+		const { api, transport, use } = await apiFor("openai", { api: "openai" });
+		use(() => ({
+			body: {
+				id: "c",
+				object: "chat.completion",
+				model: "command-a",
+				choices: [{ index: 0, message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
+				usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 }
+			}
+		}));
+		const out = await api.send({ model: "command-a", messages: user, n: 2 });
+		expect(out.body.choices.map((choice) => choice.index)).toEqual([0, 1]);
+		expect(transport.calls).toHaveLength(2);
+		expect(transport.calls.every((call) => JSON.parse(call.init.body).n === undefined)).toBe(true);
+	});
+});
+
+describe("citations of the model's thinking, on each front", () => {
+	const thinking = "Let me check the notes";
+	const citations = [
+		{
+			type: "THINKING_CONTENT",
+			start: 0,
+			end: 6,
+			content_index: 0,
+			sources: [{ type: "document", id: "mine", document: { title: "Mine", url: "https://mine.test" } }]
+		}
+	];
+	const answer = reply(
+		{
+			content: [
+				{ type: "thinking", thinking },
+				{ type: "text", text: "ok" }
+			],
+			citations
+		},
+		{ finish_reason: "COMPLETE" }
+	);
+	const marked = "Let me[1] check the notes\n\nSources:\n[1] Mine (https://mine.test)";
+	const documents = [{ id: "mine", data: { title: "Mine", text: "t" } }];
+	const events = [
+		{ type: "message-start", id: "r1", delta: { message: { role: "assistant" } } },
+		{ type: "content-start", index: 0, delta: { message: { content: { type: "thinking", thinking: "" } } } },
+		{ type: "content-delta", index: 0, delta: { message: { content: { thinking: "Let me check " } } } },
+		{ type: "content-delta", index: 0, delta: { message: { content: { thinking: "the notes" } } } },
+		{ type: "citation-start", index: 0, delta: { message: { citations: citations[0] } } },
+		{ type: "content-end", index: 0 },
+		{ type: "content-start", index: 1, delta: { message: { content: { type: "text", text: "" } } } },
+		{ type: "content-delta", index: 1, delta: { message: { content: { text: "ok" } } } },
+		{ type: "content-end", index: 1 },
+		{ type: "message-end", delta: { finish_reason: "COMPLETE" } }
+	];
+
+	it("is a marked thinking block for an Anthropic client, whole and streamed", async () => {
+		const { api, use } = await apiFor("anthropic");
+		use(() => ({ body: answer }));
+		const out = await api.send({ model: "command-a", max_tokens: 8, messages: user });
+		expect(out.body.content[0]).toMatchObject({ type: "thinking", thinking: marked });
+		use(raw(sse(events)));
+		const asks = {
+			type: "document",
+			title: "T",
+			source: { type: "text", media_type: "text/plain", data: "t" },
+			citations: { enabled: true }
+		};
+		const body = {
+			model: "command-a",
+			max_tokens: 8,
+			stream: true,
+			messages: [{ role: "user", content: [asks, { type: "text", text: "q" }] }]
+		};
+		const list = await collect((await api.send(body)).stream);
+		const text = list.filter((event) => event.data?.delta?.type === "thinking_delta").map((event) => event.data.delta.thinking);
+		expect(text.join("")).toBe(marked);
+	});
+
+	it("is marked reasoning for a Chat Completions client, whole and streamed", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: answer }));
+		expect((await api.send({ model: "command-a", messages: user })).body.choices[0].message.reasoning).toBe(marked);
+		use(raw(sse(events)));
+		const chunks = await collect((await api.send({ model: "command-a", stream: true, documents, messages: user })).stream);
+		const text = chunks.map((event) => event.data).filter((chunk) => chunk !== "[DONE]");
+		expect(text.map((chunk) => chunk.choices[0]?.delta.reasoning ?? "").join("")).toBe(marked);
+	});
+
+	it("is marked reasoning summary text for a Responses client", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: answer }));
+		// The Responses front sits on the Chat Completions reply (`wire: "responses"`), which its converter turns into output items.
+		const out = await api.send({ model: "command-a", messages: user }, { front: "openai", wire: "responses" });
+		const item = toResponses(out.body, { model: "command-a" }).output.find((entry) => entry.type === "reasoning");
+		expect(item.summary[0].text).toBe(marked);
+		use(raw(sse(events)));
+		const chat = await api.send({ model: "command-a", stream: true, documents, messages: user }, { front: "openai", wire: "responses" });
+		const streamed = await collect(toResponsesStream(chat.stream, { model: "command-a" }));
+		const parts = streamed.filter((event) => event.event === "response.reasoning_summary_text.delta").map((event) => event.data.delta);
+		expect(parts.join("")).toBe(marked);
+	});
+
+	it("sends the thinking back without the markers and the list", async () => {
+		const { api, use } = await apiFor("openai");
+		use(() => ({ body: answer }));
+		const sent = await api.request({
+			model: "command-a",
+			messages: [...user, { role: "assistant", content: "ok", reasoning: marked }, { role: "user", content: "more" }]
+		});
+		expect(sent.body.messages[1].content[0]).toEqual({ type: "thinking", thinking });
 	});
 });

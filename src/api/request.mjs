@@ -167,7 +167,9 @@ async function prepare(c, body, options, picked) {
 			budget: options.budget,
 			listed: levels !== undefined,
 			model,
-			toolCallIds: driver.info.toolCallIds
+			toolCallIds: driver.info.toolCallIds,
+			signal: options.signal,
+			report: (spec) => emit(c, { type: "document", ...spec, endpoint: endpoint.name, model, log: options.log })
 		}));
 		if (converted.toolSearch?.capped) {
 			warn(
@@ -292,6 +294,19 @@ async function prepare(c, body, options, picked) {
 		headers = await driver.auth({ endpoint, headers, transport: c.state.transport, timeout: c.config.detectTimeout });
 	// A driver that signs its calls (Amazon Bedrock's SigV4) sees the finished URL, headers and body, and returns the headers to send.
 	if (driver.sign) headers = await driver.sign({ endpoint, protocol, method: "POST", url, headers, body: upstream, stream });
+	// A driver whose server caches (Gemini's cached contents) turns the conversation up to a `cache_control` breakpoint into a cache and sends only what follows it; a token count sends the whole prompt.
+	if (driver.cache && converted?.cache && converted.local === undefined && options.tokens !== true) {
+		upstream = await driver.cache({
+			endpoint,
+			model,
+			cache: converted.cache,
+			body: upstream,
+			headers,
+			transport: c.state.transport,
+			timeout: c.config.detectTimeout,
+			warn: (message) => warn(c.config, c.state, message, { kind: "cache", endpoint: endpoint.name, log: options.log })
+		});
+	}
 	return {
 		upstream: endpoint.name,
 		pool: pool.map((entry) => entry.name),

@@ -114,6 +114,48 @@ export function route(kind, endpoint, model, { stream = false, env } = {}) {
 }
 
 /**
+ * Whether a model id names a Google-published Gemini model, which Vertex AI serves through `generateContent` and not `rawPredict`: `gemini-...`,
+ * with or without a `models/` or `publishers/google/models/` prefix.
+ * @param {unknown} model - Model id.
+ * @returns {boolean} True for a Gemini model.
+ */
+export function gemini(model) {
+	return /^(?:publishers\/google\/)?(?:models\/)?gemini-/.test(String(model));
+}
+
+/**
+ * The path of a Vertex AI call for a Google-published model: `.../publishers/google/models/<model>:generateContent`, or
+ * `:streamGenerateContent?alt=sse` for a stream, or `:countTokens`.
+ * @param {any} endpoint - Runtime endpoint.
+ * @param {string} model - Model id, for example `gemini-2.5-flash`.
+ * @param {{stream?: boolean, count?: boolean, env?: Record<string, string | undefined>}} [options] - Whether the call streams or counts tokens, and the environment.
+ * @returns {string} Path starting with `/v1/projects/`.
+ */
+export function geminiRoute(endpoint, model, { stream = false, count = false, env } = {}) {
+	const { project, region } = locate(endpoint, env);
+	const id = String(model).replace(/^(?:publishers\/google\/)?(?:models\/)?/, "");
+	const root = `/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(region)}/publishers/google/models`;
+	return `${root}/${encodeURIComponent(id)}:${count ? "countTokens" : stream ? "streamGenerateContent?alt=sse" : "generateContent"}`;
+}
+
+/**
+ * Where a Gemini model's cached contents are made on Vertex AI.
+ * @param {any} endpoint - Runtime endpoint.
+ * @param {string} model - Model id, for example `gemini-2.5-flash`.
+ * @param {Record<string, string | undefined>} [env] - Environment.
+ * @returns {{path: string, resource: string}} The `cachedContents` collection path, and the model's resource name for the create call.
+ */
+export function geminiCache(endpoint, model, env) {
+	const { project, region } = locate(endpoint, env);
+	const id = String(model).replace(/^(?:publishers\/google\/)?(?:models\/)?/, "");
+	const parent = `projects/${project}/locations/${region}`;
+	return {
+		path: `/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(region)}/cachedContents`,
+		resource: `${parent}/publishers/google/models/${id}`
+	};
+}
+
+/**
  * The body Vertex AI takes: the Messages body with `anthropic_version` added and the model taken out (it is in the path). The model stays on the
  * result as a property that is not enumerable, so it is not sent but the rest of the translator can still read `body.model`.
  * @param {any} body - Anthropic Messages request body.

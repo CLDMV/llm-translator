@@ -25,6 +25,7 @@ import { NOTE } from "../../../../../../../lib/images.mjs";
 import { expand } from "../../../../../../../lib/documents.mjs";
 import { createBudget, unsign } from "../../../../../../../lib/thinking.mjs";
 import { clearToolUses, valid as validEdit } from "../../../../../../../lib/context.mjs";
+import { sourceOf, tag } from "../../../../../../../lib/citations.mjs";
 import { plan, scan } from "../../../../../../../lib/toolsearch.mjs";
 
 const HANDLED = new Set([
@@ -55,7 +56,7 @@ const BILLING = "x-anthropic-billing-header:";
  * tool-name map, thinking mode, fields that were dropped).
  * @param {any} body - Anthropic `POST /v1/messages` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
- * @param {{ producer?: string, budget?: ReturnType<typeof createBudget>, listed?: boolean, toolCallIds?: { alphabet: string, min?: number, max?: number } }} [context] - `toolCallIds` is the driver's tool-call id policy: ids that do not satisfy it are rewritten (and recorded in `state.toolIds` for the way back). `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts). `listed` says the model has a configured effort list, so the default `medium` effort is left to it.
+ * @param {{ producer?: string, budget?: ReturnType<typeof createBudget>, listed?: boolean, toolCallIds?: { alphabet: string, min?: number, max?: number }, sources?: boolean }} [context] - `sources` keeps the parts made from `document` and `search_result` blocks as separate parts tagged with their source (see `lib/citations.mjs`), for a converter that sends them as documents of their own. `toolCallIds` is the driver's tool-call id policy: ids that do not satisfy it are rewritten (and recorded in `state.toolIds` for the way back). `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts). `listed` says the model has a configured effort list, so the default `medium` effort is left to it.
  * @returns {Promise<{ body: any, state: any }>} OpenAI request body and conversion state.
  * @throws {TranslatorError} For malformed requests, unsupported content when configured to error, or PDF limit violations.
  */
@@ -110,7 +111,8 @@ export async function request(body, settings, context) {
 		fitId,
 		system,
 		thinkingTurnsToKeep(body.context_management, state),
-		context?.budget ?? createBudget()
+		context?.budget ?? createBudget(),
+		context?.sources === true
 	);
 	out.messages = conversation.messages;
 	if (conversation.prefill) {
@@ -223,10 +225,13 @@ function idsOf(messages) {
  * @param {number} keepThinking - Reasoning-bearing assistant turns to keep.
  * @returns {Promise<{ messages: any[], prefill: boolean }>} OpenAI messages and whether the last message is a prefill.
  */
-async function convertMessages(messages, s, state, fit, fitId, system, keepThinking, budget) {
+async function convertMessages(messages, s, state, fit, fitId, system, keepThinking, budget, keepSources) {
 	const out = [];
 	const hoisted = [];
 	const toolInputs = new Map();
+	// Position of each `document` and `search_result` block among the request's, which is what a citation's `document_index` and `search_result_index` count.
+	let documents = 0;
+	let searches = 0;
 	const mode = s.inlineSystem === "auto" ? "user" : s.inlineSystem;
 
 	// Signatures that carry provider reasoning are decoded newest turn first, so the per-request budget goes to the turns a server checks (the
@@ -262,11 +267,27 @@ async function convertMessages(messages, s, state, fit, fitId, system, keepThink
 			case "document": {
 				const parts = [];
 				for (const inner of await expand(block, { settings: s, toolInputs, toolUseId })) parts.push(...(await toParts(inner, toolUseId)));
-				return parts;
+				// Which request source the parts came from, for an upstream that takes documents of its own (see `lib/citations.mjs`).
+				const source = /** @type {import("../../../../../../../lib/citations.mjs").Source} */ ({
+					kind: "document",
+					index: documents++,
+					title: block.title ?? undefined,
+					citations: block.citations?.enabled === true
+				});
+				return parts.map((part) => tag(part, source));
 			}
 			case "search_result": {
 				const body = (block.content ?? []).map((c) => c.text).join("\n");
-				return [{ type: "text", text: `[Search result: ${block.title ?? ""} (${block.source ?? ""})]\n${body}` }];
+				const source = /** @type {import("../../../../../../../lib/citations.mjs").Source} */ ({
+					kind: "search_result",
+					index: searches++,
+					title: block.title ?? undefined,
+					source: block.source ?? undefined,
+					citations: block.citations?.enabled === true,
+					blocks: (block.content ?? []).length,
+					text: body
+				});
+				return [tag({ type: "text", text: `[Search result: ${block.title ?? ""} (${block.source ?? ""})]\n${body}` }, source)];
 			}
 			case "tool_reference":
 				// `native`: the server understands the part. Otherwise the model is told in words; a tool that was expanded into the tools list
@@ -308,7 +329,9 @@ async function convertMessages(messages, s, state, fit, fitId, system, keepThink
 				for (const c of asBlocks(block.content)) inner.push(...(await toParts(c, block.tool_use_id)));
 				const texts = inner.filter((p) => p.type === "text").map((p) => p.text);
 				const images = inner.filter((p) => p.type === "image_url");
-				let content = inner.some((p) => p.type === "tool_reference") ? inner.filter((p) => p.type !== "image_url") : texts.join("\n");
+				const sourced = keepSources && inner.some((p) => sourceOf(p));
+				let content =
+					sourced || inner.some((p) => p.type === "tool_reference") ? inner.filter((p) => p.type !== "image_url") : texts.join("\n");
 				if (images.length > 0) {
 					toolParts.push({ type: "text", text: `Image output of tool call ${fitId(block.tool_use_id)}:` }, ...images);
 					if (content === "") content = "(image output attached in the next message)";
@@ -358,7 +381,7 @@ async function convertMessages(messages, s, state, fit, fitId, system, keepThink
 		}
 	}
 
-	return finalize(out, s, system, hoisted, keepThinking, state);
+	return finalize(out, s, system, hoisted, keepThinking, state, keepSources);
 }
 
 /**
@@ -456,9 +479,10 @@ function reasoningSent(message) {
  * @param {string[]} hoisted - Inline system texts to append to the leading system message.
  * @param {number} keepThinking - Number of reasoning-bearing assistant turns to keep.
  * @param {any} state - Conversion state (`reasoningMissing` counts assistant tool turns left without reasoning).
+ * @param {boolean} keepSources - Keep the parts that came from documents and search results as tagged parts, even when all are text (see `lib/citations.mjs`).
  * @returns {{ messages: any[], prefill: boolean }} Final messages.
  */
-function finalize(out, s, system, hoisted, keepThinking, state) {
+function finalize(out, s, system, hoisted, keepThinking, state, keepSources) {
 	let remaining = keepThinking;
 	for (let i = out.length - 1; i >= 0; i--) {
 		if (out[i].role !== "assistant" || out[i].parts.length === 0) continue;
@@ -470,7 +494,7 @@ function finalize(out, s, system, hoisted, keepThinking, state) {
 	if (lead !== "") messages.push({ role: "system", content: lead });
 	for (const m of out) {
 		if (m.role === "user") {
-			const plain = m.parts.every((p) => p.type === "text");
+			const plain = m.parts.every((p) => p.type === "text" && !(keepSources && sourceOf(p)));
 			messages.push({ role: "user", content: plain ? m.parts.map((p) => p.text).join("\n\n") : m.parts });
 		} else if (m.role === "assistant") {
 			const message = { role: "assistant", content: m.texts.join("\n\n") };
@@ -502,7 +526,14 @@ function imageParts(block, s, state) {
 	}
 	const source = block.source;
 	if (source.type === "base64") return [{ type: "image_url", image_url: { url: `data:${source.media_type};base64,${source.data}` } }];
-	if (source.type === "url") return [{ type: "image_url", image_url: { url: source.url } }];
+	if (source.type === "url") {
+		return [
+			{
+				type: "image_url",
+				image_url: { url: source.url, ...(typeof source.media_type === "string" ? { mime_type: source.media_type } : {}) }
+			}
+		];
+	}
 	drop(state, "image.file");
 	return [{ type: "text", text: "[An image supplied as an uploaded file could not be forwarded.]" }];
 }

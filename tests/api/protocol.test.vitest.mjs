@@ -264,6 +264,28 @@ describe("the api setting", () => {
 	});
 });
 
+describe("a third-party driver that lists the Messages protocol", () => {
+	it("an Anthropic client goes over Messages and an OpenAI client over Chat Completions, with no vLLM rules applied", async () => {
+		const mount = async (front) => {
+			const api = await make({
+				front,
+				upstreams: [{ url: "http://lists.test", api: "auto", models: ["m"] }],
+				detect: false,
+				transport: server()
+			});
+			await api.slothlet.api.add(["driver", "lists-messages"], new URL("../fixtures/driver/lists-messages", import.meta.url).pathname);
+			await api.detect();
+			return api;
+		};
+		const user = [{ role: "user", content: "hi" }];
+		expect((await mount("anthropic")).route({ model: "m", messages: user })).toMatchObject({
+			protocol: "anthropic.messages",
+			native: true
+		});
+		expect((await mount("openai")).route({ model: "m", messages: user })).toMatchObject({ protocol: "openai.chat" });
+	});
+});
+
 describe("auto: the protocol each client gets", () => {
 	it("an Anthropic client goes to a vLLM that has /v1/messages, a Chat Completions client to chat, a Responses client to Responses", async () => {
 		const { api, transport } = await build(vllm());

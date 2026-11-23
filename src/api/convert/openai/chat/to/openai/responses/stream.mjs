@@ -22,6 +22,7 @@ import { finishError } from "../../../../../../../lib/finish.mjs";
 import { itemId, pack, usageOf, endOf, envelope, failureOf } from "../../../../../../../lib/responses.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
 import { mergeDetail, reasoningOf } from "../../../../../../../lib/thinking.mjs";
+import { readAll, toResponses } from "../../../../../../../lib/citations.mjs";
 
 /**
  * Convert a Chat Completions chunk stream into Responses events.
@@ -31,7 +32,7 @@ import { mergeDetail, reasoningOf } from "../../../../../../../lib/thinking.mjs"
  * item `response.output_item.added`, its part and delta events, and `response.output_item.done`, and last `response.completed` (or
  * `response.incomplete` after a length stop or a content filter). Output items come in the order the deltas start them: reasoning
  * (as a summary part), the message text (or refusal) and one function call per tool call index. An `error` chunk, a fatal finish reason or
- * a stream that ends without a finish reason ends with `response.failed`. There is no `[DONE]` sentinel.
+ * a stream that ends without a finish reason ends with `response.failed`. Annotations (`delta.annotations`) are sent as `response.output_text.annotation.added` events and are in the closed part. There is no `[DONE]` sentinel.
  * @param {ReadableStream|AsyncIterable<unknown>|Iterable<unknown>|string|Uint8Array} source - Chat Completions stream.
  * @param {any} state - State from the request converter (`model`, `echo`).
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
@@ -49,8 +50,10 @@ export async function* stream(source, state, settings) {
 	const output = [];
 	/** The open reasoning or message item, and the open function call items by tool call index. */
 	let reasoning = null;
-	/** @type {{ index: number, item: any, kind: string, value: string } | null} */
+	/** @type {{ index: number, item: any, kind: string, value: string, annotations: any[] } | null} */
 	let text = null;
+	// Annotations that arrived before the message item they belong to was open.
+	const queued = [];
 	const calls = new Map();
 
 	const emit = (type, data) => ({ event: type, data: { type, ...data, sequence_number: sequence++ } });
@@ -98,7 +101,9 @@ export async function* stream(source, state, settings) {
 		if (text === null) return;
 		const { index, item, kind, value } = text;
 		const part =
-			kind === "refusal" ? { type: "refusal", refusal: value } : { type: "output_text", text: value, annotations: [], logprobs: [] };
+			kind === "refusal"
+				? { type: "refusal", refusal: value }
+				: { type: "output_text", text: value, annotations: text.annotations, logprobs: [] };
 		if (kind === "refusal")
 			yield emit("response.refusal.done", { item_id: item.id, output_index: index, content_index: 0, refusal: value });
 		else yield emit("response.output_text.done", { item_id: item.id, output_index: index, content_index: 0, text: value, logprobs: [] });
@@ -107,6 +112,42 @@ export async function* stream(source, state, settings) {
 		output[index] = done;
 		yield emit("response.output_item.done", { output_index: index, item: done });
 		text = null;
+	}
+
+	/**
+	 * Open the message item for text or a refusal when none is open.
+	 * @param {string} answer - `"text"` or `"refusal"`.
+	 * @returns {Generator<any>} Events.
+	 */
+	function* openText(answer) {
+		if (text !== null) return;
+		const started = open({ type: "message", id: itemId("msg"), status: "in_progress", role: "assistant", content: [] });
+		text = { ...started, kind: answer, value: "", annotations: [] };
+		yield emit("response.output_item.added", { output_index: started.index, item: started.item });
+		yield emit("response.content_part.added", {
+			item_id: started.item.id,
+			output_index: started.index,
+			content_index: 0,
+			part: answer === "refusal" ? { type: "refusal", refusal: "" } : { type: "output_text", text: "", annotations: [], logprobs: [] }
+		});
+	}
+
+	/**
+	 * Send the queued annotations on the open message text.
+	 * @returns {Generator<any>} Events.
+	 */
+	function* annotate() {
+		if (text?.kind !== "text") return;
+		for (const annotation of queued.splice(0)) {
+			yield emit("response.output_text.annotation.added", {
+				item_id: text.item.id,
+				output_index: text.index,
+				content_index: 0,
+				annotation_index: text.annotations.length,
+				annotation
+			});
+			text.annotations.push(annotation);
+		}
 	}
 
 	/**
@@ -182,17 +223,7 @@ export async function* stream(source, state, settings) {
 			if (answer !== null) {
 				yield* closeReasoning();
 				if (text !== null && text.kind !== answer) yield* closeText();
-				if (text === null) {
-					const started = open({ type: "message", id: itemId("msg"), status: "in_progress", role: "assistant", content: [] });
-					text = { ...started, kind: answer, value: "" };
-					yield emit("response.output_item.added", { output_index: started.index, item: started.item });
-					yield emit("response.content_part.added", {
-						item_id: started.item.id,
-						output_index: started.index,
-						content_index: 0,
-						part: answer === "refusal" ? { type: "refusal", refusal: "" } : { type: "output_text", text: "", annotations: [], logprobs: [] }
-					});
-				}
+				yield* openText(answer);
 				const piece = answer === "refusal" ? delta.refusal : delta.content;
 				text.value += piece;
 				if (answer === "refusal") {
@@ -207,6 +238,8 @@ export async function* stream(source, state, settings) {
 					});
 				}
 			}
+			if (s.citations !== "none") for (const citation of readAll(delta.annotations)) queued.push(toResponses(citation));
+			yield* annotate();
 			for (const call of delta.tool_calls ?? []) {
 				const key = call.index ?? 0;
 				if (!calls.has(key)) {
@@ -249,6 +282,9 @@ export async function* stream(source, state, settings) {
 		return;
 	}
 	yield* closeReasoning();
+	// Annotations on a reply with no text are carried by an empty message item.
+	if (queued.length > 0) yield* openText("text");
+	yield* annotate();
 	yield* closeText();
 	yield* closeCalls();
 	const end = endOf(finish);

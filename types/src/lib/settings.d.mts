@@ -33,6 +33,8 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {boolean} toolErrors - Prefix `is_error` tool results with `toolErrorMarker` when converting to Chat Completions (which has no error flag) and on vLLM native passthrough. On by default for every driver; set false to send the text unchanged. Upstreams with a native error flag (Anthropic-protocol) never go through this.
  * @property {string} toolErrorMarker - Text that marks a failed tool result when `toolErrors` is on, and the text `toolErrorInference` looks for. Must contain a non-whitespace character.
  * @property {boolean} toolErrorInference - OpenAI to Anthropic: a `tool` message whose text starts with `toolErrorMarker` becomes a `tool_result` with `is_error: true`, with the marker removed from the text. Off by default: a tool that merely prints the marker would be taken for a failure.
+ * @property {"auto"|"none"} citations - Citations in replies (Anthropic `citations`, Chat Completions and Responses `annotations`). `auto` carries them between the protocols, `none` leaves them out of every reply. See [protocol-support.md](protocol-support.md#14-citations).
+ * @property {boolean} documentCitations - OpenAI to Anthropic: ask for citations on the documents made from `file` content parts (`citations: { enabled: true }`). A `file` part can also say so itself with its own `citations: { enabled: true | false }`, which wins.
  * @property {"max_completion_tokens"|"max_tokens"} maxTokensField - Field used for the output cap.
  * @property {boolean} streamUsage - Request `stream_options.include_usage` on streamed requests.
  * @property {boolean} continuousUsage - Also request `stream_options.continuous_usage_stats` (vLLM extension; real OpenAI may reject it).
@@ -50,6 +52,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {boolean} effortPassthrough - vLLM driver: send `xhigh` and `max` reasoning effort unchanged instead of clamping them to `high`.
  * @property {boolean} passthroughFilter - Restrict bodies forwarded from the OpenAI front to an OpenAI-protocol upstream to standard Chat Completions fields plus documented vLLM extensions. Off in the library; the server turns it on unless set to false.
  * @property {boolean | "auto"} nativeMessages - Deprecated: use the upstream's `api` instead. For a vLLM upstream that sets no `api`, `true` reads as `api: "anthropic.messages"`, `"auto"` as `api: "auto"` and `false` as `api: "openai.chat"`, with a deprecation warning; it is ignored (also with a warning) when `api` is set.
+ * @property {{ safetySettings?: {category: string, threshold: string}[], tools?: object[], cachedContent?: string, cache?: boolean, thinking?: "auto"|"level"|"budget", responseModalities?: string[], imageConfig?: object, speechConfig?: object, mediaResolution?: string, confirmationTool?: string, computerUse?: { environment?: string, excludedPredefinedFunctions?: string[], enablePromptInjectionDetection?: boolean, disabledSafetyPolicies?: string[] } }} gemini - Google Gemini request fields for an upstream on the `google.gemini` protocol, merged key by key: `safetySettings` (sent as given), `tools` (built-in tools such as `{ googleSearch: {} }` or `{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }`, added to the request's own), `cachedContent` (a cached content name sent with every request), `cache` (false stops `cache_control` from creating cached contents), `thinking` (`level` or `budget` forces the thinking control a model that is not recognized by name takes; `auto` decides from the model id), `responseModalities`, `imageConfig`, `speechConfig` and `mediaResolution` (sent in `generationConfig`), `confirmationTool` (the name of a tool of the request, taking the `AskUserQuestion` shape, that asks the user to confirm an action Gemini flags; by default `AskUserQuestion` when the request declares it, else the confirmation is asked in plain text), and `computerUse` (fields merged into the `computerUse` tool the translator builds for an Anthropic computer tool: `enablePromptInjectionDetection`, `disabledSafetyPolicies`, and `environment` and `excludedPredefinedFunctions`, either spelled in camelCase or snake_case). Only the operator sets these; a client never does.
  * @property {number} contextWindow - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
  * @property {number} defaultMaxTokens - `max_tokens` used when an OpenAI request has none (Anthropic requires one).
  */
@@ -173,6 +176,14 @@ export type Settings = {
      */
     toolErrorInference: boolean;
     /**
+     * - Citations in replies (Anthropic `citations`, Chat Completions and Responses `annotations`). `auto` carries them between the protocols, `none` leaves them out of every reply. See [protocol-support.md](protocol-support.md#14-citations).
+     */
+    citations: "auto" | "none";
+    /**
+     * - OpenAI to Anthropic: ask for citations on the documents made from `file` content parts (`citations: { enabled: true }`). A `file` part can also say so itself with its own `citations: { enabled: true | false }`, which wins.
+     */
+    documentCitations: boolean;
+    /**
      * - Field used for the output cap.
      */
     maxTokensField: "max_completion_tokens" | "max_tokens";
@@ -245,6 +256,30 @@ export type Settings = {
      * - Deprecated: use the upstream's `api` instead. For a vLLM upstream that sets no `api`, `true` reads as `api: "anthropic.messages"`, `"auto"` as `api: "auto"` and `false` as `api: "openai.chat"`, with a deprecation warning; it is ignored (also with a warning) when `api` is set.
      */
     nativeMessages: boolean | "auto";
+    /**
+     * - Google Gemini request fields for an upstream on the `google.gemini` protocol, merged key by key: `safetySettings` (sent as given), `tools` (built-in tools such as `{ googleSearch: {} }` or `{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }`, added to the request's own), `cachedContent` (a cached content name sent with every request), `cache` (false stops `cache_control` from creating cached contents), `thinking` (`level` or `budget` forces the thinking control a model that is not recognized by name takes; `auto` decides from the model id), `responseModalities`, `imageConfig`, `speechConfig` and `mediaResolution` (sent in `generationConfig`), `confirmationTool` (the name of a tool of the request, taking the `AskUserQuestion` shape, that asks the user to confirm an action Gemini flags; by default `AskUserQuestion` when the request declares it, else the confirmation is asked in plain text), and `computerUse` (fields merged into the `computerUse` tool the translator builds for an Anthropic computer tool: `enablePromptInjectionDetection`, `disabledSafetyPolicies`, and `environment` and `excludedPredefinedFunctions`, either spelled in camelCase or snake_case). Only the operator sets these; a client never does.
+     */
+    gemini: {
+        safetySettings?: {
+            category: string;
+            threshold: string;
+        }[];
+        tools?: object[];
+        cachedContent?: string;
+        cache?: boolean;
+        thinking?: "auto" | "level" | "budget";
+        responseModalities?: string[];
+        imageConfig?: object;
+        speechConfig?: object;
+        mediaResolution?: string;
+        confirmationTool?: string;
+        computerUse?: {
+            environment?: string;
+            excludedPredefinedFunctions?: string[];
+            enablePromptInjectionDetection?: boolean;
+            disabledSafetyPolicies?: string[];
+        };
+    };
     /**
      * - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
      */

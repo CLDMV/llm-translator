@@ -21,6 +21,8 @@
  */
 import { TranslatorError, openaiError } from "./errors.mjs";
 import { resolve } from "./route.mjs";
+import { GEMINI } from "./protocol.mjs";
+import { MAX_CANDIDATES } from "./gemini.mjs";
 import { combine, deliver } from "./usage.mjs";
 
 /** The largest `n` that is fanned out (OpenAI's own limit for the parameter). */
@@ -30,7 +32,7 @@ const DONE = { data: "[DONE]" };
 
 /**
  * How many branches a request needs: `n` when the OpenAI-front body asks for more than one choice and the router would send it to an
- * Anthropic-protocol upstream, else 0 (the request goes the normal way: an OpenAI-protocol upstream handles `n` itself, and a value
+ * upstream that cannot answer it (one on another protocol than Chat Completions, which has no `n`, or a driver whose `info().n` is `false`), else 0 (the request goes the normal way: an OpenAI-protocol upstream handles `n` itself, Gemini's native API too (`candidateCount`, up to 8), and a value
  * that is not an integer above 1 is left to the converter's own validation). The decision is made on the endpoint the router picks
  * first; each branch is then routed and failed over like any request.
  * @param {any} c - Captured translator parts (`capture`).
@@ -41,7 +43,11 @@ const DONE = { data: "[DONE]" };
 export function wants(c, body) {
 	if (c.front !== "openai" || !body || typeof body !== "object" || Array.isArray(body)) return 0;
 	if (!Number.isInteger(body.n) || body.n < 2) return 0;
-	if (resolve(c, body).convert === null) return 0;
+	const picked = resolve(c, body);
+	// A body that goes through as it is reaches a server that handles `n` itself, unless the driver says it does not (`info().n: false`).
+	if (picked.convert === null && c.driver(picked.endpoint).info.n !== false) return 0;
+	// Gemini answers up to its own limit of candidates in one request.
+	if (picked.protocol === GEMINI && body.n <= MAX_CANDIDATES) return 0;
 	if (body.n > MAX) throw new TranslatorError(`n: at most ${MAX} choices`, { code: "invalid_request", param: "n" });
 	return body.n;
 }

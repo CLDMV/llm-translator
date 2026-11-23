@@ -43,6 +43,37 @@ export function route(kind: "messages" | "count", endpoint: any, model?: string,
     env?: Record<string, string | undefined>;
 }): string;
 /**
+ * Whether a model id names a Google-published Gemini model, which Vertex AI serves through `generateContent` and not `rawPredict`: `gemini-...`,
+ * with or without a `models/` or `publishers/google/models/` prefix.
+ * @param {unknown} model - Model id.
+ * @returns {boolean} True for a Gemini model.
+ */
+export function gemini(model: unknown): boolean;
+/**
+ * The path of a Vertex AI call for a Google-published model: `.../publishers/google/models/<model>:generateContent`, or
+ * `:streamGenerateContent?alt=sse` for a stream, or `:countTokens`.
+ * @param {any} endpoint - Runtime endpoint.
+ * @param {string} model - Model id, for example `gemini-2.5-flash`.
+ * @param {{stream?: boolean, count?: boolean, env?: Record<string, string | undefined>}} [options] - Whether the call streams or counts tokens, and the environment.
+ * @returns {string} Path starting with `/v1/projects/`.
+ */
+export function geminiRoute(endpoint: any, model: string, { stream, count, env }?: {
+    stream?: boolean;
+    count?: boolean;
+    env?: Record<string, string | undefined>;
+}): string;
+/**
+ * Where a Gemini model's cached contents are made on Vertex AI.
+ * @param {any} endpoint - Runtime endpoint.
+ * @param {string} model - Model id, for example `gemini-2.5-flash`.
+ * @param {Record<string, string | undefined>} [env] - Environment.
+ * @returns {{path: string, resource: string}} The `cachedContents` collection path, and the model's resource name for the create call.
+ */
+export function geminiCache(endpoint: any, model: string, env?: Record<string, string | undefined>): {
+    path: string;
+    resource: string;
+};
+/**
  * The body Vertex AI takes: the Messages body with `anthropic_version` added and the model taken out (it is in the path). The model stays on the
  * result as a property that is not enumerable, so it is not sent but the rest of the translator can still read `body.model`.
  * @param {any} body - Anthropic Messages request body.

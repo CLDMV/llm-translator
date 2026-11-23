@@ -24,6 +24,7 @@ import { messageId, anthropicToolId, restoreName } from "../../../../../../../li
 import { sign, reasoningOf, reasoningKey, detailsText, mergeDetail, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
 import { filterCategory, finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
+import { readAll, toAnthropic } from "../../../../../../../lib/citations.mjs";
 
 /**
  * Convert an OpenAI chat-completion stream into Anthropic Messages stream events.
@@ -34,6 +35,8 @@ import { messages } from "../../../../../../../lib/sse.mjs";
  * together, whole call at once), usage-only final chunks, `[DONE]`, mid-stream `{"error":...}` objects (answered
  * with an Anthropic `error` event) and closing the iterator early (the upstream source is closed too). Pings are
  * the SSE writer's job, not this converter's.
+ *
+ * Citations (`delta.annotations`) are sent as `citations_delta` events on the text block open when they arrive, or on a block of their own at the end when none was (`citations: "none"` leaves them out).
  *
  * Tool calls follow `settings.toolStreaming`. `buffer` (default) holds every call until the stream finishes and then emits
  * each one, in index order, as a single complete `tool_use` block (start, one `input_json_delta`, stop); text and
@@ -70,6 +73,9 @@ export async function* stream(source, state, settings) {
 	let trimNext = false;
 	// Text and reasoning that arrives while a tool block is open waits until the tool blocks are done, because blocks stream one at a time.
 	const held = [];
+	// Citations from `delta.annotations`, waiting for a text block to be open: Anthropic puts a citation on the text block it applies to, so a streamed one
+	// goes on the text block open when it arrives (a stream cannot split a block it has already sent).
+	const cites = [];
 
 	const event = (type, fields) => ({ event: type, data: { type, ...fields } });
 	const fail = (type, message) => event("error", { error: { type, message } });
@@ -84,8 +90,16 @@ export async function* stream(source, state, settings) {
 		return Object.keys(data).length > 0 ? data : undefined;
 	};
 
+	function* flushCitations() {
+		if (open?.kind !== "text") return;
+		for (const citation of cites.splice(0)) {
+			yield event("content_block_delta", { index: open.index, delta: { type: "citations_delta", citation } });
+		}
+	}
+
 	function* close() {
 		if (open === null) return;
+		if (open.kind === "text") yield* flushCitations();
 		if (open.kind === "thinking") {
 			yield event("content_block_delta", {
 				index: open.index,
@@ -253,6 +267,8 @@ export async function* stream(source, state, settings) {
 				if (splitter && !ownReasoning) yield* pieces(splitter.push(delta.content));
 				else yield* piece("text", delta.content);
 			}
+			if (s.citations !== "none") for (const citation of readAll(delta.annotations)) cites.push(toAnthropic(citation));
+			yield* flushCitations();
 			if (typeof delta.refusal === "string") refusal += delta.refusal;
 			// Azure annotates each chunk; the one that was filtered names the category (an earlier one is kept if a later annotation is empty).
 			category = filterCategory(choice.content_filter_results) ?? category;
@@ -284,6 +300,11 @@ export async function* stream(source, state, settings) {
 	// A refusal with no answer text becomes the answer, as in the non-streaming conversion.
 	if (!sawText && refusal !== "") yield* piece("text", refusal);
 	yield* close();
+	// Citations that came when no text block was open (the answer had no text, or only a tool call) go on a text block of their own.
+	if (cites.length > 0) {
+		yield* begin("text", { type: "text", text: "" });
+		yield* close();
+	}
 	if (nextIndex === 0) {
 		yield* begin("text", { type: "text", text: "" });
 		yield* close();

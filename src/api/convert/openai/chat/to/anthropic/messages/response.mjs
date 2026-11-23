@@ -23,6 +23,7 @@ import { messageId, anthropicToolId, restoreName } from "../../../../../../../li
 import { sign, reasoningOf, reasoningKey, detailsText, splitThink } from "../../../../../../../lib/thinking.mjs";
 import { isComplete, parseArguments } from "../../../../../../../lib/arguments.mjs";
 import { filterCategory, finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
+import { readAll, segments, toAnthropic } from "../../../../../../../lib/citations.mjs";
 
 /**
  * Convert a (non-streaming) OpenAI chat completion into an Anthropic message.
@@ -50,6 +51,7 @@ export function response(completion, state, settings) {
 
 	let reasoning = reasoningOf(message);
 	let text = typeof message.content === "string" ? message.content : "";
+	const original = text;
 	// With `reasoningRoundTrip` the provider's own reasoning fields ride in the signature so they can be sent back exactly.
 	const carry = {};
 	if (s.reasoningRoundTrip) {
@@ -69,7 +71,21 @@ export function response(completion, state, settings) {
 		text = text.trimStart();
 	}
 	if (text === "" && typeof message.refusal === "string") text = message.refusal;
-	if (text !== "") content.push({ type: "text", text });
+	if (text !== "") {
+		// The annotations' spans count in the content the server sent; reasoning taken off the front moved the text.
+		const moved = original.endsWith(text) ? original.length - text.length : 0;
+		const cited = s.citations === "none" ? [] : readAll(message.annotations);
+		const shifted = cited.map((citation) =>
+			citation.span ? { ...citation, span: { start: citation.span.start - moved, end: citation.span.end - moved } } : citation
+		);
+		for (const block of segments(text, shifted)) {
+			content.push({
+				type: "text",
+				text: block.text,
+				...(block.citations.length > 0 ? { citations: block.citations.map((c) => toAnthropic(c)) } : {})
+			});
+		}
+	}
 
 	const toolNames = state?.toolNames ?? {};
 	const toolIds = state?.toolIds ?? {};
