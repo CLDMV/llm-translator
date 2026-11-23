@@ -21,6 +21,7 @@ import { request as toConverse } from "../../src/api/convert/anthropic/messages/
 import { request as toResponses } from "../../src/api/convert/anthropic/messages/to/openai/responses/request.mjs";
 import { request as toGemini } from "../../src/api/convert/anthropic/messages/to/google/gemini/request.mjs";
 import { response } from "../../src/api/convert/openai/chat/to/anthropic/messages/response.mjs";
+import { COMPUTER_PROMPT, MEMORY_PROMPT } from "../../src/lib/clienttools.mjs";
 import { stream } from "../../src/api/convert/openai/chat/to/anthropic/messages/stream.mjs";
 import { asyncOf, collect } from "../helpers/streams.mjs";
 
@@ -94,6 +95,29 @@ describe("typed client tools become function tools (Anthropic client, Chat Compl
 		const { body } = await request(base({ tools: [BASH], messages }));
 		expect(body.messages[1].tool_calls[0].function).toEqual({ name: "bash", arguments: '{"command":"ls"}' });
 		expect(body.messages[2]).toMatchObject({ role: "tool", content: "a.txt" });
+	});
+});
+
+describe("system prompt text Anthropic publishes for its tools", () => {
+	const system = async (extra) => {
+		const { body } = await request(base(extra));
+		return body.messages.filter((message) => message.role === "system").map((message) => message.content);
+	};
+
+	it("the memory tool's protocol is added after the client's own system prompt", async () => {
+		expect(await system({ system: "be brief", tools: [MEMORY] })).toEqual([`be brief\n\n${MEMORY_PROMPT}`]);
+		expect(MEMORY_PROMPT).toContain("ALWAYS VIEW YOUR MEMORY DIRECTORY BEFORE DOING ANYTHING ELSE.");
+		expect(await system({ tools: [MEMORY] })).toEqual([MEMORY_PROMPT]);
+	});
+
+	it("the computer tool and the toolset add the start of Anthropic's computer prompt, once, next to the memory text", async () => {
+		expect(await system({ tools: [COMPUTER, TOOLSET, MEMORY] })).toEqual([`${COMPUTER_PROMPT}\n\n${MEMORY_PROMPT}`]);
+		expect(COMPUTER_PROMPT.startsWith("You have access to a set of functions")).toBe(true);
+	});
+
+	it("nothing is added for bash and the text editor (Anthropic prints no text for them), or for a version that is dropped", async () => {
+		expect(await system({ system: "be brief", tools: [BASH, EDITOR, { type: "memory_29990101", name: "memory" }] })).toEqual(["be brief"]);
+		expect(await system({ tools: [BASH] })).toEqual([]);
 	});
 });
 
@@ -181,7 +205,7 @@ describe("computer_toolset_20260801", () => {
 			{ role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", toolset_name: "computer", content: "ok" }] }
 		];
 		const { body } = await request(base({ tools: [TOOLSET], messages }));
-		expect(body.messages[1].tool_calls[0].function.name).toBe("screenshot");
+		expect(body.messages.find((message) => message.role === "assistant").tool_calls[0].function.name).toBe("screenshot");
 	});
 });
 

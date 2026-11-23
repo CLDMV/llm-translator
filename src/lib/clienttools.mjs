@@ -118,6 +118,18 @@ function editor(name, undo) {
 	};
 }
 
+/** The protocol text Anthropic adds to the system prompt when the memory tool is present, as its memory tool page prints it. */
+export const MEMORY_PROMPT = `IMPORTANT: ALWAYS VIEW YOUR MEMORY DIRECTORY BEFORE DOING ANYTHING ELSE.
+MEMORY PROTOCOL:
+1. Use the \`view\` command of your \`memory\` tool to check for earlier progress.
+2. ... (work on the task) ...
+   - As you make progress, record status / progress / thoughts etc in your memory.
+ASSUME INTERRUPTION: Your context window might be reset at any moment, so you risk losing any progress that is not recorded in your memory directory.`;
+
+/** The start of the system prompt Anthropic generates when the computer tool is present, as its computer use page prints it (the page does not print the rest). */
+export const COMPUTER_PROMPT =
+	"You have access to a set of functions you can use to answer the user\u2019s question. This includes access to a sandboxed computing environment. You do NOT currently have the ability to inspect files or interact with external resources, except by invoking the below functions.";
+
 /** @type {Record<string, any>} */
 const MEMORY = {
 	name: DEFAULT_NAMES.memory,
@@ -318,4 +330,22 @@ export function emulate(tool) {
 	if (typeof type !== "string" || !Object.hasOwn(SINGLE, type)) return null;
 	const entry = SINGLE[type];
 	return [{ name: typeof tool.name === "string" && tool.name !== "" ? tool.name : entry.name, ...entry.build(tool) }];
+}
+
+/**
+ * The system prompt text Anthropic adds for the tools of a request, for the ones that stand in as function tools and whose text Anthropic publishes: the memory tool's protocol and the opening of the computer use prompt.
+ * Each text appears once however many tools ask for it. No text is published for the bash and text editor tools, so none is added.
+ * @param {any[]} tools - The request's `tools`.
+ * @returns {string[]} Texts, in the order of the tools.
+ */
+export function prompts(tools) {
+	const out = [];
+	for (const tool of tools) {
+		const type = typeof tool?.type === "string" ? tool.type : "";
+		let text = "";
+		if (type.startsWith("memory_") && emulate(tool) !== null) text = MEMORY_PROMPT;
+		else if (type.startsWith("computer_") && emulate(tool) !== null) text = COMPUTER_PROMPT;
+		if (text !== "" && !out.includes(text)) out.push(text);
+	}
+	return out;
 }

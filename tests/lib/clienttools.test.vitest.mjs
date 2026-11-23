@@ -15,7 +15,7 @@
 
 import { describe, expect, test } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
-import { emulate } from "../../src/lib/clienttools.mjs";
+import { COMPUTER_PROMPT, MEMORY_PROMPT, emulate, prompts } from "../../src/lib/clienttools.mjs";
 import { toolsetOf } from "../../src/lib/ids.mjs";
 
 const dir = new URL("../fixtures/client-tools/", import.meta.url);
@@ -128,5 +128,24 @@ describe("toolsetOf", () => {
 		expect(toolsetOf(state, "toString")).toEqual({});
 		expect(toolsetOf({}, "left_click")).toEqual({});
 		expect(toolsetOf(undefined, "left_click")).toEqual({});
+	});
+});
+
+describe("prompts", () => {
+	test("the memory and computer texts, each once, for the tools that are emulated", () => {
+		expect(prompts([{ type: "memory_20250818" }, { type: "computer_20250124" }, { type: "computer_toolset_20260801" }])).toEqual([
+			MEMORY_PROMPT,
+			COMPUTER_PROMPT
+		]);
+		expect(
+			prompts([
+				{ type: "bash_20250124" },
+				{ type: "text_editor_20250728" },
+				{ type: "memory_29990101" },
+				{ type: "computer_29990101" },
+				{ name: "plain" },
+				null
+			])
+		).toEqual([]);
 	});
 });

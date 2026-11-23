@@ -27,7 +27,7 @@ import { createBudget, unsign } from "../../../../../../../lib/thinking.mjs";
 import { clearToolUses, valid as validEdit } from "../../../../../../../lib/context.mjs";
 import { sourceOf, tag } from "../../../../../../../lib/citations.mjs";
 import { plan, scan } from "../../../../../../../lib/toolsearch.mjs";
-import { emulate } from "../../../../../../../lib/clienttools.mjs";
+import { emulate, prompts } from "../../../../../../../lib/clienttools.mjs";
 
 const HANDLED = new Set([
 	"model",
@@ -106,7 +106,8 @@ export async function request(body, settings, context) {
 	}
 
 	const out = /** @type {any} */ ({ model: body.model });
-	const system = textOf(body.system, s);
+	// Anthropic adds text to the system prompt for some of its client tools (memory, computer); with those tools substituted, the translator does.
+	const system = [textOf(body.system, s), ...prompts(offered.offer)].filter((part) => part !== "").join("\n\n");
 	const conversation = await convertMessages(
 		body.messages,
 		s,
