@@ -30,7 +30,7 @@ import { completion, folded } from "../../../../../../../lib/converse.mjs";
  * @throws {import("../../../../../../../lib/errors.mjs").TranslatorError} When the reply has no message.
  */
 export function response(reply, state, settings) {
-	const out = completion(reply, { reasoningField: resolve(settings).reasoningField, model: state?.model });
+	const out = completion(reply, { reasoningField: resolve(settings).reasoningField, model: state?.model, jsonTool: state?.jsonTool });
 	if (state) state.upstreamUsage = folded(reply.usage);
 	return out;
 }

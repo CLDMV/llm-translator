@@ -38,6 +38,7 @@ import { defaultUrl } from "./bedrock.mjs";
  * @property {string} [accessKeyId] Amazon Bedrock: access key id for SigV4. Defaults to `AWS_ACCESS_KEY_ID`.
  * @property {string} [secretAccessKey] Amazon Bedrock: secret access key for SigV4. Defaults to `AWS_SECRET_ACCESS_KEY`.
  * @property {string} [sessionToken] Amazon Bedrock: session token of temporary credentials. Defaults to `AWS_SESSION_TOKEN`.
+ * @property {string} [profile] Amazon Bedrock: a profile of the AWS shared config files (`~/.aws/config`, `~/.aws/credentials`) to take the credentials from: access keys, a `credential_process` or an SSO login. It is used when the upstream has no `apiKey` or access keys, and ahead of the `AWS_*` environment variables. Without it, and without keys in the environment, the `AWS_PROFILE` or `default` profile, an ECS task role and an EC2 instance role are tried in that order.
  * @property {string} [api] Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"`, `"ollama.chat"`, `"bedrock.converse"`, `"google.gemini"` and `"cohere.chat"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third, `"native"` and `"ollama"` the fourth, `"converse"` the fifth, `"gemini"` and `"google"` the sixth and `"cohere"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
  * @property {string} [backend] Driver name, or `"auto"` (default) to detect.
  * @property {string[]} [models] Models this upstream serves (routing).
@@ -78,7 +79,7 @@ export function endpoint(entry, index, globalSettings) {
 	if (!raw || typeof raw !== "object" || typeof raw.url !== "string" || raw.url === "") {
 		throw new TranslatorError(`upstreams[${index}] needs a "url"`, { code: "INVALID_CONFIG", status: 500 });
 	}
-	for (const key of ["apiVersion", "deployment", "region", "accessKeyId", "secretAccessKey", "sessionToken"]) {
+	for (const key of ["apiVersion", "deployment", "region", "accessKeyId", "secretAccessKey", "sessionToken", "profile"]) {
 		if (raw[key] !== undefined && (typeof raw[key] !== "string" || raw[key] === "")) {
 			throw new TranslatorError(`upstreams[${index}].${key} must be a non-empty string`, { code: "INVALID_CONFIG", status: 500 });
 		}
@@ -126,6 +127,7 @@ export function endpoint(entry, index, globalSettings) {
 		accessKeyId: raw.accessKeyId,
 		secretAccessKey: raw.secretAccessKey,
 		sessionToken: raw.sessionToken,
+		profile: raw.profile,
 		api: raw.api === undefined ? "auto" : canonical(raw.api),
 		apiSet: raw.api !== undefined,
 		legacy,

@@ -240,7 +240,8 @@ async function prepare(c, body, options, picked) {
 			warn(c.config, c.state, message, { type: "effort", endpoint: endpoint.name, model, ...details, log: options.log })
 		);
 	// A Responses upstream never needs reasoning sent back to accept tool calls (a model without reasoning has none), so it gets no warning.
-	if (converted?.reasoningMissing && protocol !== RESPONSES) {
+	// Nor does a Converse one: a Claude model asks for it back only while thinking is on, and then it names the missing block itself.
+	if (converted?.reasoningMissing && protocol !== RESPONSES && protocol !== CONVERSE) {
 		warn(
 			c.config,
 			c.state,
@@ -256,6 +257,8 @@ async function prepare(c, body, options, picked) {
 			levels,
 			protocol,
 			state: converted,
+			// What a client sent as headers that the server takes in the body (`anthropic-beta` for InvokeModel); only a body forwarded as it is.
+			clientHeaders: convert === null ? options.clientHeaders : undefined,
 			warn: (message) => warn(c.config, c.state, message, { kind: "driver", endpoint: endpoint.name, log: options.log })
 		});
 	// The fields the conversion and the driver left out, once per upstream request (a retry of the same request does not repeat it).
@@ -292,8 +295,21 @@ async function prepare(c, body, options, picked) {
 	// A driver whose credentials are fetched (Google's access tokens) has an `auth` leaf that returns the headers to send; token counting sends none of these headers.
 	if (driver.auth && options.tokens !== true)
 		headers = await driver.auth({ endpoint, headers, transport: c.state.transport, timeout: c.config.detectTimeout });
-	// A driver that signs its calls (Amazon Bedrock's SigV4) sees the finished URL, headers and body, and returns the headers to send.
-	if (driver.sign) headers = await driver.sign({ endpoint, protocol, method: "POST", url, headers, body: upstream, stream });
+	// A driver that signs its calls (Amazon Bedrock's SigV4) sees the finished URL, headers and body, and returns the headers to send; a token count signs its own call.
+	if (driver.sign && options.tokens !== true) {
+		headers = await driver.sign({
+			endpoint,
+			protocol,
+			method: "POST",
+			url,
+			headers,
+			body: upstream,
+			stream,
+			transport: c.state.transport,
+			timeout: c.config.detectTimeout,
+			signal: options.signal
+		});
+	}
 	// A driver whose server caches (Gemini's cached contents) turns the conversation up to a `cache_control` breakpoint into a cache and sends only what follows it; a token count sends the whole prompt.
 	if (driver.cache && converted?.cache && converted.local === undefined && options.tokens !== true) {
 		upstream = await driver.cache({

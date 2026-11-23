@@ -22,6 +22,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { items } from "./source.mjs";
+import { createDecoder } from "./eventstream.mjs";
 import { warn } from "./warn.mjs";
 
 /** Most characters of a stream kept per exchange, for the raw upstream text and for the client events each. */
@@ -84,7 +85,7 @@ const OFF = {
  * Begin the record of one exchange. With `capture` unset this returns a stand-in that does nothing.
  * @param {{config: any, state: any}} ctx - Translator `{ config, state }`.
  * @param {{body: any, sent: any, front: string, requested: string | null, headers?: Record<string, string>, log?: any, exchange?: string | null, attempt: number}} exchange - Client body, the upstream request (result of `request`), front, the logger of the request, and where this attempt sits: `exchange` is the id of the first attempt of the request (omit it for the first attempt) and `attempt` the 1-based number.
- * @returns {{on: boolean, id: string, raw: (source: any) => any, events: (source: any) => any, reply: (status: number, headers: Record<string, string>, body: any) => void, attempt: (response: any, failover?: string) => void}} Recorder: `id` is the record id (pass it as `exchange` for the later attempts), `raw` taps the upstream stream bytes, `events` taps the client events and writes the record when the stream ends, `reply` writes the record of a non-stream reply, `attempt` writes the record of an attempt that did not produce the reply (`failover` is the reason the request moved on to the next endpoint, absent for the final failure).
+ * @returns {{on: boolean, id: string, raw: (source: any, frames?: "invoke" | "converse") => any, events: (source: any) => any, reply: (status: number, headers: Record<string, string>, body: any) => void, attempt: (response: any, failover?: string) => void}} Recorder: `id` is the record id (pass it as `exchange` for the later attempts), `raw` taps the upstream stream (for a stream of Amazon event stream frames, pass which API it comes from and the record holds the decoded events as Server-Sent Events text instead of the binary frames), `events` taps the client events and writes the record when the stream ends, `reply` writes the record of a non-stream reply, `attempt` writes the record of an attempt that did not produce the reply (`failover` is the reason the request moved on to the next endpoint, absent for the final failure).
  */
 export function start({ config, state }, exchange) {
 	const sink = config.capture;
@@ -148,12 +149,33 @@ export function start({ config, state }, exchange) {
 	return {
 		on: true,
 		id,
-		raw(source) {
+		raw(source, frames) {
 			return (async function* () {
 				const decoder = new TextDecoder();
+				const events = frames === undefined ? null : createDecoder(frames);
+				let broken = false;
+				/**
+				 * The text a chunk adds to the record: its characters, or, for event stream frames, the events they complete.
+				 * @param {string | Uint8Array} chunk - Upstream chunk.
+				 * @returns {string} Text.
+				 */
+				const text = (chunk) => {
+					if (events === null) return typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+					if (broken) return "";
+					try {
+						return events
+							.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk)
+							.map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+							.join("");
+					} catch (cause) {
+						// A stream that cannot be read is recorded as the error the client gets, and nothing after it.
+						broken = true;
+						return `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: cause.type, message: cause.message } })}\n\n`;
+					}
+				};
 				for await (const chunk of items(source)) {
 					if (!rawFull) {
-						raw += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+						raw += text(chunk);
 						if (raw.length > STREAM_LIMIT) {
 							raw = raw.slice(0, STREAM_LIMIT);
 							rawFull = true;

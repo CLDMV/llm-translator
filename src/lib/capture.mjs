@@ -197,14 +197,14 @@ export function capture(self, context, frontOverride) {
 		/**
 		 * Resolve the effective settings for an endpoint: endpoint > global > probed > driver > defaults. Given the protocol a request goes over, the Responses
 		 * API also turns `reasoningRoundTrip` on (below the driver and the config, so an explicit setting still wins): a stateless Responses call needs its
-		 * encrypted reasoning items back between turns. So does Gemini's native API, whose thought signatures must come back with tool turns.
+		 * encrypted reasoning items back between turns. So does Gemini's native API, whose thought signatures must come back with tool turns, and Bedrock's Converse API, whose signed reasoning must come back while thinking is on.
 		 * @param {any} endpoint - Runtime endpoint.
 		 * @param {string} [protocol] - The protocol of the request.
 		 * @returns {any} Resolved settings.
 		 */
 		settings: (endpoint, protocol) =>
 			resolve(
-				protocol === RESPONSES || protocol === GEMINI ? { reasoningRoundTrip: true } : undefined,
+				protocol === RESPONSES || protocol === GEMINI || protocol === CONVERSE ? { reasoningRoundTrip: true } : undefined,
 				endpoint.driverSettings,
 				endpoint.probed,
 				config.settings,

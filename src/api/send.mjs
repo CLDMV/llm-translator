@@ -30,7 +30,7 @@ import { warn } from "../lib/warn.mjs";
 import { start as record } from "../lib/record.mjs";
 import { emit } from "../lib/events.mjs";
 import { MISSING } from "../lib/responses-upstream.mjs";
-import { MESSAGES, RESPONSES, remember } from "../lib/protocol.mjs";
+import { MESSAGES, RESPONSES, CONVERSE, remember } from "../lib/protocol.mjs";
 import * as pool from "../lib/pool.mjs";
 import { createBudget } from "../lib/thinking.mjs";
 import * as fanout from "../lib/fanout.mjs";
@@ -468,7 +468,14 @@ async function round({ transport, textOnly, jsonInstruction, request, response, 
 		return fail(result.status, rejected, headers, upstream.state, "upstream_error");
 	}
 	if (upstream.state.stream) {
-		const events = stream(recorder.raw(result.body), upstream.state);
+		// A driver whose server streams event stream frames (Amazon Bedrock) has the decoded events captured, not the binary frames.
+		const frames =
+			captured.driver(captured.endpoint(upstream.upstream)).info.frames === "eventstream"
+				? upstream.state.protocol === CONVERSE
+					? "converse"
+					: "invoke"
+				: undefined;
+		const events = stream(recorder.raw(result.body, frames), upstream.state);
 		const client = upstream.state.native
 			? events
 			: estimating(meter.meta.front, events, {

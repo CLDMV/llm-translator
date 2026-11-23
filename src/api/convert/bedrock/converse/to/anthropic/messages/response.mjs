@@ -21,8 +21,8 @@ import { completion } from "../../../../../../../lib/converse.mjs";
 import { response as fromChat } from "../../../../../openai/chat/to/anthropic/messages/response.mjs";
 
 /**
- * Convert a Converse reply to an Anthropic message: the reply is read as a Chat Completions `chat.completion` (reasoning, tool calls with the
- * model's ids, `stopReason` as `finish_reason`, `usage` with the cache counts in the prompt) and the Chat Completions conversion builds the message.
+ * Convert a Converse reply to an Anthropic message: the reply is read as a Chat Completions `chat.completion` (reasoning with its signatures, tool calls with the
+ * model's ids, a call of the `response_format` tool as the text, `stopReason` as `finish_reason`, `usage` with the cache counts in the prompt) and the Chat Completions conversion builds the message.
  * @param {any} reply - Parsed Converse reply.
  * @param {any} [state] - State from the request converter.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
@@ -30,5 +30,5 @@ import { response as fromChat } from "../../../../../openai/chat/to/anthropic/me
  * @throws {import("../../../../../../../lib/errors.mjs").TranslatorError} When the reply has no message or ends in a failure.
  */
 export function response(reply, state, settings) {
-	return fromChat(completion(reply), state, settings);
+	return fromChat(completion(reply, { jsonTool: state?.jsonTool }), state, settings);
 }

@@ -30,12 +30,20 @@ const tool = { name: "Read", description: "read a file", input_schema: { type: "
 const chatTool = { type: "function", function: { name: "Read", description: "read a file", parameters: tool.input_schema } };
 
 let aws;
+// The chain of AWS credential sources finds nothing here unless a test gives it something: no shared files, no metadata service.
+const isolated = {
+	AWS_CONFIG_FILE: "/nonexistent/aws/config",
+	AWS_SHARED_CREDENTIALS_FILE: "/nonexistent/aws/credentials",
+	AWS_EC2_METADATA_DISABLED: "true"
+};
 beforeAll(async () => {
 	aws = await bedrock("us-east-1");
+	Object.assign(process.env, isolated);
 });
 afterAll(async () => {
 	await closeAll();
 	await aws.close();
+	for (const name of Object.keys(isolated)) delete process.env[name];
 });
 afterEach(() => {
 	for (const name of [
@@ -148,7 +156,7 @@ describe("detection, URL and region", () => {
 	});
 
 	it("rejects an empty region or credential setting", async () => {
-		for (const key of ["region", "accessKeyId", "secretAccessKey", "sessionToken"]) {
+		for (const key of ["region", "accessKeyId", "secretAccessKey", "sessionToken", "profile"]) {
 			await expect(make({ upstreams: [{ url: aws.url, backend: "bedrock", [key]: "" }], detect: false })).rejects.toThrow(
 				new RegExp(`${key} must be a non-empty string`)
 			);
@@ -662,8 +670,9 @@ describe("model list and token counts", () => {
 		expect((await unparsable.model.list()).data.map((entry) => entry.id)).toEqual(["configured"]);
 	});
 
-	it("estimates token counts, because the driver has no counter", async () => {
+	it("estimates token counts when Bedrock does not count them", async () => {
 		const api = await apiFor("anthropic");
+		aws.use((_call, res) => reply(res, 500, { message: "no" }));
 		const count = await api.token.count({ model: CLAUDE, max_tokens: 8, messages: [{ role: "user", content: "x".repeat(400) }] });
 		expect(count.input_tokens).toBeGreaterThan(90);
 	});
