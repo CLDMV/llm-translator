@@ -1,0 +1,64 @@
+{
+	"tool": {
+		"type": "memory_20250818",
+		"name": "memory"
+	},
+	"functions": [
+		{
+			"name": "memory",
+			"description": "Store and retrieve notes across conversations in files under /memories. Commands: view (a directory or file, optionally a line range), create (a file with file_text), str_replace, insert (after line insert_line), delete (a file or directory) and rename (old_path to new_path). Check the directory before starting a task.",
+			"parameters": {
+				"type": "object",
+				"properties": {
+					"command": {
+						"type": "string",
+						"enum": ["view", "create", "str_replace", "insert", "delete", "rename"],
+						"description": "The command to run."
+					},
+					"path": {
+						"type": "string",
+						"description": "The file or directory the command applies to (view, create, str_replace, insert, delete)."
+					},
+					"view_range": {
+						"type": "array",
+						"items": {
+							"type": "integer"
+						},
+						"minItems": 2,
+						"maxItems": 2,
+						"description": "view only: [start_line, end_line], 1-indexed; an end line of -1 reads to the end of the file."
+					},
+					"file_text": {
+						"type": "string",
+						"description": "create only: the content of the file."
+					},
+					"old_str": {
+						"type": "string",
+						"description": "str_replace only: the text to replace, matched exactly."
+					},
+					"new_str": {
+						"type": "string",
+						"description": "str_replace only: the replacement; leave it out to delete old_str."
+					},
+					"insert_line": {
+						"type": "integer",
+						"description": "insert only: the line after which to insert; 0 inserts at the start of the file."
+					},
+					"insert_text": {
+						"type": "string",
+						"description": "insert only: the text to insert."
+					},
+					"old_path": {
+						"type": "string",
+						"description": "rename only: the path to rename."
+					},
+					"new_path": {
+						"type": "string",
+						"description": "rename only: the new path."
+					}
+				},
+				"required": ["command"]
+			}
+		}
+	]
+}

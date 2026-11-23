@@ -20,7 +20,7 @@
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError, openaiToAnthropicType, rewriteContextOverflow } from "../../../../../../../lib/errors.mjs";
 import { isComplete } from "../../../../../../../lib/arguments.mjs";
-import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
+import { messageId, anthropicToolId, restoreName, toolsetOf } from "../../../../../../../lib/ids.mjs";
 import { sign, reasoningOf, reasoningKey, detailsText, mergeDetail, createThinkSplitter } from "../../../../../../../lib/thinking.mjs";
 import { filterCategory, finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
 import { messages } from "../../../../../../../lib/sse.mjs";
@@ -194,7 +194,13 @@ export async function* stream(source, state, settings) {
 		let entry = tools.get(key);
 		if (entry === undefined) {
 			const name = call.function?.name ?? "";
-			const block = { type: "tool_use", id: anthropicToolId(call.id, toolIds), name: restoreName(toolNames, name), input: {} };
+			const block = {
+				type: "tool_use",
+				id: anthropicToolId(call.id, toolIds),
+				name: restoreName(toolNames, name),
+				...toolsetOf(state, name),
+				input: {}
+			};
 			if (splitter?.pending()) waitForSplit = true;
 			const buffer = s.toolStreaming === "buffer" || waitForSplit;
 			entry = { state: buffer ? "buffered" : "pending", sent: false, args: [], block };

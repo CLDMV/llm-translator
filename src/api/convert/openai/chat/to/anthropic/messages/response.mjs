@@ -19,7 +19,7 @@
 
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
-import { messageId, anthropicToolId, restoreName } from "../../../../../../../lib/ids.mjs";
+import { messageId, anthropicToolId, restoreName, toolsetOf } from "../../../../../../../lib/ids.mjs";
 import { sign, reasoningOf, reasoningKey, detailsText, splitThink } from "../../../../../../../lib/thinking.mjs";
 import { isComplete, parseArguments } from "../../../../../../../lib/arguments.mjs";
 import { filterCategory, finishError, toAnthropicStop, toAnthropicUsage } from "../../../../../../../lib/finish.mjs";
@@ -95,6 +95,7 @@ export function response(completion, state, settings) {
 			type: "tool_use",
 			id: anthropicToolId(call.id, toolIds),
 			name: restoreName(toolNames, call.function.name),
+			...toolsetOf(state, call.function.name),
 			input: parseArguments(call.function.arguments)
 		});
 	}
