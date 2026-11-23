@@ -116,6 +116,19 @@ describe("authorize (anthropic front)", () => {
 		}
 	});
 
+	it("treats a hook that throws something that is not an Error as a 401 too", async () => {
+		const { upstream, server } = await boot({
+			authorize: () => {
+				throw "key store down";
+			}
+		});
+		try {
+			expect((await post(`${server.url}/v1/messages`, hello)).status).toBe(401);
+		} finally {
+			await upstream.close();
+		}
+	});
+
 	it("shows the hook the method, url, headers, parsed body, front and the resolved route", async () => {
 		const seen = [];
 		const { upstream, api, server } = await boot(

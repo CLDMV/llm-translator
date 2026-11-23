@@ -23,6 +23,8 @@ import { messageId } from "./ids.mjs";
 import { sign } from "./thinking.mjs";
 import { CONTENT_TYPE, recorder } from "./metrics.mjs";
 import { cors as corsPolicy, rateLimit as limiter } from "./guard.mjs";
+import { beta } from "./files.mjs";
+import { parse as multipart } from "./multipart.mjs";
 
 const BODY_LIMIT = 64 * 1024 * 1024;
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
@@ -267,7 +269,13 @@ export function register(fastify, options, captured) {
 		count: (body, extra) => captured.count(body, { ...extra, front }),
 		embed: (body, extra) => captured.embed(body, extra),
 		list: (extra) => captured.list({ ...extra, front }),
-		get: (id, extra) => captured.get(id, { ...extra, front })
+		get: (id, extra) => captured.get(id, { ...extra, front }),
+		files: Object.fromEntries(
+			["create", "list", "get", "content", "remove"].map((name) => [
+				name,
+				(input, extra) => captured.files[name](input, { ...extra, front })
+			])
+		)
 	};
 	const keys = [options.apiKey ?? []].flat().filter(Boolean);
 	const bodyLimit = options.bodyLimit ?? BODY_LIMIT;
@@ -408,6 +416,47 @@ export function register(fastify, options, captured) {
 		reply.raw.on("close", () => controller.abort());
 		return api.get(request.params["*"], { signal: controller.signal });
 	});
+
+	// The Files API. An upload is a `multipart/form-data` body, read whole (the limit is the file size limit plus room for the form around it) and parsed
+	// by `lib/multipart`, so the handlers see `{ fields, files }`.
+	fastify.addContentTypeParser(
+		"multipart/form-data",
+		{ parseAs: "buffer", bodyLimit: captured.files.limit() + 1024 * 1024 },
+		(request, body, done) => {
+			try {
+				done(null, multipart(body, request.headers["content-type"]));
+			} catch (error) {
+				done(error);
+			}
+		}
+	);
+	fastify.post("/v1/files", async (request, reply) => {
+		const part = request.body?.files?.find((entry) => entry.name === "file");
+		if (!part) {
+			throw new TranslatorError("file: Field required (send multipart/form-data with a file part)", {
+				code: "invalid_request",
+				status: 400,
+				type: "invalid_request_error",
+				param: "file"
+			});
+		}
+		const upload = { filename: part.filename, data: part.data, type: part.type, fields: request.body.fields };
+		return reply.send(await api.files.create(upload, { beta: beta(request.headers["anthropic-beta"]) }));
+	});
+	fastify.get("/v1/files", async (request, reply) => {
+		// Anthropic's `ids[]` arrives as `ids[]` (or `ids`), one value or many.
+		const ids = request.query["ids[]"] ?? request.query.ids;
+		const query = ids === undefined ? request.query : { ...request.query, ids: [ids].flat() };
+		return reply.send(await api.files.list(query, { beta: beta(request.headers["anthropic-beta"]) }));
+	});
+	fastify.get("/v1/files/:id", async (request, reply) =>
+		reply.send(await api.files.get(request.params.id, { beta: beta(request.headers["anthropic-beta"]) }))
+	);
+	fastify.get("/v1/files/:id/content", async (request, reply) => {
+		const file = await api.files.content(request.params.id);
+		return reply.header("content-type", file.type).send(file.data);
+	});
+	fastify.delete("/v1/files/:id", async (request, reply) => reply.send(await api.files.remove(request.params.id)));
 
 	// Streams of the Responses front fail with its own in-band error event (see `failure`).
 	const asResponses = { ...api, wire: "responses" };

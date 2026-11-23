@@ -67,6 +67,7 @@ export async function createTranslator(config) {
 		jsonInstruction: new Set(),
 		missing: new Map(),
 		cursors: new Map(),
+		files: undefined,
 		front: undefined
 	};
 	open(state.events, normalized.logs);

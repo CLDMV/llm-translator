@@ -27,7 +27,7 @@ import { emit } from "../../lib/events.mjs";
 
 /**
  * Fastify plugin. Anthropic front: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`,
- * `GET|HEAD /` and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/responses/input_tokens`, `POST /v1/embeddings`, `GET /v1/models`, `GET /v1/models/{id}`, `GET|HEAD /`. Responses stream as
+ * the Files API (`POST|GET /v1/files`, `GET|DELETE /v1/files/{id}`, `GET /v1/files/{id}/content`), `GET|HEAD /` and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/responses/input_tokens`, `POST /v1/embeddings`, the Files API, `GET /v1/models`, `GET /v1/models/{id}`, `GET|HEAD /`. Responses stream as
  * `text/event-stream` with keep-alive pings; a client disconnect aborts the upstream request. Register it with
  * `app.register(api.server.plugin, { apiKey })`. `authorize(request)` (sync or async) runs after `apiKey` and the body parse and decides
  * with `true` / `{ ok: true, context }` or `false` / `{ ok: false, status, message }`; `onUsage(report, context)` receives each request's usage report. When the Fastify `logger` is enabled, events also go to it as structured lines (`{ event }` plus the message), through the request's logger for events of a request.
@@ -53,7 +53,7 @@ export async function plugin(fastify, options = {}) {
 	if (options.metrics !== undefined && typeof options.metrics !== "boolean") {
 		throw new TranslatorError("metrics must be true or false", { code: "invalid_config", status: 500 });
 	}
-	const { send, route, token, model, error, sse, embeddings } = self;
+	const { send, route, token, model, error, sse, embeddings, files } = self;
 	const front = options.front ?? config.front;
 	// Events also go to this app's logger (as structured lines) until it closes; a request's own logger takes over for its events.
 	const { state } = context;
@@ -95,6 +95,15 @@ export async function plugin(fastify, options = {}) {
 		count: token.count,
 		list: model.list,
 		get: model.get,
+		// The Files API leaves, and the file size limit the upload body limit follows (1 MiB when the Files API is off).
+		files: {
+			create: files.create,
+			list: files.list,
+			get: files.get,
+			content: files.content,
+			remove: files.remove,
+			limit: () => resolve(config.settings).files?.maxFileSize ?? 1024 * 1024
+		},
 		// `context` is only valid inside a call into the api, and routes run later, so the parts are captured now.
 		emit: (spec) => emit({ config, state }, spec),
 		endpoints: () => state.endpoints,
