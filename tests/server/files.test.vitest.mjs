@@ -317,6 +317,31 @@ describe("OpenAI front: /v1/files", () => {
 	});
 });
 
+describe("Responses front", () => {
+	it("reads input_file and input_image ids from the store, and forwards ids it does not hold on a route that goes through as it is", async () => {
+		const { url, upstream, sent } = await start("openai");
+		try {
+			const pdf = await (await upload(url, { fields: { purpose: "user_data" } })).json();
+			const png = await (await upload(url, { filename: "p.png", type: "image/png", bytes: PNG, fields: { purpose: "vision" } })).json();
+			const ask = (...parts) =>
+				post(url, "/v1/responses", {
+					model: "qwen3-coder",
+					input: [{ role: "user", content: [{ type: "input_text", text: "read" }, ...parts] }]
+				});
+			const held = await ask({ type: "input_file", file_id: pdf.id }, { type: "input_image", file_id: png.id });
+			expect(held.status).toBe(200);
+			expect(sent.at(-1).messages[0].content.slice(1)).toEqual([
+				{ type: "file", file: { file_data: `data:application/pdf;base64,${PDF.toString("base64")}`, filename: "a.pdf" } },
+				{ type: "image_url", image_url: { url: `data:image/png;base64,${PNG.toString("base64")}` } }
+			]);
+			expect((await ask({ type: "input_file", file_id: "file-theirs0000000" })).status).toBe(200);
+			expect(sent.at(-1).messages[0].content[1]).toEqual({ type: "file", file: { file_id: "file-theirs0000000" } });
+		} finally {
+			await upstream.close();
+		}
+	});
+});
+
 describe("files kept on disk", () => {
 	it("survive the store and are removed with the file", async () => {
 		fs.mkdirSync(path.join(process.cwd(), "tmp"), { recursive: true });

@@ -33,6 +33,33 @@ describe("input", () => {
 		expect(state).toMatchObject({ model: "m", stream: false, dropped: [] });
 	});
 
+	it("maps stored files: input_image with a file_id and input_file by id or data", () => {
+		const { body } = request({
+			model: "m",
+			input: [
+				{
+					role: "user",
+					content: [
+						{ type: "input_image", file_id: "file-aaaaaaaaaaaa", detail: "low" },
+						{ type: "input_file", file_id: "file-bbbbbbbbbbbb", filename: "a.pdf" },
+						{ type: "input_file", file_data: "data:application/pdf;base64,AA", filename: "b.pdf", file_url: "https://x/ignored" }
+					]
+				}
+			]
+		});
+		expect(body.messages[0].content).toEqual([
+			{ type: "image_url", image_url: { url: "file-aaaaaaaaaaaa", detail: "low" } },
+			{ type: "file", file: { file_id: "file-bbbbbbbbbbbb", filename: "a.pdf" } },
+			{ type: "file", file: { file_data: "data:application/pdf;base64,AA", filename: "b.pdf" } }
+		]);
+		refused(
+			{ model: "m", input: [{ role: "assistant", content: [{ type: "input_file", file_id: "file-aaaaaaaaaaaa" }] }] },
+			undefined,
+			"unsupported_content",
+			"input[0].content[0]"
+		);
+	});
+
 	it("maps messages with text and image parts, and the roles", () => {
 		const { body } = request({
 			model: "m",
@@ -335,13 +362,13 @@ describe("refusals", () => {
 			refused({ model: "m", input: [item] }, undefined, "unsupported_content", "input[0]");
 		}
 		refused(
-			{ model: "m", input: [{ role: "user", content: [{ type: "input_file", file_id: "f" }] }] },
+			{ model: "m", input: [{ role: "user", content: [{ type: "input_file", filename: "a.pdf" }] }] },
 			undefined,
 			"unsupported_content",
 			"input[0].content[0]"
 		);
 		refused(
-			{ model: "m", input: [{ role: "user", content: [{ type: "input_image", file_id: "f" }] }] },
+			{ model: "m", input: [{ role: "user", content: [{ type: "input_image" }] }] },
 			undefined,
 			"unsupported_content",
 			"input[0].content[0]"
