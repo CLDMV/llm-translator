@@ -57,7 +57,7 @@ const BILLING = "x-anthropic-billing-header:";
  * tool-name map, thinking mode, fields that were dropped).
  * @param {any} body - Anthropic `POST /v1/messages` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
- * @param {{ producer?: string, budget?: ReturnType<typeof createBudget>, listed?: boolean, toolCallIds?: { alphabet: string, min?: number, max?: number }, sources?: boolean, cachePoints?: boolean }} [context] - `cachePoints` keeps the `cache_control` markers of tools, system blocks, messages and content blocks as `cache_point` markers (`{ ttl? }`) on the converted tools and messages (and on the parts of a user message), for a converter that sends them as cache points of its own (Amazon Bedrock's Converse); no other converter asks for it, because a marker has no place in a Chat Completions body. `sources` keeps the parts made from `document` and `search_result` blocks as separate parts tagged with their source (see `lib/citations.mjs`), for a converter that sends them as documents of their own. `toolCallIds` is the driver's tool-call id policy: ids that do not satisfy it are rewritten (and recorded in `state.toolIds` for the way back). `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts). `listed` says the model has a configured effort list, so the default `medium` effort is left to it.
+ * @param {{ producer?: string, budget?: ReturnType<typeof createBudget>, listed?: boolean, toolCallIds?: { alphabet: string, min?: number, max?: number }, sources?: boolean, cachePoints?: boolean }} [context] - `cachePoints` keeps the `cache_control` markers of tools, system blocks, content blocks and the request as `cache_point` markers (`{ ttl? }`) on the converted tools, on the parts of the system, user and assistant messages and tool calls (each marker follows the block it was on), and on the last message for the request's own, for a converter that sends them as cache points of its own (Amazon Bedrock's Converse); no other converter asks for it, because a marker has no place in a Chat Completions body. `sources` keeps the parts made from `document` and `search_result` blocks as separate parts tagged with their source (see `lib/citations.mjs`), for a converter that sends them as documents of their own. `toolCallIds` is the driver's tool-call id policy: ids that do not satisfy it are rewritten (and recorded in `state.toolIds` for the way back). `producer` is the `driver:protocol:host` the request goes to; signatures that carry provider reasoning data are restored only for the producer that made them. `budget` limits how much signature decoding the request may cost (one is made when absent; `send` passes one for all its attempts). `listed` says the model has a configured effort list, so the default `medium` effort is left to it.
  * @returns {Promise<{ body: any, state: any }>} OpenAI request body and conversion state.
  * @throws {TranslatorError} For malformed requests, unsupported content when configured to error, or PDF limit violations.
  */
@@ -118,7 +118,10 @@ export async function request(body, settings, context) {
 		thinkingTurnsToKeep(body.context_management, state),
 		context?.budget ?? createBudget(),
 		context?.sources === true,
-		context?.cachePoints === true
+		context?.cachePoints === true,
+		context?.cachePoints === true && Array.isArray(body.system) && body.system.some((block) => block?.cache_control)
+			? systemParts(body.system, s)
+			: null
 	);
 	out.messages = conversation.messages;
 	if (context?.cachePoints === true) markCache(body, out.messages);
@@ -167,14 +170,25 @@ function pointOf(control) {
 }
 
 /**
- * Mark the system message and the last message of a converted conversation for the `cache_control` of the request's system blocks and of the request
- * itself (which asks for the last cacheable block of the conversation to be cached).
+ * The system blocks of a request as parts, each text block with its own `cache_point` marker, so a cache point is written right after the block it
+ * marks (the billing header block and empty blocks are left out, as when the system prompt is joined into one text).
+ * @param {any[]} blocks - Anthropic `system` blocks.
+ * @param {import("../../../../../../../lib/settings.mjs").Settings} s - Settings.
+ * @returns {any[]} Text parts.
+ */
+function systemParts(blocks, s) {
+	return blocks
+		.filter((block) => block.type === "text" && block.text !== "" && !(s.stripBillingHeader && block.text.trimStart().startsWith(BILLING)))
+		.map((block) => ({ type: "text", text: block.text, ...(block.cache_control ? { cache_point: pointOf(block.cache_control) } : {}) }));
+}
+
+/**
+ * Mark the last message of a converted conversation for the request's own `cache_control`, which asks for the last cacheable block of the conversation
+ * to be cached.
  * @param {any} body - Anthropic body.
  * @param {any[]} messages - Converted messages (edited in place).
  */
 function markCache(body, messages) {
-	const marked = Array.isArray(body.system) ? body.system.findLast((block) => block?.cache_control) : undefined;
-	if (marked !== undefined && messages[0]?.role === "system") messages[0].cache_point = pointOf(marked.cache_control);
 	if (body.cache_control && messages.length > 0) messages.at(-1).cache_point = pointOf(body.cache_control);
 }
 
@@ -254,9 +268,10 @@ function idsOf(messages) {
  * @param {ReturnType<typeof createBudget>} budget - Limits the cost of decoding signatures.
  * @param {boolean} keepSources - Keep the parts of documents and search results tagged with their source.
  * @param {boolean} cache - Keep `cache_control` as `cache_point` markers.
+ * @param {any[] | null} parts - The system blocks as parts, each with its own `cache_point` marker, when the system prompt is sent as parts instead of one text.
  * @returns {Promise<{ messages: any[], prefill: boolean }>} OpenAI messages and whether the last message is a prefill.
  */
-async function convertMessages(messages, s, state, fit, fitId, system, keepThinking, budget, keepSources, cache) {
+async function convertMessages(messages, s, state, fit, fitId, system, keepThinking, budget, keepSources, cache, parts) {
 	const out = [];
 	const hoisted = [];
 	const toolInputs = new Map();
@@ -384,11 +399,14 @@ async function convertMessages(messages, s, state, fit, fitId, system, keepThink
 			const all = [...toolParts, ...parts];
 			if (all.length > 0) pushUser(all);
 		} else if (message.role === "assistant") {
-			const turn = { role: "assistant", texts: [], parts: [], tool_calls: [], cache: undefined };
+			const turn = { role: "assistant", texts: [], marks: [], parts: [], tool_calls: [] };
 			for (const block of asBlocks(message.content)) {
-				if (cache && block.cache_control) turn.cache = pointOf(block.cache_control);
+				const mark = cache && block.cache_control ? pointOf(block.cache_control) : undefined;
 				if (block.type === "text") {
-					if (block.text !== "") turn.texts.push(block.text);
+					if (block.text !== "") {
+						turn.texts.push(block.text);
+						turn.marks.push(mark);
+					}
 				} else if (block.type === "thinking") {
 					// A translator signature that carries the provider's own reasoning fields restores them exactly, whatever the client did to
 					// the thinking text; anything else (a real Anthropic signature, a forged or garbled mark) falls back to the text.
@@ -402,7 +420,8 @@ async function convertMessages(messages, s, state, fit, fitId, system, keepThink
 					turn.tool_calls.push({
 						id: fitId(block.id),
 						type: "function",
-						function: { name: fit(block.name), arguments: JSON.stringify(block.input ?? {}) }
+						function: { name: fit(block.name), arguments: JSON.stringify(block.input ?? {}) },
+						...(mark === undefined ? {} : { cache_point: mark })
 					});
 				} else {
 					unsupported(state, s, `block:${block.type}`);
@@ -412,16 +431,16 @@ async function convertMessages(messages, s, state, fit, fitId, system, keepThink
 			const last = /** @type {any} */ (out.at(-1));
 			if (last?.role === "assistant") {
 				last.texts.push(...turn.texts);
+				last.marks.push(...turn.marks);
 				last.parts.push(...turn.parts);
 				last.tool_calls.push(...turn.tool_calls);
-				last.cache = turn.cache ?? last.cache;
 			} else out.push(turn);
 		} else {
 			throw new TranslatorError(`messages: unsupported role "${message.role}"`, { code: "invalid_request", param: "messages" });
 		}
 	}
 
-	return finalize(out, s, system, hoisted, keepThinking, state, keepSources);
+	return finalize(out, s, system, hoisted, keepThinking, state, keepSources, parts);
 }
 
 /**
@@ -520,9 +539,10 @@ function reasoningSent(message) {
  * @param {number} keepThinking - Number of reasoning-bearing assistant turns to keep.
  * @param {any} state - Conversion state (`reasoningMissing` counts assistant tool turns left without reasoning).
  * @param {boolean} keepSources - Keep the parts that came from documents and search results as tagged parts, even when all are text (see `lib/citations.mjs`).
+ * @param {any[] | null} systemBlocks - The system blocks as parts with their `cache_point` markers, or null to send the system prompt as one text.
  * @returns {{ messages: any[], prefill: boolean }} Final messages.
  */
-function finalize(out, s, system, hoisted, keepThinking, state, keepSources) {
+function finalize(out, s, system, hoisted, keepThinking, state, keepSources, systemBlocks) {
 	let remaining = keepThinking;
 	for (let i = out.length - 1; i >= 0; i--) {
 		if (out[i].role !== "assistant" || out[i].parts.length === 0) continue;
@@ -531,20 +551,29 @@ function finalize(out, s, system, hoisted, keepThinking, state, keepSources) {
 	}
 	const messages = [];
 	const lead = [system, ...hoisted].filter((t) => t !== "").join("\n\n");
-	if (lead !== "") messages.push({ role: "system", content: lead });
+	if (lead !== "") {
+		const inline = hoisted.filter((text) => text !== "").map((text) => ({ type: "text", text }));
+		messages.push({ role: "system", content: systemBlocks === null ? lead : [...systemBlocks, ...inline] });
+	}
 	for (const m of out) {
 		if (m.role === "user") {
 			const plain = m.parts.every((p) => p.type === "text" && !p.cache_point && !(keepSources && sourceOf(p)));
 			messages.push({ role: "user", content: plain ? m.parts.map((p) => p.text).join("\n\n") : m.parts });
 		} else if (m.role === "assistant") {
-			const message = { role: "assistant", content: m.texts.join("\n\n") };
+			// Texts that carry a cache point stay apart, so each point is written right after its block.
+			const marked = m.marks.some((mark) => mark !== undefined);
+			const message = {
+				role: "assistant",
+				content: marked
+					? m.texts.map((text, at) => ({ type: "text", text, ...(m.marks[at] === undefined ? {} : { cache_point: m.marks[at] }) }))
+					: m.texts.join("\n\n")
+			};
 			if (m.parts.length > 0) Object.assign(message, reasoningFields(m.parts, s.reasoningField));
 			// A turn that made tool calls and has no reasoning to send back (the client dropped its thinking blocks or their signatures)
 			// is counted, so the caller can warn: servers that require reasoning with tools will refuse the request.
 			if (s.reasoningRoundTrip && m.tool_calls.length > 0 && !reasoningSent(message))
 				state.reasoningMissing = (state.reasoningMissing ?? 0) + 1;
 			if (m.tool_calls.length > 0) message.tool_calls = m.tool_calls;
-			if (m.cache) message.cache_point = m.cache;
 			messages.push(message);
 		} else messages.push(m);
 	}

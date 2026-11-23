@@ -54,6 +54,27 @@ describe("cache points", () => {
 		expect(out.messages[2].content.map((block) => Object.keys(block)[0])).toEqual(["toolResult"]);
 	});
 
+	it("puts a cache point right after a marked tool call", () => {
+		const out = chatBody(
+			{
+				model: "m",
+				messages: [
+					{
+						role: "assistant",
+						content: "",
+						tool_calls: [
+							{ id: "t", function: { name: "R", arguments: "{}" }, cache_point: {} },
+							{ id: "u", function: { name: "R", arguments: "{}" } }
+						]
+					}
+				],
+				tools
+			},
+			{ cache: true }
+		);
+		expect(out.messages[0].content.map((block) => Object.keys(block)[0])).toEqual(["toolUse", "cachePoint", "toolUse"]);
+	});
+
 	it("puts a cache point after a marked tool result", () => {
 		const out = chatBody(
 			{ model: "m", messages: [{ role: "tool", tool_call_id: "t", content: "done", cache_point: {} }], tools },

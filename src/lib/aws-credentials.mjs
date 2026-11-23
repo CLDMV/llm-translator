@@ -14,7 +14,7 @@
  */
 
 /**
- * @fileoverview AWS credentials for the Amazon Bedrock driver without the AWS SDK: the shared config and credentials files (profiles, `credential_process`, IAM Identity Center / SSO with its cached token), ECS container credentials and EC2 instance metadata (IMDSv2). Network calls go through the translator's `fetch`-compatible transport.
+ * @fileoverview AWS credentials for the Amazon Bedrock driver without the AWS SDK: the shared config and credentials files (profiles, `credential_process`, IAM Identity Center / SSO with its cached token and its refresh, assume-role profiles, web identity), ECS container credentials and EC2 instance metadata (IMDSv2). Network calls go through the translator's `fetch`-compatible transport.
  * @module @cldmv/llm-translator/lib/aws-credentials
  */
 import crypto from "node:crypto";
@@ -23,6 +23,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { TranslatorError } from "./errors.mjs";
+import { sign as sigv4 } from "./sigv4.mjs";
 
 /** Credentials are refreshed this long (ms) before they expire. */
 const SKEW = 5 * 60_000;
@@ -35,6 +36,13 @@ const PROCESS_TIMEOUT = 30_000;
 
 /** Where the ECS agent serves container credentials for a relative URI. */
 const ECS_HOST = "http://169.254.170.2";
+
+/** The version of the STS query API. */
+const STS_VERSION = "2011-06-15";
+
+/** The shortest and longest session (seconds) STS issues. */
+const MIN_DURATION = 900;
+const MAX_DURATION = 43200;
 
 /** Where the EC2 instance metadata service is, unless `AWS_EC2_METADATA_SERVICE_ENDPOINT` says otherwise. */
 const IMDS_HOST = "http://169.254.169.254";
@@ -187,7 +195,7 @@ function document(body, origin) {
  * Send a request through the transport and read the reply.
  * @param {Function} transport - `fetch`-compatible function.
  * @param {string} url - URL.
- * @param {{method?: string, headers?: Record<string, string>}} init - Request.
+ * @param {{method?: string, headers?: Record<string, string>, body?: string}} init - Request.
  * @param {{timeout?: number, signal?: AbortSignal}} limits - Time limit in ms (0 or absent: none) and an abort signal.
  * @returns {Promise<{ok: boolean, status: number, text: string}>} Status and body text.
  * @throws {Error} When the server cannot be reached.
@@ -236,7 +244,7 @@ async function fromProcess(command, profile, run) {
 
 /**
  * The credentials of an IAM Identity Center (SSO) profile: the access token `aws sso login` cached, exchanged for the role's credentials
- * (`GetRoleCredentials`). The token is not refreshed; when it has expired, `aws sso login` is the fix.
+ * (`GetRoleCredentials`). An expired token is refreshed first when the login can be (see `refreshSso`); otherwise `aws sso login` is the fix.
  * @param {string} name - Profile name.
  * @param {Record<string, string>} profile - The profile.
  * @param {Map<string, Record<string, string>>} sessions - The `sso-session` sections.
@@ -269,9 +277,8 @@ async function fromSso(name, profile, sessions, { env, transport, timeout, signa
 	} catch {
 		throw failure(`AWS profile ${name}: no SSO login found; run \`aws sso login --profile ${name}\``);
 	}
-	const expires = Date.parse(cached?.expiresAt);
-	if (typeof cached?.accessToken !== "string" || !(expires > now())) {
-		throw failure(`AWS profile ${name}: the SSO login has expired; run \`aws sso login --profile ${name}\``);
+	if (typeof cached?.accessToken !== "string" || !(Date.parse(cached.expiresAt) > now())) {
+		cached = await refreshSso(name, profile, region, cached, file, { transport, timeout, signal, now });
 	}
 	const url = `https://portal.sso.${region}.amazonaws.com${region.startsWith("cn-") ? ".cn" : ""}/federation/credentials?${new URLSearchParams(
 		{
@@ -304,18 +311,288 @@ async function fromSso(name, profile, sessions, { env, transport, timeout, signa
 }
 
 /**
- * The credentials a profile names, by the first kind it has: SSO, access keys, a credential process.
+ * An ISO time without milliseconds, the form the AWS CLI writes in its SSO cache (`2030-01-01T01:00:00Z`).
+ * @param {number} ms - Time in ms.
+ * @returns {string} Text.
+ */
+function iso(ms) {
+	return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/**
+ * Renew the expired access token of an `sso_session` login with its refresh token (the SSO OIDC `CreateToken` call with the `refresh_token`
+ * grant) and write the cache file back with the new token, expiry and, when the service rotated it, refresh token, as the AWS CLI does. A login
+ * without a session (the legacy form has no client registration), without a refresh token or client, or whose client registration has expired
+ * cannot be renewed, and neither can one the service refuses: each fails with the `aws sso login` command to run.
+ * @param {string} name - Profile name.
+ * @param {Record<string, string>} profile - The profile.
+ * @param {string} region - The SSO region.
+ * @param {any} cached - The cached login (may lack a usable access token).
+ * @param {string} file - The cache file.
+ * @param {{ transport: Function, timeout?: number, signal?: AbortSignal, now: () => number }} options - Transport, limit, signal and clock.
+ * @returns {Promise<any>} The login with the new token.
+ */
+async function refreshSso(name, profile, region, cached, file, { transport, timeout, signal, now }) {
+	const hint = `run \`aws sso login --profile ${name}\``;
+	if (
+		profile.sso_session === undefined ||
+		typeof cached?.refreshToken !== "string" ||
+		typeof cached.clientId !== "string" ||
+		typeof cached.clientSecret !== "string" ||
+		Date.parse(cached.registrationExpiresAt) <= now()
+	) {
+		throw failure(`AWS profile ${name}: the SSO login has expired; ${hint}`);
+	}
+	const url = `https://oidc.${region}.amazonaws.com${region.startsWith("cn-") ? ".cn" : ""}/token`;
+	const body = JSON.stringify({
+		clientId: cached.clientId,
+		clientSecret: cached.clientSecret,
+		grantType: "refresh_token",
+		refreshToken: cached.refreshToken
+	});
+	let reply;
+	try {
+		reply = await ask(transport, url, { method: "POST", headers: { "content-type": "application/json" }, body }, { timeout, signal });
+	} catch (cause) {
+		throw failure(`AWS SSO token refresh failed: ${cause.message}; ${hint}`, 502);
+	}
+	const token = parse(reply.text);
+	if (!reply.ok || typeof token?.accessToken !== "string" || !Number.isFinite(token.expiresIn)) {
+		throw failure(`AWS SSO refused to refresh the login of profile ${name} (HTTP ${reply.status}); ${hint}`, 502);
+	}
+	const renewed = {
+		...cached,
+		accessToken: token.accessToken,
+		expiresAt: iso(now() + token.expiresIn * 1000),
+		...(typeof token.refreshToken === "string" && token.refreshToken !== "" ? { refreshToken: token.refreshToken } : {})
+	};
+	try {
+		fs.writeFileSync(file, JSON.stringify(renewed), { mode: 0o600 });
+	} catch (cause) {
+		throw failure(`AWS profile ${name}: the SSO login was refreshed but the cache file cannot be written (${cause.code})`);
+	}
+	return renewed;
+}
+
+/**
+ * The text of an XML element of an STS reply (the replies are small and flat, so no parser is needed).
+ * @param {string} text - XML text.
+ * @param {string} name - Element name.
+ * @returns {string | undefined} The text, or undefined when the element is not there.
+ */
+function element(text, name) {
+	return new RegExp(`<${name}>([^<]*)</${name}>`).exec(text)?.[1];
+}
+
+/**
+ * The STS endpoint and the region its calls are signed for: `AWS_ENDPOINT_URL_STS` as given, else the global endpoint when `sts_regional_endpoints`
+ * (profile) or `AWS_STS_REGIONAL_ENDPOINTS` is `legacy` (signed for `us-east-1`; the China partition has no global endpoint), else the regional one
+ * (`https://sts.<region>.amazonaws.com`, `.amazonaws.com.cn` in China). The region is the profile's `region`, `AWS_REGION`, `AWS_DEFAULT_REGION`, else `us-east-1`.
+ * @param {Record<string, string>} profile - The profile the call is for (empty for the environment's web identity).
+ * @param {Record<string, string | undefined>} env - Environment.
+ * @returns {{ url: string, region: string }} Endpoint without a trailing slash, and region.
+ */
+function stsTarget(profile, env) {
+	const region = profile.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+	if (env.AWS_ENDPOINT_URL_STS) return { url: env.AWS_ENDPOINT_URL_STS.replace(/\/+$/, ""), region };
+	const cn = region.startsWith("cn-");
+	if (String(profile.sts_regional_endpoints ?? env.AWS_STS_REGIONAL_ENDPOINTS).toLowerCase() === "legacy" && !cn) {
+		return { url: "https://sts.amazonaws.com", region: "us-east-1" };
+	}
+	return { url: `https://sts.${region}.amazonaws.com${cn ? ".cn" : ""}`, region };
+}
+
+/**
+ * The `DurationSeconds` (and nothing else) a profile's `duration_seconds` asks for.
+ * @param {string} name - Profile name, for messages.
+ * @param {Record<string, string>} profile - The profile.
+ * @returns {Record<string, string>} `{ DurationSeconds }`, or nothing.
+ * @throws {TranslatorError} When it is not a whole number of seconds STS accepts.
+ */
+function duration(name, profile) {
+	if (profile.duration_seconds === undefined) return {};
+	const seconds = Number(profile.duration_seconds);
+	if (!Number.isInteger(seconds) || seconds < MIN_DURATION || seconds > MAX_DURATION) {
+		throw failure(`AWS profile ${name}: duration_seconds must be a whole number from ${MIN_DURATION} to ${MAX_DURATION}`);
+	}
+	return { DurationSeconds: String(seconds) };
+}
+
+/**
+ * Call an STS action (a form-encoded POST, answered with XML) and read the credentials in the reply. `AssumeRole` is signed with SigV4 for the
+ * service `sts` with the keys it is given; `AssumeRoleWithWebIdentity` carries its own proof and is sent unsigned.
+ * @param {string} action - `AssumeRole` or `AssumeRoleWithWebIdentity`.
+ * @param {Record<string, string>} params - The action's parameters.
+ * @param {Record<string, string>} profile - The profile the call is for, for the region and endpoint mode.
+ * @param {any} options - Environment, transport, limit, signal and clock (see `fromSso`).
+ * @param {{accessKeyId: string, secretAccessKey: string, sessionToken?: string}} [keys] - Keys to sign with; none sends the call unsigned.
+ * @returns {Promise<any>} Credentials and expiry (see `document`).
+ * @throws {TranslatorError} `upstream_auth` (502) when STS cannot be reached, refuses, or answers without credentials.
+ */
+async function sts(action, params, profile, { env, transport, timeout, signal, now }, keys) {
+	const target = stsTarget(profile, env);
+	const url = `${target.url}/`;
+	const body = new URLSearchParams({ Action: action, Version: STS_VERSION, ...params }).toString();
+	let headers = /** @type {Record<string, string>} */ ({ "content-type": "application/x-www-form-urlencoded; charset=utf-8" });
+	if (keys !== undefined) {
+		headers = sigv4({ method: "POST", url, headers, body, region: target.region, service: "sts", ...keys, date: new Date(now()) }).headers;
+	}
+	let reply;
+	try {
+		reply = await ask(transport, url, { method: "POST", headers, body }, { timeout, signal });
+	} catch (cause) {
+		throw failure(`AWS STS ${action} request failed: ${cause.message}`, 502);
+	}
+	if (!reply.ok) {
+		const message = element(reply.text, "Message");
+		throw failure(`AWS STS refused ${action} (HTTP ${reply.status})${message ? `: ${message}` : ""}`, 502);
+	}
+	return document(
+		{
+			AccessKeyId: element(reply.text, "AccessKeyId"),
+			SecretAccessKey: element(reply.text, "SecretAccessKey"),
+			SessionToken: element(reply.text, "SessionToken"),
+			Expiration: element(reply.text, "Expiration")
+		},
+		`AWS STS ${action}`
+	);
+}
+
+/**
+ * The credentials a role session gets from a web identity token (`AssumeRoleWithWebIdentity`), as on EKS: the token is read from its file on every
+ * lookup, since the platform rotates it.
+ * @param {{ arn: string, file: string, session?: string }} role - `role_arn`, `web_identity_token_file`, and the session name (default one made from the time).
+ * @param {string} name - Profile name for messages (`environment` for the variables).
+ * @param {Record<string, string>} profile - The profile (empty for the environment).
+ * @param {any} options - See `sts`.
+ * @returns {Promise<any>} Credentials and expiry (see `document`).
+ */
+async function fromWebIdentity(role, name, profile, options) {
+	let token;
+	try {
+		token = fs.readFileSync(role.file, "utf8").trim();
+	} catch (cause) {
+		throw failure(`AWS web identity (${name}): cannot read the token file ${role.file} (${cause.code})`);
+	}
+	return sts(
+		"AssumeRoleWithWebIdentity",
+		{
+			RoleArn: role.arn,
+			RoleSessionName: role.session ?? `llm-translator-${options.now()}`,
+			WebIdentityToken: token,
+			...duration(name, profile)
+		},
+		profile,
+		options
+	);
+}
+
+/**
+ * The credentials a `credential_source` names for an assume-role profile: `Environment` (the key variables), `Ec2InstanceMetadata` or `EcsContainer`.
+ * @param {string} name - Profile name.
+ * @param {string} source - The `credential_source` value.
+ * @param {any} options - See `fromSso`.
+ * @returns {Promise<any>} Credentials and expiry (see `document`).
+ * @throws {TranslatorError} For an unknown source or one that has nothing.
+ */
+async function fromSource(name, source, options) {
+	const { env } = options;
+	if (source === "Environment") {
+		if (!env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) {
+			throw failure(`AWS profile ${name}: credential_source Environment needs AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY`);
+		}
+		return {
+			keys: {
+				accessKeyId: env.AWS_ACCESS_KEY_ID,
+				secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+				...(env.AWS_SESSION_TOKEN ? { sessionToken: env.AWS_SESSION_TOKEN } : {})
+			}
+		};
+	}
+	if (source === "Ec2InstanceMetadata") {
+		const found = await fromInstance(options);
+		if (found === null) throw failure(`AWS profile ${name}: credential_source Ec2InstanceMetadata found no instance metadata service`);
+		return found;
+	}
+	if (source === "EcsContainer") {
+		const uri = containerUrl(env);
+		if (uri === undefined)
+			throw failure(
+				`AWS profile ${name}: credential_source EcsContainer needs AWS_CONTAINER_CREDENTIALS_RELATIVE_URI or AWS_CONTAINER_CREDENTIALS_FULL_URI`
+			);
+		return fromContainer(uri, options);
+	}
+	throw failure(`AWS profile ${name}: credential_source ${source} is not one of Environment, Ec2InstanceMetadata, EcsContainer`);
+}
+
+/**
+ * The credentials of an assume-role profile (`role_arn`): the source credentials (`source_profile`, itself any kind of profile and so possibly another
+ * assume-role one, or `credential_source`) sign an STS `AssumeRole` call, with the profile's `role_session_name`, `external_id` and
+ * `duration_seconds`. A profile with `mfa_serial` is refused, because it needs a one-time code and nothing here can ask for one. A loop of
+ * `source_profile`s is refused with the profiles it passes through.
+ * @param {string} name - Profile name.
+ * @param {Record<string, string>} profile - The profile.
+ * @param {any} files - The parsed files.
+ * @param {any} options - See `fromSso`, plus `run`.
+ * @param {string[]} visited - The profiles on the way here.
+ * @returns {Promise<any>} Credentials and expiry (see `document`).
+ */
+async function fromRole(name, profile, files, options, visited) {
+	if (profile.mfa_serial) {
+		throw failure(
+			`AWS profile ${name}: mfa_serial needs a one-time code, and there is no way to ask for one here; use a profile that needs no MFA, or a credential_process that gets the session`
+		);
+	}
+	let source;
+	if (profile.source_profile !== undefined && profile.credential_source !== undefined) {
+		throw failure(`AWS profile ${name}: set source_profile or credential_source, not both`);
+	} else if (profile.source_profile !== undefined) {
+		const trail = [...visited, name];
+		if (trail.includes(profile.source_profile)) {
+			throw failure(`AWS profile ${name}: source_profile makes a loop (${[...trail, profile.source_profile].join(" -> ")})`);
+		}
+		source = await fromProfile(profile.source_profile, files, options, trail);
+		if (source === null)
+			throw failure(`AWS profile ${name}: source_profile ${profile.source_profile} was not found or names no credentials`);
+	} else if (profile.credential_source !== undefined) source = await fromSource(name, profile.credential_source, options);
+	else throw failure(`AWS profile ${name}: role_arn needs source_profile or credential_source`);
+	return sts(
+		"AssumeRole",
+		{
+			RoleArn: profile.role_arn,
+			RoleSessionName: profile.role_session_name ?? `llm-translator-${options.now()}`,
+			...(profile.external_id ? { ExternalId: profile.external_id } : {}),
+			...duration(name, profile)
+		},
+		profile,
+		options,
+		source.keys
+	);
+}
+
+/**
+ * The credentials a profile names, by the first kind it has: a web identity token file, a role to assume, SSO, access keys, a credential process.
  * @param {string} name - Profile name.
  * @param {{ profiles: Map<string, Record<string, string>>, sessions: Map<string, Record<string, string>> }} files - The parsed files.
  * @param {any} options - See `fromSso`, plus `run`.
+ * @param {string[]} [visited] - The profiles on the way here (the `source_profile` chain).
  * @returns {Promise<any | null>} Credentials and expiry, or null when the profile does not exist or names no credentials.
  */
-async function fromProfile(name, files, options) {
+async function fromProfile(name, files, options, visited = []) {
 	const profile = files.profiles.get(name);
 	if (profile === undefined) return null;
 	const region = profile.region;
 	let found = null;
-	if (profile.sso_session || profile.sso_start_url || profile.sso_account_id || profile.sso_role_name) {
+	if (profile.web_identity_token_file) {
+		if (!profile.role_arn) throw failure(`AWS profile ${name}: web_identity_token_file needs role_arn`);
+		found = await fromWebIdentity(
+			{ arn: profile.role_arn, file: profile.web_identity_token_file, session: profile.role_session_name },
+			name,
+			profile,
+			options
+		);
+	} else if (profile.role_arn) found = await fromRole(name, profile, files, options, visited);
+	else if (profile.sso_session || profile.sso_start_url || profile.sso_account_id || profile.sso_role_name) {
 		found = await fromSso(name, profile, files.sessions, options);
 	} else if (profile.aws_access_key_id && profile.aws_secret_access_key) {
 		found = {
@@ -327,6 +604,17 @@ async function fromProfile(name, files, options) {
 		};
 	} else if (profile.credential_process) found = await fromProcess(profile.credential_process, name, options.run);
 	return found === null ? null : { ...found, ...(region ? { region } : {}) };
+}
+
+/**
+ * The container credentials URL the environment names: the ECS agent's address for `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, else `AWS_CONTAINER_CREDENTIALS_FULL_URI`.
+ * @param {Record<string, string | undefined>} env - Environment.
+ * @returns {string | undefined} URL, or undefined when neither is set.
+ */
+function containerUrl(env) {
+	return env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
+		? `${ECS_HOST}${env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI}`
+		: env.AWS_CONTAINER_CREDENTIALS_FULL_URI || undefined;
 }
 
 /**
@@ -389,14 +677,14 @@ async function fromInstance({ env, transport, signal }) {
 		return document(body, "the instance metadata service");
 	} catch (cause) {
 		// An error from `document` is a credential reply that is wrong, which is worth reporting; everything else means there is no metadata service.
-		if (cause instanceof TranslatorError) throw cause;
-		return null;
+		// A ternary: both sides are tested, and the `if` form got a V8 coverage merge count of -1 for its implicit else.
+		return cause instanceof TranslatorError ? Promise.reject(cause) : null;
 	}
 }
 
 /**
- * Run the chain once: the named profile (or `AWS_PROFILE`, else `default`), then container credentials when the environment names an endpoint,
- * then the instance metadata service. A profile the settings or `AWS_PROFILE` name must exist and give credentials.
+ * Run the chain once, in the order of the AWS SDKs: the named profile (or `AWS_PROFILE`, else `default`), then the web identity the environment names
+ * (`AWS_WEB_IDENTITY_TOKEN_FILE` with `AWS_ROLE_ARN`), then container credentials when the environment names an endpoint, then the instance metadata service. A profile the settings or `AWS_PROFILE` name must exist and give credentials.
  * @param {string | undefined} explicit - The profile that was asked for by name, if any.
  * @param {any} options - See `fromSso`, plus `run`.
  * @returns {Promise<any | null>} Credentials, expiry and the profile's region, or null when nothing in the chain has credentials.
@@ -408,15 +696,18 @@ async function chain(explicit, options) {
 	const found = await fromProfile(name, files, options);
 	if (found !== null) return found;
 	if (explicit !== undefined) throw failure(`AWS profile ${explicit} was not found or names no credentials`);
-	if (env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI) return fromContainer(`${ECS_HOST}${env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI}`, options);
-	if (env.AWS_CONTAINER_CREDENTIALS_FULL_URI) return fromContainer(env.AWS_CONTAINER_CREDENTIALS_FULL_URI, options);
-	return fromInstance(options);
+	if (env.AWS_WEB_IDENTITY_TOKEN_FILE && env.AWS_ROLE_ARN) {
+		const role = { arn: env.AWS_ROLE_ARN, file: env.AWS_WEB_IDENTITY_TOKEN_FILE, session: env.AWS_ROLE_SESSION_NAME };
+		return fromWebIdentity(role, "AWS_WEB_IDENTITY_TOKEN_FILE", {}, options);
+	}
+	const uri = containerUrl(env);
+	return uri === undefined ? fromInstance(options) : fromContainer(uri, options);
 }
 
 /**
  * Find AWS credentials the way the AWS SDKs do after explicit keys and the key environment variables: the profile named by `profile` or
- * `AWS_PROFILE` (else `default`) in the shared files, which may hold access keys, a `credential_process` or an SSO login; then the ECS task
- * role; then the EC2 instance profile. Credentials with an expiry are cached until five minutes before it (credentials without one for a
+ * `AWS_PROFILE` (else `default`) in the shared files, which may hold access keys, a `credential_process`, an SSO login, a role to assume or a web
+ * identity; then the web identity of the environment; then the ECS task role; then the EC2 instance profile. Credentials with an expiry are cached until five minutes before it (credentials without one for a
  * minute), and callers that arrive during a lookup share it. A failed lookup is not cached.
  * @param {{ profile?: string, env?: Record<string, string | undefined>, transport: Function, timeout?: number, signal?: AbortSignal, now?: () => number, run?: Function }} spec - `profile` is the upstream's `profile` setting; `transport` is the `fetch`-compatible function the requests go through; `run` is `execFile` (replaced in tests).
  * @returns {Promise<{keys: {accessKeyId: string, secretAccessKey: string, sessionToken?: string}, region?: string} | null>} The credentials and the region the profile names, or null when the chain has none.
@@ -430,6 +721,8 @@ export function chained({ profile, env = process.env, transport, timeout, signal
 		env.AWS_SHARED_CREDENTIALS_FILE ?? "",
 		homeOf(env),
 		env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ?? env.AWS_CONTAINER_CREDENTIALS_FULL_URI ?? "",
+		env.AWS_WEB_IDENTITY_TOKEN_FILE ?? "",
+		env.AWS_ROLE_ARN ?? "",
 		env.AWS_EC2_METADATA_SERVICE_ENDPOINT ?? ""
 	].join("|");
 	const hit = cache.get(key);

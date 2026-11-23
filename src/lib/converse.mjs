@@ -94,7 +94,7 @@ function pointOf(marker) {
 
 /**
  * The Converse content blocks of a Chat Completions message content: text blocks (an empty one is left out, Converse rejects blank text) and
- * images from base64 data URLs. A part with a `cache_point` marker is followed by a cache point (when `cache` is on).
+ * images from base64 data URLs. A part with a `cache_point` marker is followed by a cache point (when `cache` is on); so is a tool call (`cache_point` on the call), in `conversationOf`.
  * @param {any} content - String, or an array of content parts.
  * @param {string[]} dropped - Collects what was left out.
  * @param {boolean} [cache] - Whether markers become cache points.
@@ -210,6 +210,7 @@ function conversationOf(list, dropped, marker, plain, cache) {
 						? { text: `[Called tool ${call.function?.name} with input ${JSON.stringify(input)}]` }
 						: { toolUse: { toolUseId: call.id, name: call.function?.name, input } }
 				);
+				if (cache && call.cache_point) content.push(pointOf(call.cache_point));
 			}
 		} else {
 			drop(dropped, `messages.${message?.role}`);

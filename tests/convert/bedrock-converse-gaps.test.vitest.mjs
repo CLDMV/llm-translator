@@ -57,7 +57,7 @@ describe("cache_control as cache points", () => {
 			]
 		});
 		expect(kinds(body.toolConfig.tools)).toEqual(["toolSpec", "cachePoint", "toolSpec"]);
-		expect(body.system).toEqual([{ text: "s1\n\ns2" }, { cachePoint: { type: "default", ttl: "1h" } }]);
+		expect(body.system).toEqual([{ text: "s1" }, { text: "s2" }, { cachePoint: { type: "default", ttl: "1h" } }]);
 		expect(body.messages[0].content).toEqual([{ text: "a" }, { cachePoint: { type: "default" } }, { text: "b" }]);
 	});
 
@@ -71,8 +71,52 @@ describe("cache_control as cache points", () => {
 				{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: "done", cache_control: eph }] }
 			]
 		});
-		expect(kinds(body.messages[1].content)).toEqual(["text", "toolUse", "cachePoint"]);
+		expect(kinds(body.messages[1].content)).toEqual(["text", "cachePoint", "toolUse"]);
 		expect(kinds(body.messages[2].content)).toEqual(["toolResult", "cachePoint"]);
+	});
+
+	it("puts each point right after the block that was marked, not at the end of the prompt or message", async () => {
+		const { body } = await send(
+			{
+				tools,
+				system: [
+					{ type: "text", text: "x-anthropic-billing-header: cc_version=1" },
+					{ type: "text", text: "first", cache_control: eph },
+					{ type: "text", text: "" },
+					{ type: "text", text: "second" }
+				],
+				messages: [
+					{ role: "system", content: "late note" },
+					{ role: "user", content: "hi" },
+					{
+						role: "assistant",
+						content: [
+							{ type: "text", text: "one", cache_control: eph },
+							{ type: "text", text: "two" },
+							{ type: "tool_use", id: "t", name: "R", input: {}, cache_control: hour },
+							{ type: "tool_use", id: "u", name: "S", input: {} }
+						]
+					},
+					{
+						role: "user",
+						content: [
+							{ type: "tool_result", tool_use_id: "t", content: "x" },
+							{ type: "tool_result", tool_use_id: "u", content: "y" }
+						]
+					}
+				]
+			},
+			{ inlineSystem: "hoist" }
+		);
+		expect(body.system).toEqual([{ text: "first" }, { cachePoint: { type: "default" } }, { text: "second" }, { text: "late note" }]);
+		expect(body.messages[1].content).toEqual([
+			{ text: "one" },
+			{ cachePoint: { type: "default" } },
+			{ text: "two" },
+			{ toolUse: { toolUseId: "t", name: "R", input: {} } },
+			{ cachePoint: { type: "default", ttl: "1h" } },
+			{ toolUse: { toolUseId: "u", name: "S", input: {} } }
+		]);
 	});
 
 	it("marks the last message for the request's own cache_control, and does nothing for an empty conversation", async () => {

@@ -501,3 +501,428 @@ describe("cache", () => {
 		}
 	});
 });
+
+const at = () => Date.parse("2030-01-01T00:00:00Z");
+const config = (dir, text, shared = "") => {
+	write(dir, "config", text);
+	write(dir, "credentials", shared);
+	return { AWS_CONFIG_FILE: path.join(dir, "config"), AWS_SHARED_CREDENTIALS_FILE: path.join(dir, "credentials") };
+};
+const stsReply = (key, extra = "") =>
+	answer(
+		`<AssumeRoleResponse><AssumeRoleResult><Credentials><AccessKeyId>${key}</AccessKeyId><SecretAccessKey>${key}-secret</SecretAccessKey><SessionToken>${key}-token</SessionToken><Expiration>2030-01-01T01:00:00Z</Expiration></Credentials>${extra}</AssumeRoleResult></AssumeRoleResponse>`
+	);
+const form = (call) => Object.fromEntries(new URLSearchParams(call.init.body));
+const base = "[base]\naws_access_key_id = BASEKEY\naws_secret_access_key = basesecret\n";
+
+describe("assume-role profiles", () => {
+	const role = "arn:aws:iam::123456789012:role/App";
+
+	it("signs AssumeRole for the service sts with the source profile's keys, and passes the role options", async () => {
+		const files = config(
+			home,
+			`[profile app]\nrole_arn = ${role}\nsource_profile = base\nregion = eu-west-1\nrole_session_name = sess\nexternal_id = ext\nduration_seconds = 1800\n`,
+			base
+		);
+		const transport = fake(() => stsReply("ROLEKEY"));
+		const found = await lookup({ profile: "app", env: files, transport, now: at });
+		expect(found).toEqual({
+			keys: { accessKeyId: "ROLEKEY", secretAccessKey: "ROLEKEY-secret", sessionToken: "ROLEKEY-token" },
+			region: "eu-west-1"
+		});
+		const [call] = transport.calls;
+		expect(call.url).toBe("https://sts.eu-west-1.amazonaws.com/");
+		expect(call.init.method).toBe("POST");
+		expect(call.init.headers.authorization).toContain("Credential=BASEKEY/20300101/eu-west-1/sts/aws4_request");
+		expect(form(call)).toEqual({
+			Action: "AssumeRole",
+			Version: "2011-06-15",
+			RoleArn: role,
+			RoleSessionName: "sess",
+			ExternalId: "ext",
+			DurationSeconds: "1800"
+		});
+	});
+
+	it("names the session after the time when the profile does not, and sends no external id or duration", async () => {
+		const files = config(home, `[profile app]\nrole_arn = ${role}\nsource_profile = base\n`, base);
+		const transport = fake(() => stsReply("K"));
+		await lookup({ profile: "app", env: files, transport, now: at });
+		expect(form(transport.calls[0])).toEqual({
+			Action: "AssumeRole",
+			Version: "2011-06-15",
+			RoleArn: role,
+			RoleSessionName: `llm-translator-${at()}`
+		});
+	});
+
+	it("chains roles: the first role's credentials sign the second call", async () => {
+		const files = config(
+			home,
+			`[profile top]\nrole_arn = ${role}Top\nsource_profile = mid\n[profile mid]\nrole_arn = ${role}Mid\nsource_profile = base\n`,
+			base
+		);
+		let n = 0;
+		const transport = fake(() => stsReply(`R${++n}`));
+		const found = await lookup({ profile: "top", env: files, transport, now: at });
+		expect(found.keys.accessKeyId).toBe("R2");
+		expect(form(transport.calls[0]).RoleArn).toBe(`${role}Mid`);
+		expect(transport.calls[0].init.headers.authorization).toContain("Credential=BASEKEY/");
+		expect(transport.calls[1].init.headers.authorization).toContain("Credential=R1/");
+		expect(transport.calls[1].init.headers["x-amz-security-token"]).toBe("R1-token");
+	});
+
+	it("refuses a loop of source profiles and says which profiles it passes through", async () => {
+		const files = config(
+			home,
+			`[profile a]\nrole_arn = ${role}\nsource_profile = b\n[profile b]\nrole_arn = ${role}\nsource_profile = c\n[profile c]\nrole_arn = ${role}\nsource_profile = a\n[profile self]\nrole_arn = ${role}\nsource_profile = self\n`
+		);
+		await expect(lookup({ profile: "a", env: files, now: at })).rejects.toThrow(/source_profile makes a loop \(a -> b -> c -> a\)/);
+		await expect(lookup({ profile: "self", env: files, now: at })).rejects.toThrow(/loop \(self -> self\)/);
+	});
+
+	it("refuses what cannot work: MFA, no source, two sources, a missing source, a source with no credentials, a bad duration", async () => {
+		const files = config(
+			home,
+			[
+				`[profile mfa]\nrole_arn = ${role}\nsource_profile = base\nmfa_serial = arn:aws:iam::1:mfa/me`,
+				`[profile none]\nrole_arn = ${role}`,
+				`[profile both]\nrole_arn = ${role}\nsource_profile = base\ncredential_source = Environment`,
+				`[profile ghost]\nrole_arn = ${role}\nsource_profile = nothere`,
+				`[profile empty]\nrole_arn = ${role}\nsource_profile = bare\n[profile bare]\nregion = us-east-1`,
+				`[profile text]\nrole_arn = ${role}\nsource_profile = base\nduration_seconds = soon`,
+				`[profile short]\nrole_arn = ${role}\nsource_profile = base\nduration_seconds = 60`,
+				`[profile long]\nrole_arn = ${role}\nsource_profile = base\nduration_seconds = 90000`
+			].join("\n"),
+			base
+		);
+		const failing = (profile) => lookup({ profile, env: files, now: at });
+		await expect(failing("mfa")).rejects.toThrow(/mfa_serial needs a one-time code, and there is no way to ask for one/);
+		await expect(failing("none")).rejects.toThrow(/role_arn needs source_profile or credential_source/);
+		await expect(failing("both")).rejects.toThrow(/not both/);
+		await expect(failing("ghost")).rejects.toThrow(/source_profile nothere was not found/);
+		await expect(failing("empty")).rejects.toThrow(/source_profile bare was not found or names no credentials/);
+		for (const profile of ["text", "short", "long"])
+			await expect(failing(profile)).rejects.toThrow(/duration_seconds must be a whole number from 900 to 43200/);
+	});
+
+	it("takes the source from credential_source: the environment's keys", async () => {
+		const files = config(
+			home,
+			`[profile env]\nrole_arn = ${role}\ncredential_source = Environment\n[profile tok]\nrole_arn = ${role}\ncredential_source = Environment\n`
+		);
+		const transport = fake(() => stsReply("E"));
+		await lookup({ profile: "env", env: { ...files, AWS_ACCESS_KEY_ID: "ENVK", AWS_SECRET_ACCESS_KEY: "envs" }, transport, now: at });
+		expect(transport.calls[0].init.headers.authorization).toContain("Credential=ENVK/");
+		expect(transport.calls[0].init.headers["x-amz-security-token"]).toBeUndefined();
+		reset();
+		await lookup({
+			profile: "tok",
+			env: { ...files, AWS_ACCESS_KEY_ID: "ENVK", AWS_SECRET_ACCESS_KEY: "envs", AWS_SESSION_TOKEN: "envt" },
+			transport,
+			now: at
+		});
+		expect(transport.calls[1].init.headers["x-amz-security-token"]).toBe("envt");
+		reset();
+		await expect(lookup({ profile: "env", env: files, transport, now: at })).rejects.toThrow(
+			/Environment needs AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY/
+		);
+	});
+
+	it("takes the source from credential_source: the instance role and the container role", async () => {
+		const files = config(
+			home,
+			`[profile imds]\nrole_arn = ${role}\ncredential_source = Ec2InstanceMetadata\n[profile ecs]\nrole_arn = ${role}\ncredential_source = EcsContainer\n`
+		);
+		const imds = fake((url) => {
+			if (url.endsWith("/latest/api/token")) return answer("t");
+			if (url.endsWith("/security-credentials/")) return answer("r");
+			if (url.endsWith("/security-credentials/r"))
+				return answer({ Code: "Success", AccessKeyId: "IK", SecretAccessKey: "is", Token: "it", Expiration: "2030-01-01T01:00:00Z" });
+			return stsReply("FROMIMDS");
+		});
+		const on = { AWS_EC2_METADATA_DISABLED: "false" };
+		expect((await lookup({ profile: "imds", env: { ...files, ...on }, transport: imds, now: at })).keys.accessKeyId).toBe("FROMIMDS");
+		expect(imds.calls.at(-1).init.headers.authorization).toContain("Credential=IK/");
+		reset();
+		await expect(lookup({ profile: "imds", env: files, now: at })).rejects.toThrow(/found no instance metadata service/);
+		reset();
+		const ecs = fake((url) =>
+			url.startsWith("http://169.254.170.2/")
+				? answer({ AccessKeyId: "CK", SecretAccessKey: "cs", Token: "ct", Expiration: "2030-01-01T01:00:00Z" })
+				: stsReply("FROMECS")
+		);
+		expect(
+			(await lookup({ profile: "ecs", env: { ...files, AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/v2/x" }, transport: ecs, now: at })).keys
+				.accessKeyId
+		).toBe("FROMECS");
+		reset();
+		const full = fake((url) =>
+			url === "http://localhost:9/c"
+				? answer({ AccessKeyId: "CK", SecretAccessKey: "cs", Expiration: "2030-01-01T01:00:00Z" })
+				: stsReply("FROMFULL")
+		);
+		expect(
+			(
+				await lookup({
+					profile: "ecs",
+					env: { ...files, AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://localhost:9/c" },
+					transport: full,
+					now: at
+				})
+			).keys.accessKeyId
+		).toBe("FROMFULL");
+		reset();
+		await expect(lookup({ profile: "ecs", env: files, now: at })).rejects.toThrow(/EcsContainer needs AWS_CONTAINER_CREDENTIALS/);
+	});
+
+	it("refuses an unknown credential_source", async () => {
+		const files = config(home, `[profile odd]\nrole_arn = ${role}\ncredential_source = Magic\n`);
+		await expect(lookup({ profile: "odd", env: files, now: at })).rejects.toThrow(
+			/credential_source Magic is not one of Environment, Ec2InstanceMetadata, EcsContainer/
+		);
+	});
+
+	it("reports an STS that is unreachable, refuses, or answers without credentials", async () => {
+		const files = config(home, `[profile app]\nrole_arn = ${role}\nsource_profile = base\n`, base);
+		const run = (transport) => lookup({ profile: "app", env: files, transport, now: at });
+		await expect(run(fake(() => new Error("offline")))).rejects.toMatchObject({
+			status: 502,
+			message: expect.stringContaining("AssumeRole request failed: offline")
+		});
+		reset();
+		await expect(
+			run(fake(() => answer("<ErrorResponse><Error><Code>AccessDenied</Code><Message>not allowed</Message></Error></ErrorResponse>", 403)))
+		).rejects.toThrow(/refused AssumeRole \(HTTP 403\): not allowed/);
+		reset();
+		await expect(run(fake(() => answer("", 500)))).rejects.toThrow(/refused AssumeRole \(HTTP 500\)$/);
+		reset();
+		await expect(run(fake(() => answer("<AssumeRoleResponse/>")))).rejects.toThrow(/no AccessKeyId and SecretAccessKey/);
+	});
+
+	it("picks the STS endpoint: regional, legacy, China, the override, and the region from the environment", async () => {
+		const files = config(
+			home,
+			[
+				`[profile reg]\nrole_arn = ${role}\nsource_profile = base\nregion = ap-south-1`,
+				`[profile old]\nrole_arn = ${role}\nsource_profile = base\nregion = ap-south-1\nsts_regional_endpoints = legacy`,
+				`[profile cn]\nrole_arn = ${role}\nsource_profile = base\nregion = cn-north-1\nsts_regional_endpoints = legacy`,
+				`[profile bare]\nrole_arn = ${role}\nsource_profile = base`
+			].join("\n"),
+			base
+		);
+		const urlOf = async (profile, extra = {}) => {
+			reset();
+			const transport = fake(() => stsReply("K"));
+			await lookup({ profile, env: { ...files, ...extra }, transport, now: at });
+			return [transport.calls[0].url, transport.calls[0].init.headers.authorization.match(/\/(\d{8})\/([^/]+)\/sts\//).slice(2)[0]];
+		};
+		expect(await urlOf("reg")).toEqual(["https://sts.ap-south-1.amazonaws.com/", "ap-south-1"]);
+		expect(await urlOf("old")).toEqual(["https://sts.amazonaws.com/", "us-east-1"]);
+		expect(await urlOf("cn")).toEqual(["https://sts.cn-north-1.amazonaws.com.cn/", "cn-north-1"]);
+		expect(await urlOf("bare", { AWS_STS_REGIONAL_ENDPOINTS: "LEGACY" })).toEqual(["https://sts.amazonaws.com/", "us-east-1"]);
+		expect(await urlOf("bare", { AWS_REGION: "eu-north-1" })).toEqual(["https://sts.eu-north-1.amazonaws.com/", "eu-north-1"]);
+		expect(await urlOf("bare", { AWS_DEFAULT_REGION: "eu-north-2" })).toEqual(["https://sts.eu-north-2.amazonaws.com/", "eu-north-2"]);
+		expect(await urlOf("bare")).toEqual(["https://sts.us-east-1.amazonaws.com/", "us-east-1"]);
+		expect((await urlOf("reg", { AWS_ENDPOINT_URL_STS: "http://sts.local:9//" }))[0]).toBe("http://sts.local:9/");
+	});
+
+	it("caches the role's credentials until five minutes before they expire", async () => {
+		const files = config(home, `[profile app]\nrole_arn = ${role}\nsource_profile = base\n`, base);
+		const transport = fake(() => stsReply("K"));
+		let now = at();
+		const ask = () => lookup({ profile: "app", env: files, transport, now: () => now });
+		await ask();
+		await ask();
+		expect(transport.calls).toHaveLength(1);
+		now = Date.parse("2030-01-01T00:56:00Z");
+		await ask();
+		expect(transport.calls).toHaveLength(2);
+	});
+});
+
+describe("web identity", () => {
+	const arn = "arn:aws:iam::123456789012:role/Pod";
+	const tokenFile = () => write(home, "token", " jwt-1\n");
+
+	it("calls AssumeRoleWithWebIdentity, unsigned, for a profile with web_identity_token_file and role_arn", async () => {
+		const files = config(
+			home,
+			`[profile pod]\nweb_identity_token_file = ${tokenFile()}\nrole_arn = ${arn}\nrole_session_name = s1\nduration_seconds = 3600\nregion = us-west-2\n`
+		);
+		const transport = fake(() => stsReply("WK"));
+		const found = await lookup({ profile: "pod", env: files, transport, now: at });
+		expect(found).toEqual({ keys: { accessKeyId: "WK", secretAccessKey: "WK-secret", sessionToken: "WK-token" }, region: "us-west-2" });
+		const [call] = transport.calls;
+		expect(call.url).toBe("https://sts.us-west-2.amazonaws.com/");
+		expect(call.init.headers.authorization).toBeUndefined();
+		expect(form(call)).toEqual({
+			Action: "AssumeRoleWithWebIdentity",
+			Version: "2011-06-15",
+			RoleArn: arn,
+			RoleSessionName: "s1",
+			WebIdentityToken: "jwt-1",
+			DurationSeconds: "3600"
+		});
+	});
+
+	it("reads the token again on every lookup, and fails for a missing role_arn or an unreadable file", async () => {
+		const bad = config(
+			home,
+			`[profile a]\nweb_identity_token_file = ${path.join(home, "none")}\nrole_arn = ${arn}\n[profile b]\nweb_identity_token_file = ${tokenFile()}\n`
+		);
+		await expect(lookup({ profile: "a", env: bad, now: at })).rejects.toThrow(/cannot read the token file .*none \(ENOENT\)/);
+		await expect(lookup({ profile: "b", env: bad, now: at })).rejects.toThrow(/web_identity_token_file needs role_arn/);
+	});
+
+	it("uses the environment's AWS_WEB_IDENTITY_TOKEN_FILE and AWS_ROLE_ARN, with AWS_ROLE_SESSION_NAME or a made-up name", async () => {
+		const transport = fake(() => stsReply("EK"));
+		const env = { AWS_WEB_IDENTITY_TOKEN_FILE: tokenFile(), AWS_ROLE_ARN: arn, AWS_REGION: "eu-west-2" };
+		const found = await lookup({ env: { ...env, AWS_ROLE_SESSION_NAME: "pod-1" }, transport, now: at });
+		expect(found.keys.accessKeyId).toBe("EK");
+		expect(transport.calls[0].url).toBe("https://sts.eu-west-2.amazonaws.com/");
+		expect(form(transport.calls[0]).RoleSessionName).toBe("pod-1");
+		reset();
+		await lookup({ env, transport, now: at });
+		expect(form(transport.calls[1]).RoleSessionName).toBe(`llm-translator-${at()}`);
+	});
+
+	it("comes after the profile and before the container role, and a named profile ignores it", async () => {
+		const files = config(home, "", "[default]\naws_access_key_id = PROFILEKEY\naws_secret_access_key = s\n");
+		const env = { AWS_WEB_IDENTITY_TOKEN_FILE: tokenFile(), AWS_ROLE_ARN: arn, AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://localhost:9/c" };
+		const transport = fake((url) =>
+			url.startsWith("https://sts.")
+				? stsReply("WEB")
+				: answer({ AccessKeyId: "CK", SecretAccessKey: "cs", Expiration: "2030-01-01T01:00:00Z" })
+		);
+		expect((await lookup({ env: { ...files, ...env }, transport, now: at })).keys.accessKeyId).toBe("PROFILEKEY");
+		reset();
+		expect(
+			(await lookup({ env: { ...env, AWS_SHARED_CREDENTIALS_FILE: path.join(home, "none") }, transport, now: at })).keys.accessKeyId
+		).toBe("WEB");
+		expect(transport.calls.map((call) => call.url)).toEqual(["https://sts.us-east-1.amazonaws.com/"]);
+		reset();
+		await expect(lookup({ profile: "ghost", env: { ...files, ...env }, transport, now: at })).rejects.toThrow(/AWS profile ghost/);
+	});
+});
+
+describe("SSO refresh", () => {
+	const key = (name) => sha1(name);
+	const cache = (name, fields) => write(home, `.aws/sso/cache/${key(name)}.json`, JSON.stringify(fields));
+	const files = (extra = "") =>
+		config(
+			home,
+			`[profile sso]\nsso_session = work\nsso_account_id = 1\nsso_role_name = R\n[profile old]\nsso_start_url = https://old\nsso_region = us-east-1\nsso_account_id = 1\nsso_role_name = R\n[sso-session work]\nsso_start_url = https://x.awsapps.com/start\nsso_region = us-east-1\n${extra}`
+		);
+	const stale = {
+		accessToken: "OLD",
+		expiresAt: "2029-12-31T00:00:00Z",
+		refreshToken: "R1",
+		clientId: "cid",
+		clientSecret: "csec",
+		registrationExpiresAt: "2031-01-01T00:00:00Z"
+	};
+	const server = (reply) =>
+		fake((url, init) => {
+			if (url.startsWith("https://oidc.")) return typeof reply === "function" ? reply(url, init) : reply;
+			return answer({
+				roleCredentials: { accessKeyId: "SA", secretAccessKey: "SS", sessionToken: "ST", expiration: Date.parse("2030-01-01T06:00:00Z") }
+			});
+		});
+	const renewed = () => answer({ accessToken: "NEW", expiresIn: 28800, tokenType: "Bearer", refreshToken: "R2" });
+	const cacheFile = () => path.join(home, ".aws", "sso", "cache", `${key("work")}.json`);
+
+	it("refreshes an expired access token with the refresh_token grant, uses the new one and writes the cache file back", async () => {
+		cache("work", { ...stale, startUrl: "https://x.awsapps.com/start", region: "us-east-1" });
+		const transport = server(renewed);
+		const found = await lookup({ profile: "sso", env: files(), transport, now: at });
+		expect(found.keys.accessKeyId).toBe("SA");
+		const [refresh, portal] = transport.calls;
+		expect(refresh.url).toBe("https://oidc.us-east-1.amazonaws.com/token");
+		expect(refresh.init.method).toBe("POST");
+		expect(refresh.init.headers).toEqual({ "content-type": "application/json" });
+		expect(JSON.parse(refresh.init.body)).toEqual({
+			clientId: "cid",
+			clientSecret: "csec",
+			grantType: "refresh_token",
+			refreshToken: "R1"
+		});
+		expect(portal.init.headers["x-amz-sso_bearer_token"]).toBe("NEW");
+		expect(JSON.parse(fs.readFileSync(cacheFile(), "utf8"))).toEqual({
+			...stale,
+			startUrl: "https://x.awsapps.com/start",
+			region: "us-east-1",
+			accessToken: "NEW",
+			expiresAt: "2030-01-01T08:00:00Z",
+			refreshToken: "R2"
+		});
+	});
+
+	it("keeps the old refresh token when the service sends none, refreshes a cache without an access token, and uses the China host", async () => {
+		const { accessToken: _, ...bare } = stale;
+		cache("work", bare);
+		const transport = server(answer({ accessToken: "N2", expiresIn: 60, refreshToken: "" }));
+		await lookup({ profile: "sso", env: files(), transport, now: at });
+		const saved = JSON.parse(fs.readFileSync(cacheFile(), "utf8"));
+		expect(saved).toMatchObject({ accessToken: "N2", refreshToken: "R1", expiresAt: "2030-01-01T00:01:00Z" });
+		reset();
+		const cn = config(
+			home,
+			"[profile cn]\nsso_session = c\nsso_account_id = 1\nsso_role_name = R\n[sso-session c]\nsso_start_url = https://c\nsso_region = cn-north-1\n"
+		);
+		cache("c", stale);
+		const cnTransport = server(renewed);
+		await lookup({ profile: "cn", env: cn, transport: cnTransport, now: at });
+		expect(cnTransport.calls[0].url).toBe("https://oidc.cn-north-1.amazonaws.com.cn/token");
+	});
+
+	it("does not refresh a token that is still good", async () => {
+		cache("work", { ...stale, accessToken: "LIVE", expiresAt: "2030-01-01T05:00:00Z" });
+		const transport = server(renewed);
+		await lookup({ profile: "sso", env: files(), transport, now: at });
+		expect(transport.calls).toHaveLength(1);
+		expect(transport.calls[0].init.headers["x-amz-sso_bearer_token"]).toBe("LIVE");
+	});
+
+	it("keeps the aws sso login hint when the login cannot be refreshed", async () => {
+		const expired = /the SSO login has expired; run `aws sso login --profile (sso|old)`/;
+		const refusal = (profile, fields, env = files()) =>
+			lookup({ profile, env, transport: server(renewed), now: at, ...{} }).then(
+				() => null,
+				(error) => error
+			);
+		cache("work", { ...stale, refreshToken: undefined });
+		expect((await refusal("sso", {})).message).toMatch(expired);
+		cache("work", { ...stale, clientId: undefined });
+		expect((await refusal("sso", {})).message).toMatch(expired);
+		cache("work", { ...stale, clientSecret: undefined });
+		expect((await refusal("sso", {})).message).toMatch(expired);
+		cache("work", { ...stale, registrationExpiresAt: "2029-01-01T00:00:00Z" });
+		expect((await refusal("sso", {})).message).toMatch(expired);
+		// A legacy profile has no session, so no client registration to refresh with.
+		cache("https://old", stale);
+		expect((await refusal("old", {})).message).toMatch(expired);
+	});
+
+	it("reports a refusal, a reply without a token or expiry, an unreachable service and a cache that cannot be written, each with the hint", async () => {
+		cache("work", stale);
+		const failing = (reply) => lookup({ profile: "sso", env: files(), transport: server(reply), now: at });
+		await expect(failing(answer({ error: "invalid_grant" }, 400))).rejects.toThrow(
+			/refused to refresh the login of profile sso \(HTTP 400\); run `aws sso login --profile sso`/
+		);
+		await expect(failing(answer({ expiresIn: 60 }))).rejects.toThrow(/refused to refresh/);
+		await expect(failing(answer({ accessToken: "x" }))).rejects.toThrow(/refused to refresh/);
+		await expect(failing(answer("not json"))).rejects.toThrow(/refused to refresh/);
+		await expect(failing(new Error("offline"))).rejects.toMatchObject({
+			status: 502,
+			message: expect.stringContaining("token refresh failed: offline; run `aws sso login --profile sso`")
+		});
+		// The cache file is replaced by a folder while the refresh is in flight, so the new token cannot be saved.
+		const jam = () => {
+			fs.rmSync(cacheFile());
+			fs.mkdirSync(cacheFile());
+			return renewed();
+		};
+		await expect(failing(jam)).rejects.toThrow(/was refreshed but the cache file cannot be written \(EISDIR\)/);
+	});
+});
