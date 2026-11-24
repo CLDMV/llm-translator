@@ -66,6 +66,7 @@ describe("package surface", () => {
 					"endpoint",
 					"error",
 					"events",
+					"files",
 					"health",
 					"model",
 					"request",

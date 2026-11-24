@@ -20,6 +20,7 @@
 import { TranslatorError } from "./errors.mjs";
 import { normalize as normalizeUrls } from "./document-urls.mjs";
 import { check } from "./constraint.mjs";
+import { DEFAULTS as FILES, normalize as normalizeFiles } from "./filestore.mjs";
 import { valid } from "./cache.mjs";
 import { check as checkGemini } from "./gemini-settings.mjs";
 import { check as checkBedrock } from "./bedrock-settings.mjs";
@@ -43,6 +44,7 @@ import { check as checkBedrock } from "./bedrock-settings.mjs";
  * @property {"extract"|"note"|"error"} documents - How `document` blocks are handled.
  * @property {((block: object, ctx: object) => Promise<object[]>|object[])|null} documentConverter - Override for `document` conversion; returns Anthropic content blocks.
  * @property {null|{ allow: string[], maxBytes: number, timeout: number, maxRedirects: number, maxDocuments: number, allowPrivate: boolean }} documentUrls - Fetch the `url` sources of `document` blocks before conversion; `null` (the default) is off, and an object turns it on (`allow` is required).
+ * @property {null|{ store: "memory"|"disk", dir: string|null, maxFileSize: number, maxTotalBytes: number, maxCount: number, ttl: number }} files - The Files API store (`/v1/files`) and its limits; the default is an in-memory store, and `null` turns the Files API off.
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
@@ -95,6 +97,7 @@ export const DEFAULTS = Object.freeze({
 	documents: "extract",
 	documentConverter: null,
 	documentUrls: null,
+	files: FILES,
 	pdf: Object.freeze({ pages: true, maxPages: 100, maxBytes: 32 * 1024 * 1024, maxImages: 20, scale: 1.5 }),
 	toolSchema: "pass",
 	deferredTools: "forward",
@@ -167,6 +170,7 @@ const BOOLEANS = [
 export function resolve(...layers) {
 	const out = {
 		...DEFAULTS,
+		files: { ...DEFAULTS.files },
 		pdf: { ...DEFAULTS.pdf },
 		sampling: { ...DEFAULTS.sampling },
 		gemini: { ...DEFAULTS.gemini },
@@ -177,6 +181,8 @@ export function resolve(...layers) {
 		for (const [key, value] of Object.entries(layer)) {
 			if (value === undefined) continue;
 			if (key === "pdf") Object.assign(out.pdf, value);
+			else if (key === "files" && value !== null && typeof value === "object" && !Array.isArray(value))
+				out.files = { ...(out.files ?? FILES), ...value };
 			else if (key === "sampling" && value !== null && typeof value === "object" && !Array.isArray(value))
 				Object.assign(out.sampling, value);
 			else if (key === "gemini" && value !== null && typeof value === "object" && !Array.isArray(value)) Object.assign(out.gemini, value);
@@ -257,6 +263,7 @@ export function resolve(...layers) {
 		}
 	}
 	out.documentUrls = normalizeUrls(out.documentUrls);
+	out.files = normalizeFiles(out.files);
 	// unpdf 2 throws on a render scale of 0, so catch a bad value here with the setting's name.
 	if (!(Number.isFinite(out.pdf.scale) && out.pdf.scale > 0)) {
 		throw new TranslatorError(`Invalid setting pdf.scale: ${JSON.stringify(out.pdf.scale)} (expected a positive number)`, {

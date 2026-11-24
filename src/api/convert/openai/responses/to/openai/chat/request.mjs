@@ -302,16 +302,31 @@ function messageOf(item, at) {
 			parts.push({ type: "text", text: part.text });
 		else if (part?.type === "refusal" && role === "assistant" && typeof part.refusal === "string") refusal = (refusal ?? "") + part.refusal;
 		else if (part?.type === "input_image" && role === "user") {
-			if (typeof part.image_url !== "string") {
-				throw new TranslatorError(`${where}: an image must carry image_url (stored files are not supported)`, {
+			// A stored file (`file_id`) goes on as the image's url: the translator's file store reads it before conversion (Chat Completions has no file id for images).
+			const url = typeof part.image_url === "string" ? part.image_url : part.file_id;
+			if (typeof url !== "string") {
+				throw new TranslatorError(`${where}: an image must carry image_url or file_id`, {
 					code: "unsupported_content",
 					param: where
 				});
 			}
 			parts.push({
 				type: "image_url",
-				image_url: { url: part.image_url, ...(typeof part.detail === "string" && part.detail !== "auto" ? { detail: part.detail } : {}) }
+				image_url: { url, ...(typeof part.detail === "string" && part.detail !== "auto" ? { detail: part.detail } : {}) }
 			});
+		} else if (part?.type === "input_file" && role === "user") {
+			// The same `file` part Chat Completions has: a stored file by `file_id`, the bytes as a `file_data` data URL, or a `file_url` (which only counts when
+			// it is the only source, and which the root api fetches like a URL document).
+			const file = {};
+			for (const key of ["file_id", "file_data", "filename"]) if (typeof part[key] === "string") file[key] = part[key];
+			if (file.file_id === undefined && file.file_data === undefined && typeof part.file_url === "string") file.file_url = part.file_url;
+			if (file.file_id === undefined && file.file_data === undefined && file.file_url === undefined) {
+				throw new TranslatorError(`${where}: a file must carry file_id, file_data or file_url`, {
+					code: "unsupported_content",
+					param: where
+				});
+			}
+			parts.push({ type: "file", file });
 		} else {
 			throw new TranslatorError(`${where}: unsupported content part type ${JSON.stringify(part?.type ?? null)}`, {
 				code: "unsupported_content",

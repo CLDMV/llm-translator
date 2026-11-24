@@ -25,6 +25,7 @@ import { MESSAGES, CHAT, RESPONSES, OLLAMA, CONVERSE, GEMINI, COHERE, candidates
 import { claude } from "./bedrock.mjs";
 import { gemini as geminiModel } from "./vertex.mjs";
 import { needsNative } from "./cohere.mjs";
+import { storeOf } from "./files.mjs";
 
 /**
  * Collect the mounted drivers, sorted by `info().order`.
@@ -168,6 +169,11 @@ export function capture(self, context, frontOverride) {
 		state,
 		front,
 		drivers,
+		/**
+		 * The file store of the Files API, or null when `files` is null.
+		 * @returns {any | null} Store.
+		 */
+		files: () => storeOf(config, state),
 		/**
 		 * Find a runtime endpoint by name.
 		 * @param {string} name - Endpoint name.
