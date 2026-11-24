@@ -62,7 +62,7 @@ describe("responses front, vLLM-like upstream", () => {
 				model: "qwen3-coder",
 				instructions: "be brief",
 				max_output_tokens: 50,
-				store: false,
+				store: true,
 				previous_response_id: null,
 				reasoning: { effort: "low" },
 				tool_choice: { type: "function", name: "weather" },
@@ -305,15 +305,39 @@ describe("responses front, vLLM-like upstream", () => {
 		}
 	});
 
-	it("refuses stateful parameters, hosted tools and unsupported items in the Responses error format", async () => {
+	it("refuses stateful parameters when the responses setting is null, as the stateless core always did", async () => {
 		const upstream = await fakeVllm();
 		try {
-			const api = await make({ front: "openai", upstreams: [upstream.url] });
+			const api = await make({ front: "openai", upstreams: [upstream.url], settings: { responses: null } });
 			const server = await api.server.start({ port: 0 });
 			const cases = [
 				[{ ...hello, previous_response_id: "resp_1" }, "unsupported_field", "previous_response_id"],
 				[{ ...hello, store: true }, "unsupported_field", "store"],
 				[{ ...hello, conversation: "conv_1" }, "unsupported_field", "conversation"],
+				[{ ...hello, background: true }, "unsupported_field", "background"]
+			];
+			for (const [body, code, param] of cases) {
+				const reply = await post(`${server.url}/v1/responses`, body);
+				expect(reply.status).toBe(400);
+				expect((await reply.json()).error).toEqual({ message: expect.any(String), type: "invalid_request_error", param, code });
+			}
+			const text = await post(`${server.url}/v1/responses`, { ...hello, stream: true, store: true });
+			expect(text.status).toBe(400);
+			const plain = await (await post(`${server.url}/v1/responses`, hello)).json();
+			expect(plain).toMatchObject({ store: false, previous_response_id: null });
+			expect(plain).not.toHaveProperty("conversation");
+			expect((await fetch(`${server.url}/v1/responses/${plain.id}`)).status).toBe(404);
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("refuses hosted tools and unsupported items in the Responses error format", async () => {
+		const upstream = await fakeVllm();
+		try {
+			const api = await make({ front: "openai", upstreams: [upstream.url] });
+			const server = await api.server.start({ port: 0 });
+			const cases = [
 				[{ ...hello, tools: [{ type: "web_search" }] }, "unsupported_tool", "tools[0]"],
 				[{ ...hello, input: [{ type: "item_reference", id: "msg_1" }] }, "unsupported_content", "input[0]"],
 				[{ model: "qwen3-coder" }, "invalid_request", "input"]
@@ -326,8 +350,6 @@ describe("responses front, vLLM-like upstream", () => {
 			expect(
 				upstream.requests.filter((entry) => entry.url === "/v1/chat/completions" && !JSON.stringify(entry.body).includes("image_url"))
 			).toHaveLength(0);
-			const text = await post(`${server.url}/v1/responses`, { ...hello, stream: true, store: true });
-			expect(text.status).toBe(400);
 		} finally {
 			await upstream.close();
 		}

@@ -24,10 +24,11 @@ import { capture } from "../../lib/capture.mjs";
 import { resolve as routeTo } from "../../lib/route.mjs";
 import { resolve } from "../../lib/settings.mjs";
 import { emit } from "../../lib/events.mjs";
+import { begin, finish, jobsOf, plan, progress } from "../../lib/responses-state.mjs";
 
 /**
  * Fastify plugin. Anthropic front: `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET /v1/models`, `GET /v1/models/{id}`,
- * the Files API (`POST|GET /v1/files`, `GET|DELETE /v1/files/{id}`, `GET /v1/files/{id}/content`), Message Batches (`POST|GET /v1/messages/batches`, `GET|DELETE /v1/messages/batches/{id}`, `POST /v1/messages/batches/{id}/cancel`, `GET /v1/messages/batches/{id}/results`), `GET|HEAD /` and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/responses/input_tokens`, `POST /v1/embeddings`, the Files API, the Batch API (`POST|GET /v1/batches`, `GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`), `GET /v1/models`, `GET /v1/models/{id}`, `GET|HEAD /`. Responses stream as
+ * the Files API (`POST|GET /v1/files`, `GET|DELETE /v1/files/{id}`, `GET /v1/files/{id}/content`), Message Batches (`POST|GET /v1/messages/batches`, `GET|DELETE /v1/messages/batches/{id}`, `POST /v1/messages/batches/{id}/cancel`, `GET /v1/messages/batches/{id}/results`), `GET|HEAD /` and `/api/hello`. OpenAI front: `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/responses/input_tokens`, `GET|DELETE /v1/responses/{id}`, `POST /v1/responses/{id}/cancel`, `GET /v1/responses/{id}/input_items`, the Conversations API (`/v1/conversations...`), `POST /v1/embeddings`, the Files API, the Batch API (`POST|GET /v1/batches`, `GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`), `GET /v1/models`, `GET /v1/models/{id}`, `GET|HEAD /`. Responses stream as
  * `text/event-stream` with keep-alive pings; a client disconnect aborts the upstream request. Register it with
  * `app.register(api.server.plugin, { apiKey })`. `authorize(request)` (sync or async) runs after `apiKey` and the body parse and decides
  * with `true` / `{ ok: true, context }` or `false` / `{ ok: false, status, message }`; `onUsage(report, context)` receives each request's usage report. When the Fastify `logger` is enabled, events also go to it as structured lines (`{ event }` plus the message), through the request's logger for events of a request.
@@ -53,7 +54,7 @@ export async function plugin(fastify, options = {}) {
 	if (options.metrics !== undefined && typeof options.metrics !== "boolean") {
 		throw new TranslatorError("metrics must be true or false", { code: "invalid_config", status: 500 });
 	}
-	const { send, route, token, model, error, sse, embeddings, files, batches } = self;
+	const { send, route, token, model, error, sse, embeddings, files, batches, responses, conversations } = self;
 	const front = options.front ?? config.front;
 	// Events also go to this app's logger (as structured lines) until it closes; a request's own logger takes over for its events.
 	const { state } = context;
@@ -87,8 +88,20 @@ export async function plugin(fastify, options = {}) {
 		responses: {
 			request: self.convert.openai.responses.to.openai.chat.request,
 			response: self.convert.openai.chat.to.openai.responses.response,
-			stream: self.convert.openai.chat.to.openai.responses.stream
+			stream: self.convert.openai.chat.to.openai.responses.stream,
+			// Stored responses and conversations: what `store`, `previous_response_id`, `conversation` and `background` need while a request runs
+			// (these run later than the plugin, so they carry the config and state captured here), and the leaves behind the stored-response routes.
+			plan: (body) => plan(body, { config, state }),
+			begin: (made, response) => begin(made, response, { config, state }),
+			progress: (id, response) => progress(id, response, { config, state }),
+			keep: (made, response) => finish(made, response, { config, state }),
+			jobs: () => jobsOf(state),
+			get: responses.get,
+			remove: responses.remove,
+			cancel: responses.cancel,
+			input: responses.input
 		},
+		conversations,
 		send,
 		embed: embeddings.send,
 		route,

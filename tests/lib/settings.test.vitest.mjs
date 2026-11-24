@@ -118,6 +118,28 @@ describe("settings", () => {
 		expect(() => resolve({ files: [] })).toThrow(/files/);
 	});
 
+	test("responses: an in-memory store by default, merged key by key, null turns it off, bad values are invalid_setting", () => {
+		expect(resolve().responses).toEqual({
+			store: "memory",
+			dir: null,
+			maxCount: 1000,
+			maxTotalBytes: 134217728,
+			ttl: 0,
+			maxConversations: 1000,
+			maxItems: 10000
+		});
+		const merged = resolve({ responses: { maxCount: 5 } }, { responses: { ttl: 60 } });
+		expect(merged.responses).toMatchObject({ store: "memory", maxCount: 5, ttl: 60, maxItems: 10000 });
+		expect(DEFAULTS.responses.maxCount).toBe(1000);
+		expect(resolve({ responses: null }).responses).toBeNull();
+		expect(resolve({ responses: null }, { responses: { maxCount: 2 } }).responses).toMatchObject({ store: "memory", maxCount: 2 });
+		expect(resolve({ responses: { store: "disk", dir: "/x" } }).responses.dir).toBe("/x");
+		expect(() => resolve({ responses: { store: "disk" } })).toThrow(expect.objectContaining({ code: "invalid_setting" }));
+		expect(() => resolve({ responses: { maxItems: 0 } })).toThrow(/responses.maxItems/);
+		expect(() => resolve({ responses: "memory" })).toThrow(/responses/);
+		expect(() => resolve({ responses: [] })).toThrow(/responses/);
+	});
+
 	test("pdf.scale must be a positive number", () => {
 		expect(resolve({ pdf: { scale: 2 } }).pdf.scale).toBe(2);
 		for (const scale of [0, -1, Infinity, NaN, "2"]) {

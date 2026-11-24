@@ -26,8 +26,8 @@ const MAX_DETAILS = 64;
 const MAX_BYTES = 1024 * 1024;
 
 /**
- * A Responses style id: `resp_`, `msg_`, `fc_` or `rs_` and 24 hex digits.
- * @param {"resp" | "msg" | "fc" | "rs"} prefix - Id family.
+ * A Responses style id: `resp_`, `msg_`, `fc_`, `fco_`, `rs_` or `conv_` and 24 hex digits.
+ * @param {"resp" | "msg" | "fc" | "fco" | "rs" | "conv"} prefix - Id family.
  * @returns {string} The id.
  */
 export function itemId(prefix) {
