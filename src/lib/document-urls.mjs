@@ -182,3 +182,66 @@ export async function resolve(body, { options, report, signal, fetch = fetchUrl,
 	}
 	return changed ? { ...body, messages } : body;
 }
+
+/**
+ * The text an unreadable URL document becomes, worded like the note a `document` block gets (`lib/documents`).
+ * @param {string} name - Name of the document.
+ * @param {string} reason - Why it cannot be read.
+ * @returns {{ type: "text", text: string }} Text part.
+ */
+function note(name, reason) {
+	return { type: "text", text: `[The document "${name}" could not be read by this model. ${reason.replace(/\.$/, "")}.]` };
+}
+
+/**
+ * Resolve the `file_url` of OpenAI `file` parts (a Responses `input_file` by URL), the way `resolve` does for a `document` block with a `url` source:
+ * the same fetch with the same allow-list, size, redirect and count limits, and the same events. A fetched file becomes a `file` part with `file_data`
+ * (a data URL) and the file name, which the ordinary file handling then reads. With fetching off (`options` null) the part becomes a text note, as
+ * a URL document does on a converting route; a failed fetch becomes a note with the reason. Parts without a `file_url`, and parts that also carry a
+ * `file_id` or `file_data`, are left alone. A copy is returned when anything changed.
+ * @param {any} body - OpenAI Chat Completions request body.
+ * @param {{options: any, report: (event: {kind: string, message: string, [detail: string]: any}) => void, signal?: AbortSignal, fetch?: Function, deps?: any}} spec - As for `resolve`; `options` is the normalized `documentUrls` setting, or null when URL fetching is off.
+ * @returns {Promise<any>} The body.
+ */
+export async function resolveFileParts(body, { options, report, signal, fetch, deps }) {
+	if (!Array.isArray(body?.messages)) return body;
+	const wanted = (part) =>
+		part?.type === "file" &&
+		typeof part.file?.file_url === "string" &&
+		part.file.file_id === undefined &&
+		part.file.file_data === undefined;
+	const found = body.messages.flatMap((message) => (Array.isArray(message?.content) ? message.content.filter(wanted) : []));
+	if (found.length === 0) return body;
+	// The fetch step reads `document` blocks, so the parts are handed to it as such, one block each, in order.
+	const fetched =
+		options === null
+			? null
+			: (
+					await resolve(
+						{
+							messages: [
+								{ role: "user", content: found.map((part) => ({ type: "document", source: { type: "url", url: part.file.file_url } })) }
+							]
+						},
+						{ options, report, signal, fetch, deps }
+					)
+				).messages[0].content;
+	let at = 0;
+	const messages = body.messages.map((message) => {
+		if (!Array.isArray(message?.content)) return message;
+		const content = message.content.map((part) => {
+			if (!wanted(part)) return part;
+			const source = fetched?.[at++].source;
+			const name = part.file.filename ?? display(part.file.file_url);
+			if (source === undefined) return note(name, "documents referenced by URL cannot be fetched by the translator");
+			if (source.type === "fetch_failed") return note(name, `the document at ${source.url} could not be fetched: ${source.reason}`);
+			const { file_url: _, ...rest } = part.file;
+			return {
+				...part,
+				file: { ...rest, file_data: `data:${source.media_type};base64,${source.data}`, filename: part.file.filename ?? name }
+			};
+		});
+		return { ...message, content };
+	});
+	return { ...body, messages };
+}

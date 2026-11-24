@@ -82,3 +82,14 @@ export function createNameFitter({ max, map }: {
  * @returns {string} Original name.
  */
 export function restoreName(map: Record<string, string>, name: string): string;
+/**
+ * The `toolset_name` field a `tool_use` block of a toolset member carries (`computer_toolset_20260801` members are functions of their own on the wire).
+ * @param {{ toolsets?: Record<string, string> } | undefined} state - Conversion state of the request.
+ * @param {string} name - Name seen on the wire.
+ * @returns {{ toolset_name: string } | {}} The field, or nothing when the tool is not a toolset member.
+ */
+export function toolsetOf(state: {
+    toolsets?: Record<string, string>;
+} | undefined, name: string): {
+    toolset_name: string;
+} | {};

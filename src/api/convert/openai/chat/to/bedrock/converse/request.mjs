@@ -22,7 +22,7 @@ import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { chatBody } from "../../../../../../../lib/converse.mjs";
 
 /**
- * Convert a Chat Completions request to a Converse body (see `chatBody`). The upstream's `sampling` setting becomes `additionalModelRequestFields`.
+ * Convert a Chat Completions request to a Converse body (see `chatBody`: `response_format` is sent as a tool, and reasoning with its signature in `reasoning_details` is sent back). The upstream's `sampling` setting becomes `additionalModelRequestFields`.
  * @param {any} body - Chat Completions request body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {{body: any, state: any}} The Converse body and the conversion state the response converters read.
@@ -43,7 +43,7 @@ export function request(body, settings) {
 		includeUsage: body.stream_options?.include_usage === true
 	};
 	return {
-		body: chatBody(body, { dropped: state.dropped, sampling: s.sampling, marker: s.toolErrors ? s.toolErrorMarker : undefined }),
+		body: chatBody(body, { dropped: state.dropped, sampling: s.sampling, marker: s.toolErrors ? s.toolErrorMarker : undefined, state }),
 		state
 	};
 }

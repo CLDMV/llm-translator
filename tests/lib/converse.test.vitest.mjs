@@ -215,7 +215,7 @@ describe("chatBody", () => {
 					{ role: "function", content: "y" },
 					{ role: "user", content: [] }
 				],
-				response_format: { type: "json_object" },
+				response_format: { type: "xml" },
 				parallel_tool_calls: false,
 				seed: 1,
 				n: 2,
@@ -444,12 +444,13 @@ describe("createChunker", () => {
 		);
 		const deltas = chunks.map((chunk) => chunk.choices[0].delta);
 		expect(deltas[0]).toEqual({ role: "assistant", content: "" });
-		expect(deltas[1]).toEqual({ reasoning_content: "think" });
-		expect(deltas[2]).toEqual({ tool_calls: [{ index: 0, id: "t1", type: "function", function: { name: "Read", arguments: "" } }] });
-		expect(deltas[3]).toEqual({ tool_calls: [{ index: 0, function: { arguments: '{"pa' } }] });
-		expect(deltas[4]).toEqual({ tool_calls: [{ index: 0, function: { arguments: 'th":"a"}' } }] });
-		expect(deltas[5].tool_calls[0]).toMatchObject({ index: 1, id: "t2" });
-		expect(deltas[6]).toEqual({ tool_calls: [{ index: 1, function: { arguments: "{}" } }] });
+		expect(deltas[1]).toMatchObject({ reasoning_content: "think", reasoning_details: [{ type: "reasoning.text", text: "think" }] });
+		expect(deltas[2]).toMatchObject({ reasoning_details: [{ type: "reasoning.text", signature: "sig" }] });
+		expect(deltas[3]).toEqual({ tool_calls: [{ index: 0, id: "t1", type: "function", function: { name: "Read", arguments: "" } }] });
+		expect(deltas[4]).toEqual({ tool_calls: [{ index: 0, function: { arguments: '{"pa' } }] });
+		expect(deltas[5]).toEqual({ tool_calls: [{ index: 0, function: { arguments: 'th":"a"}' } }] });
+		expect(deltas[6].tool_calls[0]).toMatchObject({ index: 1, id: "t2" });
+		expect(deltas[7]).toEqual({ tool_calls: [{ index: 1, function: { arguments: "{}" } }] });
 		expect(chunks.at(-1).choices[0].finish_reason).toBe("tool_calls");
 	});
 

@@ -16,9 +16,12 @@
 /**
  * @fileoverview Amazon Bedrock runtime facts: Claude model ids, regions and URLs, model paths, and how a call is authenticated.
  */
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { authenticate, claude, credential, defaultUrl, modelPath, regionOf, regionOfHost } from "../../src/lib/bedrock.mjs";
 import { sign } from "../../src/lib/sigv4.mjs";
+import { reset } from "../../src/lib/aws-credentials.mjs";
 
 const date = new Date("2026-11-19T17:00:00Z");
 const keys = { accessKeyId: "AKIDEXAMPLE", secretAccessKey: "secret" };
@@ -29,6 +32,20 @@ const failure = (run) => {
 		return error;
 	}
 	return null;
+};
+const rejection = async (run) => {
+	try {
+		await run();
+	} catch (error) {
+		return error;
+	}
+	return null;
+};
+// No shared files and no metadata service: the chain finds nothing unless a test gives it something.
+const none = {
+	AWS_CONFIG_FILE: "/nonexistent/config",
+	AWS_SHARED_CREDENTIALS_FILE: "/nonexistent/credentials",
+	AWS_EC2_METADATA_DISABLED: "true"
 };
 const runtime = "https://bedrock-runtime.us-east-1.amazonaws.com";
 const call = {
@@ -122,36 +139,114 @@ describe("credentials", () => {
 		expect(credential({}, { AWS_ACCESS_KEY_ID: "only-id" })).toBeNull();
 	});
 
-	it("a Bedrock API key becomes a bearer token and replaces any authorization header", () => {
-		const out = authenticate(
+	it("a Bedrock API key becomes a bearer token and replaces any authorization header", async () => {
+		const out = await authenticate(
 			{ name: "b", apiKey: "bk" },
 			{ ...call, headers: { ...call.headers, authorization: "Bearer stale" } },
-			{ env: {} }
+			{ env: none }
 		);
 		expect(out).toEqual({ "content-type": "application/json", authorization: "Bearer bk" });
 	});
 
-	it("access keys sign the call with SigV4 for the service bedrock in the host's region", () => {
-		const out = authenticate({ name: "b", url: runtime, ...keys, sessionToken: "tok" }, call, { env: {}, date });
+	it("access keys sign the call with SigV4 for the service bedrock in the host's region", async () => {
+		const out = await authenticate({ name: "b", url: runtime, ...keys, sessionToken: "tok" }, call, { env: none, date });
 		const expected = sign({ ...call, ...keys, sessionToken: "tok", region: "us-east-1", service: "bedrock", date });
 		expect(out).toEqual(expected.headers);
 		expect(out["x-amz-security-token"]).toBe("tok");
 		expect(out.authorization).toContain("/20261119/us-east-1/bedrock/aws4_request");
 	});
 
-	it("takes the signing time from the clock by default", () => {
-		const out = authenticate({ name: "b", url: runtime, ...keys }, call, { env: {} });
+	it("takes the signing time from the clock by default", async () => {
+		const out = await authenticate({ name: "b", url: runtime, ...keys }, call, { env: none });
 		expect(out["x-amz-date"]).toMatch(/^\d{8}T\d{6}Z$/);
-		expect(authenticate({ name: "b", url: runtime, ...keys }, call)["x-amz-date"]).toMatch(/^\d{8}T\d{6}Z$/);
+		expect((await authenticate({ name: "b", url: runtime, ...keys }, call))["x-amz-date"]).toMatch(/^\d{8}T\d{6}Z$/);
 	});
 
-	it("fails with a clear error without a credential, and without a region for SigV4", () => {
-		expect(failure(() => authenticate({ name: "b" }, call, { env: {} }))).toMatchObject({ code: "missing_credentials", status: 500 });
+	it("fails with a clear error without a credential, and without a region for SigV4", async () => {
+		expect(await rejection(() => authenticate({ name: "b" }, call, { env: none }))).toMatchObject({
+			code: "missing_credentials",
+			status: 500
+		});
 		const local = { ...call, url: "http://127.0.0.1:9/model/m/invoke" };
-		expect(failure(() => authenticate({ name: "b", ...keys, url: "http://127.0.0.1:9" }, local, { env: {} }))).toMatchObject({
+		expect(await rejection(() => authenticate({ name: "b", ...keys, url: "http://127.0.0.1:9" }, local, { env: none }))).toMatchObject({
 			code: "missing_region",
 			status: 500
 		});
-		expect(authenticate({ name: "b", apiKey: "k", url: "http://127.0.0.1:9" }, local, { env: {} }).authorization).toBe("Bearer k");
+		expect((await authenticate({ name: "b", apiKey: "k", url: "http://127.0.0.1:9" }, local, { env: none })).authorization).toBe(
+			"Bearer k"
+		);
+	});
+});
+
+describe("the AWS credential chain", () => {
+	const dirs = [];
+	afterEach(() => {
+		reset();
+		while (dirs.length > 0) fs.rmSync(dirs.pop(), { recursive: true, force: true });
+	});
+	const files = (config, credentials = "") => {
+		fs.mkdirSync(path.join(process.cwd(), "tmp"), { recursive: true });
+		const dir = fs.mkdtempSync(path.join(process.cwd(), "tmp", "bedrock-chain-"));
+		dirs.push(dir);
+		fs.writeFileSync(path.join(dir, "config"), config);
+		fs.writeFileSync(path.join(dir, "credentials"), credentials);
+		return { ...none, HOME: dir, AWS_CONFIG_FILE: path.join(dir, "config"), AWS_SHARED_CREDENTIALS_FILE: path.join(dir, "credentials") };
+	};
+	const profiles =
+		"[default]\naws_access_key_id = DEFAULTKEY\naws_secret_access_key = s1\nregion = eu-west-3\n[work]\naws_access_key_id = WORKKEY\naws_secret_access_key = s2\n";
+	const local = { ...call, url: "http://127.0.0.1:9/model/m/invoke" };
+	const keyOf = (headers) => /Credential=([^/]+)\//.exec(headers.authorization)[1];
+
+	it("signs with the default profile after the explicit settings and the environment, in the region the profile names", async () => {
+		const env = files("", profiles);
+		const out = await authenticate({ name: "b", url: "http://127.0.0.1:9" }, local, { env, date });
+		expect(keyOf(out)).toBe("DEFAULTKEY");
+		expect(out.authorization).toContain("/eu-west-3/bedrock/");
+		// The environment's keys, a Bedrock API key and the upstream's own keys all come first.
+		expect(
+			keyOf(
+				await authenticate({ name: "b", url: runtime }, call, { env: { ...env, AWS_ACCESS_KEY_ID: "ENVKEY", AWS_SECRET_ACCESS_KEY: "e" } })
+			)
+		).toBe("ENVKEY");
+		expect((await authenticate({ name: "b" }, call, { env: { ...env, AWS_BEARER_TOKEN_BEDROCK: "tok" } })).authorization).toBe(
+			"Bearer tok"
+		);
+		expect(keyOf(await authenticate({ name: "b", url: runtime, ...keys }, call, { env }))).toBe("AKIDEXAMPLE");
+		// The region of the URL, the setting or the environment wins over the profile's.
+		expect((await authenticate({ name: "b", url: runtime }, call, { env, date })).authorization).toContain("/us-east-1/bedrock/");
+	});
+
+	it("the profile setting beats the environment's keys, and AWS_PROFILE does not", async () => {
+		const env = { ...files("", profiles), AWS_ACCESS_KEY_ID: "ENVKEY", AWS_SECRET_ACCESS_KEY: "e" };
+		expect(keyOf(await authenticate({ name: "b", url: runtime, profile: "work" }, call, { env }))).toBe("WORKKEY");
+		expect(keyOf(await authenticate({ name: "b", url: runtime }, call, { env: { ...env, AWS_PROFILE: "work" } }))).toBe("ENVKEY");
+		expect(keyOf(await authenticate({ name: "b", url: runtime }, call, { env: { ...files("", profiles), AWS_PROFILE: "work" } }))).toBe(
+			"WORKKEY"
+		);
+		// An upstream's own keys beat its profile.
+		expect(keyOf(await authenticate({ name: "b", url: runtime, profile: "work", ...keys }, call, { env }))).toBe("AKIDEXAMPLE");
+	});
+
+	it("reports a profile that does not work, and the lookups go through the transport it is given", async () => {
+		const env = files("", profiles);
+		expect(await rejection(() => authenticate({ name: "b", url: runtime, profile: "ghost" }, call, { env }))).toMatchObject({
+			code: "upstream_auth"
+		});
+		const config = files("[profile sso]\nsso_start_url = u\nsso_region = us-east-1\nsso_account_id = 1\nsso_role_name = R\n");
+		const login = path.join(config.HOME, ".aws", "sso", "cache");
+		fs.mkdirSync(login, { recursive: true });
+		const { createHash } = await import("node:crypto");
+		fs.writeFileSync(
+			path.join(login, `${createHash("sha1").update("u").digest("hex")}.json`),
+			JSON.stringify({ accessToken: "t", expiresAt: "2099-01-01T00:00:00Z" })
+		);
+		const seen = [];
+		const transport = async (url) => {
+			seen.push(url);
+			return new Response(JSON.stringify({ roleCredentials: { accessKeyId: "SSOKEY", secretAccessKey: "x" } }));
+		};
+		const out = await authenticate({ name: "b", url: runtime, profile: "sso" }, call, { env: config, transport, timeout: 5000 });
+		expect(keyOf(out)).toBe("SSOKEY");
+		expect(seen[0]).toMatch(/^https:\/\/portal\.sso\.us-east-1\.amazonaws\.com\/federation\/credentials\?/);
 	});
 });
