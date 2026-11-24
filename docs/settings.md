@@ -131,15 +131,65 @@ An invalid value (an unknown key, a store other than the two, a `"disk"` store w
 
 `responses` configures the response store behind the stateful Responses API (see [server.md](server.md#stored-responses-and-conversations)). It is read from the global `settings` only: the store is shared by every upstream, so an upstream's own `settings.responses` has no effect. An object is merged with the defaults key by key; `null` turns the stateful features off (the routes answer 404 `responses_disabled`; `previous_response_id`, `conversation` and `background: true` are refused with `unsupported_field`, and `store: true` too).
 
-| Field              | Default     | Meaning                                                                                                                                                                                                                                                            |
-| ------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `store`            | `"memory"`  | `"memory"` keeps records in the process (lost at exit); `"disk"` keeps each as `<dir>/response/<id>.json` or `<dir>/conversation/<id>.json`, so they survive a restart. Records already in the directory are counted against the limits and evicted like the rest. |
-| `dir`              | `null`      | Directory of the `"disk"` store (created when missing); required with it.                                                                                                                                                                                          |
-| `maxCount`         | `1000`      | Responses held. When a response is stored over the limit the oldest ones are evicted (a record counts as newer each time it is written).                                                                                                                           |
-| `maxTotalBytes`    | `134217728` | Bytes of stored responses (128 MiB, the size of their JSON). The oldest are evicted to make room; the response just stored always stays, even when it alone is over.                                                                                               |
-| `ttl`              | `0`         | Seconds a record lives after it was last written; `0` keeps them until they are evicted or deleted. Expired records are removed whenever the store is used.                                                                                                        |
-| `maxConversations` | `1000`      | Conversations held. The oldest are evicted over the limit.                                                                                                                                                                                                         |
-| `maxItems`         | `10000`     | Items in one conversation. Items a finished response adds push the oldest out; adding items with the Conversations API over the limit is refused with 400 `conversation_full`.                                                                                     |
+| Field              | Default     | Meaning                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `store`            | `"memory"`  | `"memory"` keeps records in the process (lost at exit); an object with `scan`, `read`, `write` and `erase` functions is your own backend (below); `"disk"` keeps each as `<dir>/response/<id>.json` or `<dir>/conversation/<id>.json`, so they survive a restart. Records already in the directory are counted against the limits and evicted like the rest. |
+| `dir`              | `null`      | Directory of the `"disk"` store (created when missing); required with it.                                                                                                                                                                                                                                                                                    |
+| `maxCount`         | `1000`      | Responses held. When a response is stored over the limit the oldest ones are evicted (a record counts as newer each time it is written).                                                                                                                                                                                                                     |
+| `maxTotalBytes`    | `134217728` | Bytes of stored responses (128 MiB, the size of their JSON). The oldest are evicted to make room; the response just stored always stays, even when it alone is over.                                                                                                                                                                                         |
+| `ttl`              | `0`         | Seconds a record lives after it was last written; `0` keeps them until they are evicted or deleted. Expired records are removed whenever the store is used.                                                                                                                                                                                                  |
+| `maxConversations` | `1000`      | Conversations held. The oldest are evicted over the limit.                                                                                                                                                                                                                                                                                                   |
+| `prompts`          | `{}`        | Stored prompts for `prompt: { id, version?, variables? }`; see below. Replaced whole, not merged.                                                                                                                                                                                                                                                            |
+| `maxItems`         | `10000`     | Items in one conversation. Items a finished response adds push the oldest out; adding items with the Conversations API over the limit is refused with 400 `conversation_full`.                                                                                                                                                                               |
+
+### Your own store
+
+`store` can be an object instead of `"memory"` or `"disk"`, so the records can live in a database or a cache. The translator keeps the limits, eviction, `ttl`, locking and JSON encoding; the backend only moves text. It is checked when the settings are resolved: a missing function is an `invalid_setting` error naming it. Every function may return a promise.
+
+| Function                | What it does                                                                                                                                                                                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scan(kind)`            | What the backend already holds of a kind (`"response"` or `"conversation"`), as `[{ id, size, at }]` with `size` in bytes and `at` the time of the last write in ms, oldest first. Called once per kind, on first use. A backend that starts empty returns `[]`. |
+| `read(kind, id)`        | The text of a record, or `null` when there is none.                                                                                                                                                                                                              |
+| `write(kind, id, text)` | Store the text of a record, replacing any earlier one.                                                                                                                                                                                                           |
+| `erase(kind, id)`       | Delete a record (nothing happens for one that is not there).                                                                                                                                                                                                     |
+
+Ids are `resp_...` and `conv_...` followed by letters and digits, and the translator checks them before it calls the backend.
+
+```js
+const records = new Map();
+const key = (kind, id) => `${kind}/${id}`;
+
+settings: {
+	responses: {
+		store: {
+			scan: async () => [],
+			read: async (kind, id) => records.get(key(kind, id)) ?? null,
+			write: async (kind, id, text) => void records.set(key(kind, id), text),
+			erase: async (kind, id) => void records.delete(key(kind, id))
+		}
+	}
+}
+```
+
+### Stored prompts
+
+`prompts` maps a prompt id to one prompt, or to a map of versions. A prompt has `instructions` (a string) and/or `input` (a string, which becomes one user message, or a list of input items). A value with `instructions` or `input` is one prompt; any other object is a map of versions, each a prompt.
+
+```js
+settings: {
+	responses: {
+		prompts: {
+			support: { instructions: "You answer for {{company}}.", input: [{ role: "user", content: "{{question}}" }] },
+			translate: {
+				1: { instructions: "Translate to French." },
+				2: { instructions: "Translate to {{language}}.", input: "{{text}}" }
+			}
+		}
+	}
+}
+```
+
+A request then sends `prompt: { id: "translate", version: "2", variables: { language: "German", text: "Good morning" } }`. Without `version` the last version in the map is used (the highest, for numbers). `{{name}}` is replaced by the string in `variables`; a variable can also be an `input_text`, `input_image` or `input_file` part, which takes the place of a part whose whole text is `{{name}}`. An unknown id or version, or a variable the prompt uses and the request does not give, is a 400 with `param: "prompt"` (`prompt_not_found`, `prompt_version_not_found`, `prompt_variable_missing`). The prompt's instructions go before the request's, and its input before the request's `input`. A prompt that is not well formed is an `invalid_setting` error naming it (`responses.prompts.<id>`).
 
 An evicted or expired response is gone like a deleted one: `GET` is 404 and a `previous_response_id` naming it is a 400. A response that continued from it keeps working, because each response stores the history it was answered against.
 
