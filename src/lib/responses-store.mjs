@@ -132,10 +132,12 @@ function memory() {
  */
 function disk(dir) {
 	const at = (kind, id) => path.join(dir, kind, `${id}.json`);
-	const ready = Promise.all(Object.keys(IDS).map((kind) => mkdir(path.join(dir, kind), { recursive: true })));
+	// Made on first use, so building a store never touches the disk on its own.
+	let made;
+	const ready = () => (made ??= Promise.all(Object.keys(IDS).map((kind) => mkdir(path.join(dir, kind), { recursive: true }))));
 	return {
 		scan: async (kind) => {
-			await ready;
+			await ready();
 			const found = [];
 			for (const name of await readdir(path.join(dir, kind))) {
 				const id = name.slice(0, -".json".length);
@@ -146,7 +148,7 @@ function disk(dir) {
 			return found.sort((left, right) => left.at - right.at);
 		},
 		read: async (kind, id) => {
-			await ready;
+			await ready();
 			try {
 				return await readFile(at(kind, id), "utf8");
 			} catch (cause) {
@@ -155,11 +157,11 @@ function disk(dir) {
 			}
 		},
 		write: async (kind, id, text) => {
-			await ready;
+			await ready();
 			await writeFile(at(kind, id), text);
 		},
 		erase: async (kind, id) => {
-			await ready;
+			await ready();
 			await rm(at(kind, id), { force: true });
 		}
 	};
