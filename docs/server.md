@@ -6,9 +6,9 @@ The translator can run as a standalone HTTP server, as a Fastify plugin inside a
 
 The server speaks one client protocol, the front, chosen with `front` (default `anthropic`).
 
-| Front       | Routes                                                                                                                                                                                                                                  |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, the [Files API](#files-api), [Message Batches](#message-batches), `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` and `/api/hello`                              |
+| Front       | Routes                                                                                                                                                                                                                                                                                                                      |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, the [Files API](#files-api), [Message Batches](#message-batches), `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` and `/api/hello`                                                                                                                  |
 | `openai`    | `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/responses/input_tokens`, the [stored-response and conversation routes](#stored-responses-and-conversations), `POST /v1/embeddings`, the [Files API](#files-api), the [Batch API](#batch-api), `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` |
 
 Streaming replies use `content-type: text/event-stream`. Errors are always returned in the front's own error shape.
