@@ -58,6 +58,23 @@ describe("the responses setting", () => {
 		expect(() => normalize(value)).toThrow(expect.objectContaining({ code: "invalid_setting", status: 500 }));
 	});
 
+	test("a custom store is an object with scan, read, write and erase functions", () => {
+		const backend = { scan: async () => [], read: async () => null, write: async () => {}, erase: async () => {} };
+		expect(normalize({ ...DEFAULTS, store: backend }).store).toBe(backend);
+		for (const name of Object.keys(backend)) {
+			expect(() => normalize({ ...DEFAULTS, store: { ...backend, [name]: undefined } })).toThrow(
+				expect.objectContaining({ code: "invalid_setting", message: expect.stringContaining(`responses.store.${name}`) })
+			);
+		}
+		expect(() => normalize({ ...DEFAULTS, store: {} })).toThrow(/responses.store.scan/);
+		expect(() => normalize({ ...DEFAULTS, store: null })).toThrow(/expected "memory", "disk" or an object/);
+	});
+
+	test("prompts are checked with the rest", () => {
+		expect(() => normalize({ ...DEFAULTS, prompts: null })).toThrow(/responses.prompts/);
+		expect(normalize({ ...DEFAULTS, prompts: { a: { input: "x" } } }).prompts.a).toEqual({ input: "x" });
+	});
+
 	test("a disk store with a directory is valid", () => {
 		expect(normalize({ ...DEFAULTS, store: "disk", dir: "/x" }).dir).toBe("/x");
 	});
@@ -155,6 +172,61 @@ describe.each([
 		await store.put("response", ids.c, { n: 3 });
 		expect(await store.remove("response", ids.b)).toBe(false);
 		expect(await store.get("response", ids.c)).toEqual({ n: 3 });
+	});
+});
+
+describe("a custom store", () => {
+	const backendOf = (held, calls, scanned = []) => ({
+		scan: async (kind) => {
+			calls.push(["scan", kind]);
+			return scanned.filter((entry) => entry.kind === kind);
+		},
+		read: async (kind, id) => {
+			calls.push(["read", kind, id]);
+			return held.get(`${kind}/${id}`) ?? null;
+		},
+		write: async (kind, id, text) => {
+			calls.push(["write", kind, id]);
+			held.set(`${kind}/${id}`, text);
+		},
+		erase: async (kind, id) => {
+			calls.push(["erase", kind, id]);
+			held.delete(`${kind}/${id}`);
+		}
+	});
+
+	test("does all the storing through the backend, and the limits and locking stay with the store", async () => {
+		const held = new Map();
+		const calls = [];
+		const store = create({ ...DEFAULTS, store: backendOf(held, calls), maxCount: 2 });
+		for (const id of Object.values(ids)) await store.put("response", id, { id });
+		expect([...held.keys()]).toEqual([`response/${ids.b}`, `response/${ids.c}`]);
+		expect(await store.get("response", ids.c)).toEqual({ id: ids.c });
+		expect((await store.all("response")).map((record) => record.id)).toEqual([ids.c, ids.b]);
+		expect(await store.remove("response", ids.b)).toBe(true);
+		expect(calls.filter((call) => call[0] === "scan")).toEqual([["scan", "response"]]);
+		expect(calls).toContainEqual(["erase", "response", ids.a]);
+	});
+
+	test("counts what the backend already holds", async () => {
+		const held = new Map([[`response/${ids.a}`, JSON.stringify({ id: ids.a })]]);
+		const scanned = [{ kind: "response", id: ids.a, size: 20, at: 1 }];
+		const store = create({ ...DEFAULTS, store: backendOf(held, [], scanned), maxCount: 1 });
+		expect(await store.get("response", ids.a)).toEqual({ id: ids.a });
+		await store.put("response", ids.b, { id: ids.b });
+		expect(await store.get("response", ids.a)).toBeNull();
+		expect(held.has(`response/${ids.a}`)).toBe(false);
+	});
+
+	test("all skips expired records", async () => {
+		let clock = 1000;
+		const store = create({ ...DEFAULTS, ttl: 5 }, () => clock);
+		await store.put("conversation", conv, { n: 1 });
+		clock += 3000;
+		await store.put("conversation", "conv_bbbbbbbbbbbb", { n: 2 });
+		clock += 3000;
+		expect(await store.all("conversation")).toEqual([{ n: 2 }]);
+		expect(await store.all("response")).toEqual([]);
 	});
 });
 

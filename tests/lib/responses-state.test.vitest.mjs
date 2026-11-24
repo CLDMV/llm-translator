@@ -326,6 +326,123 @@ describe("keeping responses", () => {
 	});
 });
 
+describe("item references", () => {
+	const ref = (id) => ({ type: "item_reference", id });
+
+	test("are replaced by copies of stored items: conversation items, response input and output items", async () => {
+		const ctx = context();
+		const { store } = required(ctx.config, ctx.state);
+		const id = "conv_aaaaaaaaaaaa";
+		await store.put("conversation", id, { id, items: itemsOf([{ role: "user", content: "from the conversation", id: "msg_conv" }]) });
+		await answer(ctx, { input: [{ role: "user", content: "asked", id: "msg_asked" }] }, "resp_aaaaaaaaaaaa", "said");
+		const made = await plan(
+			request({
+				input: [ref("msg_conv"), ref("msg_asked"), ref("msg_resp_aaaaaaaaaaaa"), ref("msg_conv"), { role: "user", content: "now" }]
+			}),
+			ctx
+		);
+		expect(made.input.map((item) => item?.content?.[0]?.text ?? item?.content ?? item)).toEqual([
+			"from the conversation",
+			"asked",
+			"said",
+			"from the conversation",
+			"now"
+		]);
+		expect(made.input[0]).not.toHaveProperty("id");
+		expect(made.body.input).toBe(made.input);
+		await finish(made, reply("resp_bbbbbbbbbbbb", "ok"), ctx);
+		expect((await store.get("response", "resp_bbbbbbbbbbbb")).input.map((item) => item.id)).toHaveLength(5);
+	});
+
+	test("an item that is in a conversation and in a response is found once", async () => {
+		const ctx = context();
+		const { store } = required(ctx.config, ctx.state);
+		const id = "conv_aaaaaaaaaaaa";
+		await store.put("conversation", id, { id, items: [] });
+		await answer(ctx, { conversation: id }, "resp_aaaaaaaaaaaa", "twice");
+		const made = await plan(request({ input: [ref("msg_resp_aaaaaaaaaaaa")] }), ctx);
+		expect(made.input).toHaveLength(1);
+	});
+
+	test("an unknown id, a reference without an id, and a string input are handled", async () => {
+		const ctx = context();
+		await expect(plan(request({ input: [ref("msg_nope")] }), ctx)).rejects.toMatchObject({
+			status: 400,
+			code: "item_not_found",
+			param: "input"
+		});
+		for (const id of [undefined, "", 5]) {
+			await expect(plan(request({ input: [ref(id)] }), ctx)).rejects.toMatchObject({
+				status: 400,
+				code: "invalid_request",
+				param: "input"
+			});
+		}
+		expect((await plan(request({ input: "plain" }), ctx)).input).toBe("plain");
+		expect((await plan(request({ input: [null] }), ctx)).input).toEqual([null]);
+		const items = [{ role: "user", content: "x" }];
+		expect((await plan(request({ input: items }), ctx)).input).toBe(items);
+	});
+});
+
+describe("stored prompts", () => {
+	const prompts = {
+		greet: { instructions: "Greet {{who}}.", input: [{ role: "user", content: "Hello from the prompt" }] },
+		rules: { instructions: "Rules." },
+		blank: { instructions: "" },
+		shown: { input: "{{pic}}" }
+	};
+	const settings = { responses: { prompts } };
+	const image = { type: "input_image", image_url: "u" };
+
+	test("the prompt's instructions go before the request's, its input before the request's input", async () => {
+		const ctx = context(settings);
+		const made = await plan(request({ instructions: "Be brief.", prompt: { id: "greet", variables: { who: "Ann" } } }), ctx);
+		expect(made.body).not.toHaveProperty("prompt");
+		expect(made.body.instructions).toBe("Greet Ann.\n\nBe brief.");
+		expect(made.input).toEqual([
+			{ role: "user", content: "Hello from the prompt" },
+			{ type: "message", role: "user", content: "hi" }
+		]);
+		expect(made.body.input).toBe(made.input);
+		expect(made.echo.prompt).toEqual({ id: "greet", version: null, variables: { who: "Ann" } });
+		expect((await plan(request(), ctx)).echo.prompt).toBeNull();
+		expect((await plan(request({ prompt: null }), ctx)).echo.prompt).toBeNull();
+	});
+
+	test("works with a request that has no input, an input list, no instructions or odd ones", async () => {
+		const ctx = context(settings);
+		const bare = { model: "m" };
+		expect((await plan({ ...bare, prompt: { id: "greet", variables: { who: "Bo" } } }, ctx)).input).toEqual(prompts.greet.input);
+		const listed = await plan({ ...bare, input: [{ role: "user", content: "x" }], prompt: { id: "greet", variables: { who: "Bo" } } }, ctx);
+		expect(listed.input).toHaveLength(2);
+		expect((await plan({ ...bare, instructions: 5, prompt: { id: "greet", variables: { who: "Bo" } } }, ctx)).body.instructions).toBe(
+			"Greet Bo."
+		);
+		// A prompt with instructions only leaves the input as it is; an input that is not a string or a list is left for the converter to refuse.
+		expect((await plan(request({ prompt: { id: "rules" } }), ctx)).input).toBe("hi");
+		expect((await plan(request({ prompt: { id: "blank" }, instructions: "Mine." }), ctx)).body.instructions).toBe("Mine.");
+		expect((await plan(request({ input: 5, prompt: { id: "greet", variables: { who: "Bo" } } }), ctx)).input).toBe(5);
+		const shown = await plan({ ...bare, prompt: { id: "shown", variables: { pic: image } } }, ctx);
+		expect(shown.input[0].content).toEqual([image]);
+	});
+
+	test("an unknown prompt or a missing variable is a 400 on prompt, and is the same with the setting empty", async () => {
+		const ctx = context(settings);
+		await expect(plan(request({ prompt: { id: "nope" } }), ctx)).rejects.toMatchObject({
+			status: 400,
+			param: "prompt",
+			code: "prompt_not_found"
+		});
+		await expect(plan(request({ prompt: { id: "greet" } }), ctx)).rejects.toMatchObject({
+			param: "prompt",
+			code: "prompt_variable_missing"
+		});
+		await expect(plan(request({ prompt: "greet" }), context())).rejects.toMatchObject({ param: "prompt", code: "invalid_prompt" });
+		await expect(plan(request({ prompt: { id: "greet" } }), context())).rejects.toMatchObject({ code: "prompt_not_found" });
+	});
+});
+
 describe("halt", () => {
 	test("cancels a live response and stops its job, and leaves one that is not running as it is", async () => {
 		const ctx = context();

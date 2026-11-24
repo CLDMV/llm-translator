@@ -22,6 +22,7 @@ import { TranslatorError } from "./errors.mjs";
 import { cancel } from "./background.mjs";
 import { itemId } from "./responses.mjs";
 import { create } from "./responses-store.mjs";
+import { apply, lookup } from "./prompts.mjs";
 import { resolve as settingsOf } from "./settings.mjs";
 
 /** Statuses of a response that is still being produced (background mode). */
@@ -205,6 +206,38 @@ export async function append(store, max, id, items, trim) {
 }
 
 /**
+ * Replace the `item_reference` items of an input with copies of the stored items they name: input and output items of stored responses, and items of
+ * conversations. A copy has no id (it gets a new one when the response is kept), so the same item is not twice in one conversation.
+ * @param {ReturnType<typeof create>} store - The store.
+ * @param {any} input - The request's `input`.
+ * @returns {Promise<any>} The input; the same value when it holds no reference.
+ * @throws {TranslatorError} 400 `invalid_request` for a reference without an id, 400 `item_not_found` for an id nothing holds (both with param `input`).
+ */
+async function dereference(store, input) {
+	const isReference = (item) => item !== null && typeof item === "object" && item.type === "item_reference";
+	if (!Array.isArray(input) || !input.some(isReference)) return input;
+	for (const item of input.filter(isReference)) {
+		if (typeof item.id !== "string" || item.id === "")
+			throw problem(400, "input: an item_reference needs the id of an item", "invalid_request", "input");
+	}
+	const wanted = new Set(input.filter(isReference).map((item) => item.id));
+	const found = new Map();
+	const keep = (items) => {
+		for (const item of items) if (wanted.has(item.id) && !found.has(item.id)) found.set(item.id, item);
+	};
+	for (const record of await store.all("conversation")) keep(record.items);
+	for (const record of await store.all("response")) keep([...record.input, ...record.response.output]);
+	return input.map((item) => {
+		if (!isReference(item)) return item;
+		const hit = found.get(item.id);
+		if (hit === undefined) throw problem(400, `Item with id '${item.id}' not found.`, "item_not_found", "input");
+		const copy = { ...hit };
+		delete copy.id;
+		return copy;
+	});
+}
+
+/**
  * Whether a flag of a request is true, treating null and absence as the default.
  * @param {any} body - Request body.
  * @param {string} name - Field name.
@@ -273,17 +306,34 @@ export async function plan(body, { config, state }) {
 		history = record.items;
 	}
 	const rest = { ...body };
-	for (const name of ["previous_response_id", "conversation", "store", "background"]) delete rest[name];
+	for (const name of ["previous_response_id", "conversation", "store", "background", "prompt"]) delete rest[name];
+	rest.input = await dereference(held.store, body.input);
+	// A stored prompt goes ahead of the request: its instructions before the request's, its input items before the request's input.
+	const chosen = body.prompt === undefined || body.prompt === null ? null : lookup(held.options.prompts, body.prompt);
+	if (chosen !== null) {
+		const filled = apply(chosen.prompt, chosen.variables);
+		if (filled.instructions !== null) {
+			rest.instructions = [filled.instructions, rest.instructions].filter((text) => typeof text === "string" && text !== "").join("\n\n");
+		}
+		const own = typeof rest.input === "string" ? [{ type: "message", role: "user", content: rest.input }] : rest.input;
+		if (filled.items.length > 0 && (own === undefined || Array.isArray(own))) rest.input = [...filled.items, ...(own ?? [])];
+	}
 	return {
 		id: itemId("resp"),
 		body: rest,
 		history,
-		input: body.input,
+		input: rest.input,
 		store,
 		background,
 		previous,
 		conversation,
-		echo: { store, background, previous_response_id: previous, conversation: conversation === null ? null : { id: conversation } }
+		echo: {
+			store,
+			background,
+			previous_response_id: previous,
+			conversation: conversation === null ? null : { id: conversation },
+			prompt: chosen === null ? null : { id: chosen.id, version: chosen.version, variables: chosen.variables }
+		}
 	};
 }
 

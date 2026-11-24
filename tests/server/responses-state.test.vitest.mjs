@@ -348,7 +348,7 @@ describe("previous_response_id", () => {
 			// An error in the new input names its position in the request, not in the replayed history.
 			const wrong = await post(`${url}/v1/responses`, {
 				...hello,
-				input: [{ type: "item_reference", id: "msg_1" }],
+				input: [{ type: "web_search_call", id: "ws_1" }],
 				previous_response_id: first.id
 			});
 			expect(wrong.status).toBe(400);
@@ -763,6 +763,131 @@ describe("background responses", () => {
 			await first.upstream.close();
 			const { rm } = await import("node:fs/promises");
 			await rm(`${process.cwd()}/tmp/responses-restart`, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("a custom store", () => {
+	it("holds the records of a whole conversation through its own backend", async () => {
+		const held = new Map();
+		const calls = [];
+		const store = {
+			scan: async () => [],
+			read: async (kind, id) => (calls.push("read"), held.get(`${kind}/${id}`) ?? null),
+			write: async (kind, id, text) => (calls.push("write"), void held.set(`${kind}/${id}`, text)),
+			erase: async (kind, id) => (calls.push("erase"), void held.delete(`${kind}/${id}`))
+		};
+		const { upstream, url } = await start({ settings: { responses: { store } } });
+		try {
+			const first = await (await post(`${url}/v1/responses`, hello)).json();
+			expect(JSON.parse(held.get(`response/${first.id}`)).response.id).toBe(first.id);
+			const second = await (await post(`${url}/v1/responses`, { ...hello, input: "more", previous_response_id: first.id })).json();
+			expect(chats(upstream).at(-1).messages).toHaveLength(3);
+			const conversation = await (await post(`${url}/v1/conversations`, { items: [{ role: "user", content: "hi" }] })).json();
+			expect(held.has(`conversation/${conversation.id}`)).toBe(true);
+			expect(await (await send(`${url}/v1/responses/${second.id}`, "GET")).json()).toEqual(second);
+			expect((await send(`${url}/v1/responses/${first.id}`, "DELETE")).status).toBe(200);
+			expect(held.has(`response/${first.id}`)).toBe(false);
+			expect(calls).toEqual(expect.arrayContaining(["read", "write", "erase"]));
+		} finally {
+			await upstream.close();
+		}
+	});
+});
+
+describe("item references", () => {
+	it("are resolved from stored responses and conversations, and an unknown id is a 400 on input", async () => {
+		const { upstream, url } = await start();
+		try {
+			const first = await (await post(`${url}/v1/responses`, hello)).json();
+			const output = first.output[0].id;
+			const conversation = await (
+				await post(`${url}/v1/conversations`, {
+					items: [{ type: "message", role: "user", content: "kept in a conversation", id: "msg_kept" }]
+				})
+			).json();
+			const second = await post(`${url}/v1/responses`, {
+				...hello,
+				input: [
+					{ type: "item_reference", id: output },
+					{ type: "item_reference", id: "msg_kept" },
+					{ role: "user", content: "and now?" }
+				]
+			});
+			expect(second.status).toBe(200);
+			expect(chats(upstream).at(-1).messages).toEqual([
+				{ role: "assistant", content: "Hello world" },
+				{ role: "user", content: [{ type: "text", text: "kept in a conversation" }] },
+				{ role: "user", content: "and now?" }
+			]);
+			const listed = await (await send(`${url}/v1/responses/${(await second.json()).id}/input_items?order=asc`, "GET")).json();
+			expect(listed.data.map((item) => item.id)).not.toContain(output);
+			expect(conversation.id).toMatch(/^conv_/);
+			const unknown = await post(`${url}/v1/responses`, { ...hello, input: [{ type: "item_reference", id: "msg_nope" }] });
+			expect(unknown.status).toBe(400);
+			expect((await unknown.json()).error).toMatchObject({ code: "item_not_found", param: "input" });
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("are still refused when the responses setting is null", async () => {
+		const { upstream, url } = await start({ settings: { responses: null } });
+		try {
+			const reply = await post(`${url}/v1/responses`, { ...hello, input: [{ type: "item_reference", id: "msg_1" }] });
+			expect(reply.status).toBe(400);
+			expect((await reply.json()).error).toMatchObject({ code: "unsupported_content", param: "input[0]" });
+		} finally {
+			await upstream.close();
+		}
+	});
+});
+
+describe("stored prompts", () => {
+	const prompts = {
+		support: {
+			1: { instructions: "Old." },
+			2: { instructions: "You answer for {{company}}.", input: [{ role: "user", content: "Context: {{context}}" }] }
+		}
+	};
+
+	it("go ahead of the request's instructions and input, with the variables filled in and echoed", async () => {
+		const { upstream, url } = await start({ settings: { responses: { prompts } } });
+		try {
+			const prompt = { id: "support", version: "2", variables: { company: "Acme", context: "gold plan" } };
+			const reply = await post(`${url}/v1/responses`, { ...hello, instructions: "Be brief.", prompt });
+			expect(reply.status).toBe(200);
+			const made = await reply.json();
+			expect(made.prompt).toEqual({ id: "support", version: "2", variables: prompt.variables });
+			expect(chats(upstream).at(-1).messages).toEqual([
+				{ role: "system", content: "You answer for Acme.\n\nBe brief." },
+				{ role: "user", content: "Context: gold plan" },
+				{ role: "user", content: "hi" }
+			]);
+			expect((await (await send(`${url}/v1/responses/${made.id}`, "GET")).json()).prompt).toEqual(made.prompt);
+			const latest = await (await post(`${url}/v1/responses`, { model: "qwen3-coder", prompt: { ...prompt, version: undefined } })).json();
+			expect(latest.prompt.version).toBe("2");
+		} finally {
+			await upstream.close();
+		}
+	});
+
+	it("an unknown prompt, version or a missing variable is a 400 on prompt", async () => {
+		const { upstream, url } = await start({ settings: { responses: { prompts } } });
+		try {
+			for (const [prompt, code] of [
+				[{ id: "nope" }, "prompt_not_found"],
+				[{ id: "support", version: "9" }, "prompt_version_not_found"],
+				[{ id: "support", variables: { company: "Acme" } }, "prompt_variable_missing"],
+				["support", "invalid_prompt"]
+			]) {
+				const reply = await post(`${url}/v1/responses`, { ...hello, prompt });
+				expect(reply.status).toBe(400);
+				expect((await reply.json()).error).toMatchObject({ code, param: "prompt" });
+			}
+			expect(chats(upstream)).toHaveLength(0);
+		} finally {
+			await upstream.close();
 		}
 	});
 });

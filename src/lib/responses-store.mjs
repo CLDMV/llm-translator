@@ -21,17 +21,22 @@
  * Store interface (every method returns a promise): `get(kind, id)` reads a record (null when unknown, malformed or expired), `put(kind, id, value)`
  * writes one and evicts the oldest records over the limits, `update(kind, id, change)` is a serialized read-modify-write (`change` gets the current
  * record or null and returns the record to write, or undefined to leave it as it is), and `remove(kind, id)` deletes one (true when it existed).
- * `kind` is `"response"` or `"conversation"`; records are JSON values. A backend is `{ scan, read, write, erase }` over text; `memory` and `disk` are
- * the ones provided.
+ * `all(kind)` reads every live record of a kind, newest write first. `kind` is `"response"` or `"conversation"`; records are JSON values.
+ *
+ * Backend interface (what `responses.store` can be set to instead of `"memory"` or `"disk"`; every method returns a promise, and records are text):
+ * `scan(kind)` lists what the backend already holds as `[{ id, size, at }]` (size in bytes, `at` the write time in ms, oldest first; `[]` for a backend
+ * that starts empty), `read(kind, id)` gives the text of a record or null, `write(kind, id, text)` stores it, and `erase(kind, id)` deletes it. The store
+ * does the rest (limits, eviction, ttl, locking, JSON). `memory` and `disk` are the two provided.
  * @module @cldmv/llm-translator/lib/responses-store
  */
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { TranslatorError } from "./errors.mjs";
+import { normalize as normalizePrompts } from "./prompts.mjs";
 
 /**
  * The `responses` setting.
- * @typedef {{ store: "memory" | "disk", dir: string | null, maxCount: number, maxTotalBytes: number, ttl: number, maxConversations: number, maxItems: number }} ResponsesSetting
+ * @typedef {{ store: "memory" | "disk" | { scan: Function, read: Function, write: Function, erase: Function }, dir: string | null, maxCount: number, maxTotalBytes: number, ttl: number, maxConversations: number, maxItems: number, prompts: Record<string, any> }} ResponsesSetting
  */
 
 /** Defaults of the `responses` setting. */
@@ -43,11 +48,15 @@ export const DEFAULTS = Object.freeze(
 		maxTotalBytes: 128 * 1024 * 1024,
 		ttl: 0,
 		maxConversations: 1000,
-		maxItems: 10000
+		maxItems: 10000,
+		prompts: Object.freeze({})
 	})
 );
 
 const KEYS = Object.keys(DEFAULTS);
+
+/** The functions of a backend. */
+const BACKEND = ["scan", "read", "write", "erase"];
 
 /** The record kinds and the id shape of each (the id is checked before it reaches a backend, so a directory store never builds a path from client text). */
 export const IDS = Object.freeze({
@@ -81,7 +90,14 @@ export function normalize(value) {
 	if (typeof value !== "object" || Array.isArray(value)) invalid("responses", value, "expected null or an object");
 	for (const key of Object.keys(value))
 		if (!KEYS.includes(key)) invalid(`responses.${key}`, value[key], `not a responses setting; expected one of ${KEYS.join(", ")}`);
-	if (value.store !== "memory" && value.store !== "disk") invalid("responses.store", value.store, 'expected "memory" or "disk"');
+	if (value.store !== null && typeof value.store === "object") {
+		for (const name of BACKEND) {
+			if (typeof value.store[name] !== "function")
+				invalid(`responses.store.${name}`, value.store[name], `a custom store needs a ${name}() function (${BACKEND.join(", ")})`);
+		}
+	} else if (value.store !== "memory" && value.store !== "disk") {
+		invalid("responses.store", value.store, 'expected "memory", "disk" or an object with scan, read, write and erase functions');
+	}
 	if (value.store === "disk" && (typeof value.dir !== "string" || value.dir === "")) {
 		invalid("responses.dir", value.dir, 'expected a directory path, which store "disk" needs');
 	}
@@ -91,6 +107,7 @@ export function normalize(value) {
 	}
 	if (!Number.isSafeInteger(value.ttl) || value.ttl < 0)
 		invalid("responses.ttl", value.ttl, "expected seconds as a whole number, 0 for no limit");
+	normalizePrompts(value.prompts);
 	return value;
 }
 
@@ -152,10 +169,12 @@ function disk(dir) {
  * Create a store.
  * @param {ResponsesSetting} options - The `responses` setting.
  * @param {() => number} [now] - Clock in ms.
- * @returns {{ get: Function, put: Function, update: Function, remove: Function }} Store.
+ * @returns {{ get: Function, all: Function, put: Function, update: Function, remove: Function }} Store.
  */
 export function create(options, now = Date.now) {
-	const backend = options.store === "disk" ? disk(/** @type {string} */ (options.dir)) : memory();
+	let backend = options.store;
+	if (backend === "disk") backend = disk(/** @type {string} */ (options.dir));
+	else if (backend === "memory") backend = memory();
 	// What the store holds per kind, oldest write first: id -> { size, at }. Built from the backend on first use, so a directory that already holds
 	// records (a restart) is counted and evicted like the rest.
 	const index = {};
@@ -226,6 +245,19 @@ export function create(options, now = Date.now) {
 		 * @returns {Promise<any | null>} The record, or null when it is unknown, malformed or expired.
 		 */
 		get: (kind, id) => read(kind, id),
+		/**
+		 * Every live record of a kind, newest write first (expired ones are removed on the way).
+		 * @param {"response" | "conversation"} kind - Record kind.
+		 * @returns {Promise<any[]>} Records.
+		 */
+		all: async (kind) => {
+			const found = [];
+			for (const id of [...(await known(kind)).keys()].reverse()) {
+				const record = await read(kind, id);
+				if (record !== null) found.push(record);
+			}
+			return found;
+		},
 		/**
 		 * Write a record, evicting the oldest ones over the limits.
 		 * @param {"response" | "conversation"} kind - Record kind.

@@ -126,7 +126,8 @@ describe("settings", () => {
 			maxTotalBytes: 134217728,
 			ttl: 0,
 			maxConversations: 1000,
-			maxItems: 10000
+			maxItems: 10000,
+			prompts: {}
 		});
 		const merged = resolve({ responses: { maxCount: 5 } }, { responses: { ttl: 60 } });
 		expect(merged.responses).toMatchObject({ store: "memory", maxCount: 5, ttl: 60, maxItems: 10000 });
@@ -136,6 +137,8 @@ describe("settings", () => {
 		expect(resolve({ responses: { store: "disk", dir: "/x" } }).responses.dir).toBe("/x");
 		expect(() => resolve({ responses: { store: "disk" } })).toThrow(expect.objectContaining({ code: "invalid_setting" }));
 		expect(() => resolve({ responses: { maxItems: 0 } })).toThrow(/responses.maxItems/);
+		expect(resolve({ responses: { prompts: { a: { input: "x" } } } }).responses.prompts).toEqual({ a: { input: "x" } });
+		expect(() => resolve({ responses: { prompts: { a: "x" } } })).toThrow(/responses.prompts.a/);
 		expect(() => resolve({ responses: "memory" })).toThrow(/responses/);
 		expect(() => resolve({ responses: [] })).toThrow(/responses/);
 	});

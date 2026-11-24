@@ -48,7 +48,7 @@ import { check as checkBedrock } from "./bedrock-settings.mjs";
  * @property {null|{ allow: string[], maxBytes: number, timeout: number, maxRedirects: number, maxDocuments: number, allowPrivate: boolean }} documentUrls - Fetch the `url` sources of `document` blocks before conversion; `null` (the default) is off, and an object turns it on (`allow` is required).
  * @property {null|{ store: "memory"|"disk", dir: string|null, maxFileSize: number, maxTotalBytes: number, maxCount: number, ttl: number }} files - The Files API store (`/v1/files`) and its limits; the default is an in-memory store, and `null` turns the Files API off.
  * @property {null|{ store: "memory"|"disk", dir: string|null, concurrency: number, maxRequests: number, maxCount: number, window: number, ttl: number }} batches - The batch store behind `/v1/batches` and `/v1/messages/batches` and its limits; the default is an in-memory store, and `null` turns both batch APIs off.
- * @property {null|{ store: "memory"|"disk", dir: string|null, maxCount: number, maxTotalBytes: number, ttl: number, maxConversations: number, maxItems: number }} responses - The store behind the stateful Responses API (`store`, `previous_response_id`, `conversation`, `background`, `GET`, `DELETE` and cancel on `/v1/responses`, and `/v1/conversations`) and its limits; the default is an in-memory store, and `null` turns the stateful features off.
+ * @property {null|import("./responses-store.mjs").ResponsesSetting} responses - The store behind the stateful Responses API (`store`, `previous_response_id`, `conversation`, `background`, `item_reference`, `prompt`, `GET`, `DELETE` and cancel on `/v1/responses`, and `/v1/conversations`), its limits and the stored prompts (`prompts`); `store` may also be your own backend object; the default is an in-memory store, and `null` turns the stateful features off.
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
@@ -190,9 +190,9 @@ export function resolve(...layers) {
 			if (value === undefined) continue;
 			if (key === "pdf") Object.assign(out.pdf, value);
 			else if (key === "files" && value !== null && typeof value === "object" && !Array.isArray(value))
-				out.files = { ...(out.files ?? FILES), ...value };
+				out.files = { ...(out.files ?? FILES), .../** @type {any} */ (value) };
 			else if (key === "batches" && value !== null && typeof value === "object" && !Array.isArray(value))
-				out.batches = { ...(out.batches ?? BATCHES), ...value };
+				out.batches = { ...(out.batches ?? BATCHES), .../** @type {any} */ (value) };
 			else if (key === "responses" && value !== null && typeof value === "object" && !Array.isArray(value))
 				out.responses = { ...(out.responses ?? RESPONSES), ...value };
 			else if (key === "sampling" && value !== null && typeof value === "object" && !Array.isArray(value))
