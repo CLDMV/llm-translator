@@ -17,17 +17,17 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.16.0 (November 2026)
+### Latest: v0.17.0 (November 2026)
 
-- **Citations and the last Gemini and Cohere gaps** — citations carry between Anthropic, Chat Completions and the Responses API, and come back from Gemini grounding and Cohere documents. The Vertex AI driver serves Gemini models too. Gemini computer use works for Anthropic clients, with flagged actions confirmed through the client's question tool, and Cohere gets tool plans, forced tool choice, logprobs and its own token counts.
-- [View full v0.16.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.16.0.md)
+- **Files API, Anthropic client tools everywhere, and a complete Bedrock driver** — both fronts serve `/v1/files`, and stored files are read in wherever a request references them. Anthropic's bash, text editor, computer and memory tools reach every other upstream as function tools. Bedrock gets the full AWS credential chain (profiles, SSO, assume-role, web identity, ECS and EC2 roles) without the SDK, plus Converse prompt caching, reasoning round trips, structured output and real token counts.
+- [View full v0.17.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.17.0.md)
 
 ### Recent Releases
 
+- **v0.16.0** (November 2026) — citations across protocols, Gemini models on Vertex AI, and the last Gemini and Cohere native gaps closed ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.16.0.md))
 - **v0.15.0** (November 2026) — the Gemini `generateContent` and Cohere v2 chat native protocols, from either front ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.15.0.md))
 - **v0.14.0** (November 2026) — Claude on Google Vertex AI and Amazon Bedrock, Bedrock's Converse protocol, and opt-in downloading of URL documents ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.14.0.md))
 - **v0.13.0** (November 2026) — the OpenAI Responses API as a front and as an upstream, and one per-upstream `api` setting that defaults to `auto` ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.13.0.md))
-- **v0.12.0** (November 2026) — Prometheus `/metrics`, HTTPS, per-key rate limits and CORS for the built-in server, and failed tool results marked by default over Chat Completions ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.12.0.md))
 
 📚 **For complete version history and detailed release notes, see the [docs/changelog/](https://github.com/CLDMV/llm-translator/tree/master/docs/changelog/) folder.**
 
