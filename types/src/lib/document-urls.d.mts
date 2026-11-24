@@ -45,6 +45,27 @@ export function resolve(body: any, { options, report, signal, fetch, deps }: {
     fetch?: Function;
     deps?: any;
 }): Promise<any>;
+/**
+ * Resolve the `file_url` of OpenAI `file` parts (a Responses `input_file` by URL), the way `resolve` does for a `document` block with a `url` source:
+ * the same fetch with the same allow-list, size, redirect and count limits, and the same events. A fetched file becomes a `file` part with `file_data`
+ * (a data URL) and the file name, which the ordinary file handling then reads. With fetching off (`options` null) the part becomes a text note, as
+ * a URL document does on a converting route; a failed fetch becomes a note with the reason. Parts without a `file_url`, and parts that also carry a
+ * `file_id` or `file_data`, are left alone. A copy is returned when anything changed.
+ * @param {any} body - OpenAI Chat Completions request body.
+ * @param {{options: any, report: (event: {kind: string, message: string, [detail: string]: any}) => void, signal?: AbortSignal, fetch?: Function, deps?: any}} spec - As for `resolve`; `options` is the normalized `documentUrls` setting, or null when URL fetching is off.
+ * @returns {Promise<any>} The body.
+ */
+export function resolveFileParts(body: any, { options, report, signal, fetch, deps }: {
+    options: any;
+    report: (event: {
+        kind: string;
+        message: string;
+        [detail: string]: any;
+    }) => void;
+    signal?: AbortSignal;
+    fetch?: Function;
+    deps?: any;
+}): Promise<any>;
 /** Defaults of the fields of `documentUrls` other than `allow`. */
 export const DEFAULTS: Readonly<{
     maxBytes: number;

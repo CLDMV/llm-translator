@@ -24,6 +24,8 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {"extract"|"note"|"error"} documents - How `document` blocks are handled.
  * @property {((block: object, ctx: object) => Promise<object[]>|object[])|null} documentConverter - Override for `document` conversion; returns Anthropic content blocks.
  * @property {null|{ allow: string[], maxBytes: number, timeout: number, maxRedirects: number, maxDocuments: number, allowPrivate: boolean }} documentUrls - Fetch the `url` sources of `document` blocks before conversion; `null` (the default) is off, and an object turns it on (`allow` is required).
+ * @property {null|{ store: "memory"|"disk", dir: string|null, maxFileSize: number, maxTotalBytes: number, maxCount: number, ttl: number }} files - The Files API store (`/v1/files`) and its limits; the default is an in-memory store, and `null` turns the Files API off.
+ * @property {null|{ store: "memory"|"disk", dir: string|null, concurrency: number, maxRequests: number, maxCount: number, window: number, ttl: number }} batches - The batch store behind `/v1/batches` and `/v1/messages/batches` and its limits; the default is an in-memory store, and `null` turns both batch APIs off.
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
@@ -53,6 +55,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {boolean} passthroughFilter - Restrict bodies forwarded from the OpenAI front to an OpenAI-protocol upstream to standard Chat Completions fields plus documented vLLM extensions. Off in the library; the server turns it on unless set to false.
  * @property {boolean | "auto"} nativeMessages - Deprecated: use the upstream's `api` instead. For a vLLM upstream that sets no `api`, `true` reads as `api: "anthropic.messages"`, `"auto"` as `api: "auto"` and `false` as `api: "openai.chat"`, with a deprecation warning; it is ignored (also with a warning) when `api` is set.
  * @property {{ safetySettings?: {category: string, threshold: string}[], tools?: object[], cachedContent?: string, cache?: boolean, thinking?: "auto"|"level"|"budget", responseModalities?: string[], imageConfig?: object, speechConfig?: object, mediaResolution?: string, confirmationTool?: string, computerUse?: { environment?: string, excludedPredefinedFunctions?: string[], enablePromptInjectionDetection?: boolean, disabledSafetyPolicies?: string[] } }} gemini - Google Gemini request fields for an upstream on the `google.gemini` protocol, merged key by key: `safetySettings` (sent as given), `tools` (built-in tools such as `{ googleSearch: {} }` or `{ computerUse: { environment: "ENVIRONMENT_BROWSER" } }`, added to the request's own), `cachedContent` (a cached content name sent with every request), `cache` (false stops `cache_control` from creating cached contents), `thinking` (`level` or `budget` forces the thinking control a model that is not recognized by name takes; `auto` decides from the model id), `responseModalities`, `imageConfig`, `speechConfig` and `mediaResolution` (sent in `generationConfig`), `confirmationTool` (the name of a tool of the request, taking the `AskUserQuestion` shape, that asks the user to confirm an action Gemini flags; by default `AskUserQuestion` when the request declares it, else the confirmation is asked in plain text), and `computerUse` (fields merged into the `computerUse` tool the translator builds for an Anthropic computer tool: `enablePromptInjectionDetection`, `disabledSafetyPolicies`, and `environment` and `excludedPredefinedFunctions`, either spelled in camelCase or snake_case). Only the operator sets these; a client never does.
+ * @property {{ cache?: boolean }} bedrock - Amazon Bedrock request options for an upstream on the `bedrock.converse` protocol, merged key by key: `cache` (false stops the Anthropic `cache_control` markers from becoming Converse `cachePoint` blocks, for a model that does not take them). Only the operator sets these; a client never does.
  * @property {number} contextWindow - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.
  * @property {number} defaultMaxTokens - `max_tokens` used when an OpenAI request has none (Anthropic requires one).
  */
@@ -132,6 +135,29 @@ export type Settings = {
         maxRedirects: number;
         maxDocuments: number;
         allowPrivate: boolean;
+    };
+    /**
+     * - The Files API store (`/v1/files`) and its limits; the default is an in-memory store, and `null` turns the Files API off.
+     */
+    files: null | {
+        store: "memory" | "disk";
+        dir: string | null;
+        maxFileSize: number;
+        maxTotalBytes: number;
+        maxCount: number;
+        ttl: number;
+    };
+    /**
+     * - The batch store behind `/v1/batches` and `/v1/messages/batches` and its limits; the default is an in-memory store, and `null` turns both batch APIs off.
+     */
+    batches: null | {
+        store: "memory" | "disk";
+        dir: string | null;
+        concurrency: number;
+        maxRequests: number;
+        maxCount: number;
+        window: number;
+        ttl: number;
     };
     /**
      * - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
@@ -279,6 +305,12 @@ export type Settings = {
             enablePromptInjectionDetection?: boolean;
             disabledSafetyPolicies?: string[];
         };
+    };
+    /**
+     * - Amazon Bedrock request options for an upstream on the `bedrock.converse` protocol, merged key by key: `cache` (false stops the Anthropic `cache_control` markers from becoming Converse `cachePoint` blocks, for a model that does not take them). Only the operator sets these; a client never does.
+     */
+    bedrock: {
+        cache?: boolean;
     };
     /**
      * - Prompt size in tokens the upstream truncates at, or 0 when unknown. Drivers whose server silently truncates (Ollama) warn once when a request is estimated to exceed it.

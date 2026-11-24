@@ -20,6 +20,19 @@ export function frames(source: ReadableStream | AsyncIterable<Uint8Array> | Iter
     payload: Buffer;
 }, void, undefined>;
 /**
+ * Create an incremental decoder of an event stream into `{ event, data }` messages (the pieces {@link events} is made of, for a reader that sees
+ * the bytes chunk by chunk, such as the capture of a stream's raw text).
+ * @param {"invoke" | "converse"} kind - Which API the stream comes from.
+ * @returns {{ push: (chunk: Uint8Array) => {event: string, data: any}[], flush: () => void }} Decoder; `push` and `flush` throw as {@link createParser} does, and `push` also throws `invalid_stream_data` (502) for a payload that is not JSON.
+ */
+export function createDecoder(kind: "invoke" | "converse"): {
+    push: (chunk: Uint8Array) => {
+        event: string;
+        data: any;
+    }[];
+    flush: () => void;
+};
+/**
  * Convert an event stream to `{ event, data }` messages: the shape SSE parsing gives, so the stream converters read it like a Server-Sent Events stream.
  * - `"invoke"` (`InvokeModelWithResponseStream`): each `chunk` event carries `{ "bytes": "<base64>" }`, which decodes to one Anthropic stream event; the message is that event, named by its `type`. Bedrock's `amazon-bedrock-invocationMetrics` field is removed.
  * - `"converse"` (`ConverseStream`): each event is named by its `:event-type` header (`messageStart`, `contentBlockDelta`, ...) and its payload is the data.
