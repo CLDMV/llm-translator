@@ -59,6 +59,7 @@ describe("package surface", () => {
 					.sort()
 			).toEqual(
 				[
+					"batches",
 					"convert",
 					"detect",
 					"driver",

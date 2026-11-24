@@ -275,6 +275,12 @@ export function register(fastify, options, captured) {
 				name,
 				(input, extra) => captured.files[name](input, { ...extra, front })
 			])
+		),
+		batches: Object.fromEntries(
+			["create", "list", "get", "cancel", "remove", "results"].map((name) => [
+				name,
+				(input, extra) => captured.batches[name](input, { ...extra, front })
+			])
 		)
 	};
 	const keys = [options.apiKey ?? []].flat().filter(Boolean);
@@ -567,7 +573,29 @@ export function register(fastify, options, captured) {
 		});
 	}
 
+	// The Batch APIs: OpenAI's `/v1/batches` and Anthropic's Message Batches, each on its own front. Batches run in the background; the routes only make,
+	// read and cancel them.
+	if (api.front === "openai") {
+		fastify.post("/v1/batches", { bodyLimit }, async (request, reply) => reply.send(await api.batches.create(request.body)));
+		fastify.get("/v1/batches", async (request, reply) => reply.send(await api.batches.list(request.query)));
+		fastify.get("/v1/batches/:id", async (request, reply) => reply.send(await api.batches.get(request.params.id)));
+		fastify.post("/v1/batches/:id/cancel", async (request, reply) => reply.send(await api.batches.cancel(request.params.id)));
+	}
+
 	if (api.front === "anthropic") {
+		const base = (request) => ({ base: `${request.protocol}://${request.host}` });
+		fastify.post("/v1/messages/batches", { bodyLimit }, async (request, reply) =>
+			reply.send(await api.batches.create(request.body, base(request)))
+		);
+		fastify.get("/v1/messages/batches", async (request, reply) => reply.send(await api.batches.list(request.query, base(request))));
+		fastify.get("/v1/messages/batches/:id", async (request, reply) => reply.send(await api.batches.get(request.params.id, base(request))));
+		fastify.post("/v1/messages/batches/:id/cancel", async (request, reply) =>
+			reply.send(await api.batches.cancel(request.params.id, base(request)))
+		);
+		fastify.delete("/v1/messages/batches/:id", async (request, reply) => reply.send(await api.batches.remove(request.params.id)));
+		fastify.get("/v1/messages/batches/:id/results", async (request, reply) =>
+			reply.header("content-type", "application/x-jsonl").send(await api.batches.results(request.params.id))
+		);
 		fastify.post("/v1/messages/count_tokens", { bodyLimit }, async (request, reply) => {
 			const controller = new AbortController();
 			reply.raw.on("close", () => controller.abort());
