@@ -6,10 +6,10 @@ The translator can run as a standalone HTTP server, as a Fastify plugin inside a
 
 The server speaks one client protocol, the front, chosen with `front` (default `anthropic`).
 
-| Front       | Routes                                                                                                                                                                                                     |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, the [Files API](#files-api), `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` and `/api/hello`                                      |
-| `openai`    | `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/responses/input_tokens`, `POST /v1/embeddings`, the [Files API](#files-api), `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` |
+| Front       | Routes                                                                                                                                                                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anthropic` | `POST /v1/messages`, `POST /v1/messages/count_tokens`, the [Files API](#files-api), [Message Batches](#message-batches), `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` and `/api/hello`                              |
+| `openai`    | `POST /v1/chat/completions`, `POST /v1/responses`, `POST /v1/responses/input_tokens`, `POST /v1/embeddings`, the [Files API](#files-api), the [Batch API](#batch-api), `GET /v1/models`, `GET /v1/models/{id}`, `GET` and `HEAD` on `/` |
 
 Streaming replies use `content-type: text/event-stream`. Errors are always returned in the front's own error shape.
 
@@ -52,6 +52,36 @@ Both fronts serve `/v1/files` from one store, so a file uploaded through either 
 | `DELETE /v1/files/{id}`      | `{ id, type: "file_deleted" }`                                                                                                                                                                                                                                                                                                    | `{ id, object: "file", deleted: true }`                                                                                                                                                                                                                                                                   |
 
 An unknown or expired id is a 404 (`not_found_error` on the Anthropic front; on the OpenAI front `invalid_request_error`, "No such File object: id"). A file name must be 1 to 255 characters without `< > : " | ? * \ /` or control characters (Anthropic's rule). A file over `files.maxFileSize` is 413 (`request_too_large`), and a store at `files.maxCount` or `files.maxTotalBytes` answers 400 `storage_limit_exceeded`. With `files: null` every route answers 404 `files_disabled`. The same operations are the leaves `api.files.create`, `list`, `get`, `content` and `remove`, for your own server.
+
+### Message Batches
+
+The Anthropic front serves Message Batches. A batch is made with a list of requests and runs in the background, in this process, through the same path as `POST /v1/messages`, so every upstream and every conversion works. At most `batches.concurrency` requests are in flight at once, counted across all batches (see the [`batches` setting](settings.md#batches)). Streaming is not available in a batch: a request that sets `stream: true` gets an `errored` result.
+
+| Route                                   | Answers                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/messages/batches`             | `{ requests: [{ custom_id, params }] }`; `custom_id` is 1 to 64 letters, digits, `-` or `_` and unique in the batch. Answers the message batch: `{ id: "msgbatch_...", type: "message_batch", processing_status, request_counts, ended_at, created_at, expires_at, cancel_initiated_at, results_url }`. |
+| `GET /v1/messages/batches`              | `{ data, has_more, first_id, last_id }`, newest first: `limit` (20, at most 1000), `after_id` (older) and `before_id` (newer).                                                                                                                                                                          |
+| `GET /v1/messages/batches/{id}`         | the message batch. `processing_status` is `in_progress`, `canceling` or `ended`; `request_counts` has `processing`, `succeeded`, `errored`, `canceled` and `expired`; `results_url` is set once the batch has ended.                                                                                    |
+| `POST /v1/messages/batches/{id}/cancel` | the batch as `canceling`. Requests in flight are aborted and the ones that did not run end as `canceled`. Cancelling a batch that has ended is a 400.                                                                                                                                                   |
+| `DELETE /v1/messages/batches/{id}`      | `{ id, type: "message_batch_deleted" }`. A batch that has not ended is a 400.                                                                                                                                                                                                                           |
+| `GET /v1/messages/batches/{id}/results` | `application/x-jsonl`, one `{ custom_id, result }` per line in request order; `result.type` is `succeeded` (with `message`), `errored` (with `error`), `canceled` or `expired`. A batch that has not ended is a 400.                                                                                    |
+
+A batch that has not finished by `expires_at` (a day after it was made, the `batches.window` setting) ends with its remaining requests `expired`. Results are kept for the `batches.ttl` retention, 29 days by default; after that the batch is a 404.
+
+### Batch API
+
+The OpenAI front serves `/v1/batches` for the `/v1/chat/completions`, `/v1/responses` and `/v1/embeddings` endpoints. The input is a file in the [Files API](#files-api) uploaded with `purpose: "batch"`, with one `{ "custom_id", "method": "POST", "url", "body" }` object per line, where `url` is the batch's endpoint. The results are written to two files when the batch ends, `output_file_id` (purpose `batch_output`) and `error_file_id` (purpose `batch_error`), read through `GET /v1/files/{id}/content`. A request that was answered with 2xx or 3xx is a line of the output file `{ id: "batch_req_...", custom_id, response: { status_code, request_id, body }, error: null }`; any other reply is the same line in the error file; a request that never ran (cancelled or expired) is a line in the error file with `response: null` and `error: { code: "batch_cancelled" | "batch_expired", message }`.
+
+| Route                          | Answers                                                                                                                                                                                                                                                  |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/batches`             | `{ input_file_id, endpoint, completion_window: "24h", metadata, output_expires_after }`. Answers the batch object with `status: "validating"`. A missing or invalid field, an input file that does not exist or is not a `batch` file, is a 400.         |
+| `GET /v1/batches`              | `{ object: "list", data, first_id, last_id, has_more }`, newest first: `limit` (20, at most 100) and `after`.                                                                                                                                            |
+| `GET /v1/batches/{id}`         | the batch object: `status` (`validating`, `failed`, `in_progress`, `finalizing`, `completed`, `expired`, `cancelling`, `cancelled`), the `*_at` times in seconds, `request_counts` (`total`, `completed`, `failed`), `usage`, `errors` and the file ids. |
+| `POST /v1/batches/{id}/cancel` | the batch as `cancelling`; it becomes `cancelled` once the requests in flight were aborted. Cancelling a batch that has ended is a 409.                                                                                                                  |
+
+The input file is checked as a whole before anything runs. When a line is wrong the batch ends `failed` with `errors: { object: "list", data: [{ code, message, line, param }] }` (at most 100 entries; `invalid_json_line`, `invalid_request`, `duplicate_custom_id`, `invalid_method`, `invalid_url`, `empty_file`, `too_many_tasks`) and no request runs. A batch that is not finished at `expires_at` ends `expired`. `usage` adds up the tokens the upstreams reported.
+
+A batch belongs to the front it was made through: the other front gets a 404 for its id and does not list it. Both routes answer 404 `batches_disabled` when `batches` is `null`.
 
 ## CLI
 

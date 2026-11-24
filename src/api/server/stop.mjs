@@ -17,12 +17,13 @@
  * @fileoverview Server api: stop every server started through this translator.
  * @module @cldmv/llm-translator/server
  */
-import { context } from "../../lib/runtime.mjs";
+import { context, self } from "../../lib/runtime.mjs";
 
 /**
- * Close all servers started with `server.start`.
+ * Stop the running batches, then close all servers started with `server.start`.
  * @returns {Promise<void>} Resolves when every server has closed.
  */
 export async function stop() {
+	await self.batches.stop();
 	await Promise.all([...context.state.servers].map((server) => server.close()));
 }

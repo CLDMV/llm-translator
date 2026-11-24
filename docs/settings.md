@@ -104,6 +104,26 @@ settings: {
 }
 ```
 
+## `batches`
+
+`batches` configures the batch store behind `/v1/batches` and `/v1/messages/batches` (see [server.md](server.md#message-batches)) and the runner that works through the requests. It is read from the global `settings` only: the store and the concurrency are shared by every upstream and both fronts. An object is merged over the defaults key by key, `null` turns both Batch APIs off (they answer 404 `batches_disabled`), and an invalid value throws a `TranslatorError` with the code `invalid_setting`.
+
+| Field         | Default    | Meaning                                                                                                                                                                                                                                                                               |
+| ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store`       | `"memory"` | `"memory"` keeps batches in the process (lost at exit); `"disk"` keeps each batch in `dir` as `<id>.json`, so finished batches survive a restart. A batch still running when the process ended is found at the next start and ends `expired`, with no results.                        |
+| `dir`         | `null`     | Directory of the `"disk"` store (created when missing); required with it.                                                                                                                                                                                                             |
+| `concurrency` | `4`        | Requests in flight against the upstreams at once, counted across all batches.                                                                                                                                                                                                         |
+| `maxRequests` | `10000`    | Requests in one batch. A Message Batches request with more is a 400; an OpenAI input file with more fails the batch with `too_many_tasks`.                                                                                                                                            |
+| `maxCount`    | `1000`     | Batches held. A new batch makes room by dropping the oldest finished one; when every held batch is still running the request is refused with 400 `storage_limit_exceeded`.                                                                                                            |
+| `window`      | `86400`    | Seconds a batch has to finish (the 24 hours of `completion_window` and of Message Batches' `expires_at`). Requests that did not run by then are `expired`.                                                                                                                            |
+| `ttl`         | `2505600`  | Seconds a finished batch is kept (29 days, Anthropic's retention); `0` keeps batches until the store drops them for room. An expired batch is removed whenever the store is used. The OpenAI output files have the lifetime of the Files API (`output_expires_after` can shorten it). |
+
+```js
+settings: {
+	batches: { store: "disk", dir: "/var/lib/llm-translator/batches", concurrency: 8, ttl: 7 * 86400 }
+}
+```
+
 An invalid value (an unknown key, a store other than the two, a `"disk"` store without `dir`, a limit that is not a positive whole number, a negative `ttl`) throws a `TranslatorError` with code `invalid_setting`.
 
 ## Upstream `api` (not a converter setting)
