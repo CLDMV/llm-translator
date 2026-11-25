@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-24T21:51:18-08:00 (1795585878)
+ *	@Last modified time: 2026-11-25T00:38:11-08:00 (1795595891)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -32,6 +32,8 @@
  *   when it is a string, else `unavailable`). `context` is `{ model, metadata }` of the client request.
  * - `result`: the result block type, for a tool kind this module does not know.
  * - `usage`: the `usage.server_tool_use` counter this tool increments (`web_search_requests`, `web_fetch_requests`; none for other kinds).
+ * - `read(content)`: the text the upstream model reads for a successful result, for a result whose `content` is not readable as JSON (it is used
+ *   for a result the runner just produced and for one the client replays in history). Without it the content is sent as JSON.
  * @module @cldmv/llm-translator/lib/servertools
  */
 import { randomBytes } from "node:crypto";
@@ -49,6 +51,7 @@ import { emit } from "./events.mjs";
  * @property {string | ((tool: any) => string)} [description] Text offered to the model with the function.
  * @property {string} [result] The result block type, for a tool kind that has no `<kind>_tool_result`.
  * @property {string} [usage] The `usage.server_tool_use` counter a call increments (defaults to `web_search_requests` / `web_fetch_requests` for those kinds).
+ * @property {(content: any) => string} [read] The text the upstream model reads for a successful result (default: the content as JSON).
  */
 
 /** @typedef {ServerToolExecutor[] | {executors?: ServerToolExecutor[], maxRounds?: number}} ServerTools */
@@ -90,6 +93,7 @@ export function normalize(value) {
 		}
 		if (typeof executor.schema !== "function") throw bad("an executor's schema must be a function");
 		if (typeof executor.run !== "function") throw bad("an executor's run must be a function");
+		if (executor.read !== undefined && typeof executor.read !== "function") throw bad("an executor's read must be a function");
 	}
 	if (spec.maxRounds !== undefined && (!Number.isInteger(spec.maxRounds) || spec.maxRounds < 1)) {
 		throw bad("maxRounds must be a positive whole number");
@@ -151,6 +155,16 @@ function text(content) {
 }
 
 /**
+ * The text of a result for the upstream model: the executor's `read` for a successful result, the JSON of the content otherwise.
+ * @param {any} executor - Executor of the tool, or undefined when unknown.
+ * @param {any} content - The result block's `content`.
+ * @returns {string} Text.
+ */
+function render(executor, content) {
+	return typeof executor?.read === "function" && !failed(content) ? executor.read(content) : text(content);
+}
+
+/**
  * Whether a result block's content is an error object (`<...>_error` with an `error_code`).
  * @param {any} content - The result block's `content`.
  * @returns {boolean} True for an error result.
@@ -164,9 +178,10 @@ function failed(content) {
  * message `[text, server_tool_use, <x>_tool_result, text]` becomes `assistant [text, tool_use]`, `user [tool_result]`, `assistant [text]`
  * (the converters merge adjacent turns of one role). A `server_tool_use` with no result in its message is dropped.
  * @param {any[]} messages - Client messages.
+ * @param {any} [plan] - Plan from {@link wants}; its executors' `read` renders the results.
  * @returns {any[]} Messages with no server tool blocks.
  */
-export function history(messages) {
+export function history(messages, plan) {
 	const out = [];
 	for (const message of messages) {
 		if (message?.role !== "assistant" || !Array.isArray(message.content)) {
@@ -174,6 +189,7 @@ export function history(messages) {
 			continue;
 		}
 		const answered = new Set(message.content.filter(isResult).map((block) => block.tool_use_id));
+		const named = new Map(message.content.filter((block) => block?.type === "server_tool_use").map((block) => [block.id, block.name]));
 		let assistant = [];
 		let results = [];
 		for (const block of message.content) {
@@ -183,7 +199,7 @@ export function history(messages) {
 				results.push({
 					type: "tool_result",
 					tool_use_id: block.tool_use_id,
-					content: text(block.content),
+					content: render(plan?.tools.get(named.get(block.tool_use_id))?.executor, block.content),
 					...(failed(block.content) ? { is_error: true } : {})
 				});
 				continue;
@@ -233,7 +249,7 @@ export function rewrite(body, plan, extra = []) {
 			input_schema: executor.schema(tool)
 		};
 	});
-	return { ...body, tools, messages: [...history(body.messages), ...extra] };
+	return { ...body, tools, messages: [...history(body.messages, plan), ...extra] };
 }
 
 /**
@@ -285,9 +301,10 @@ export async function execute(call, plan, state) {
  * The messages that carry one round's server tool calls and their results to the next upstream call.
  * @param {any[]} blocks - The round's content blocks as the upstream reply gave them (text, thinking, `tool_use`).
  * @param {{call: any, result: any}[]} ran - The executed calls with their result blocks.
+ * @param {any} plan - Plan from {@link wants}.
  * @returns {any[]} An assistant message and the user message with the function results.
  */
-function turn(blocks, ran) {
+function turn(blocks, ran, plan) {
 	return [
 		{ role: "assistant", content: blocks },
 		{
@@ -295,7 +312,7 @@ function turn(blocks, ran) {
 			content: ran.map(({ call, result }) => ({
 				type: "tool_result",
 				tool_use_id: call.id,
-				content: text(result.content),
+				content: render(plan.tools.get(call.name).executor, result.content),
 				...(failed(result.content) ? { is_error: true } : {})
 			}))
 		}
@@ -440,7 +457,7 @@ async function collected({ first, ask, plan, state }) {
 				body: { ...message, id: first.body.id, content: blocks, ...stop, usage: usageOf(sum, state.counts) }
 			};
 		}
-		extra.push(...turn(content, ran));
+		extra.push(...turn(content, ran, plan));
 		reply = await ask(extra);
 		rounds++;
 		if (reply.status !== 200) return reply;
@@ -593,7 +610,7 @@ async function* streaming({ first, ask, plan, state, finish }) {
 				yield frames.message_stop;
 				return;
 			}
-			extra.push(...turn(content, ran));
+			extra.push(...turn(content, ran, plan));
 			reply = await ask(extra);
 			rounds++;
 			if (reply.stream === undefined) {

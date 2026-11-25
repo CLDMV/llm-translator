@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T16:24:49-08:00 (1793579089)
+ *	@Last modified time: 2026-11-25T00:38:25-08:00 (1795595905)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -23,7 +23,7 @@ const pkg = require("../package.json");
 
 describe("package surface", () => {
 	it("exposes only the documented exports", () => {
-		expect(Object.keys(entry).sort()).toEqual(["TranslatorError", "createTranslator", "default"]);
+		expect(Object.keys(entry).sort()).toEqual(["TranslatorError", "createTranslator", "default", "searxng", "webSearch"]);
 		expect(entry.default).toBe(entry.createTranslator);
 		expect(entry.TranslatorError).toBe(TranslatorError);
 	});
