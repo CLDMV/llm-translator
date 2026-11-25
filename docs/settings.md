@@ -201,6 +201,213 @@ settings: {
 
 An invalid value (an unknown key, a store other than the two, a `"disk"` store without `dir`, a limit that is not a positive whole number, a negative `ttl`) throws a `TranslatorError` with code `invalid_setting`.
 
+## `serverTools` (not a converter setting)
+
+`serverTools` is a translator config key (and a `send` option), not an entry in `settings`, because its executors are functions. Anthropic's server tools (`web_search_*`, `web_fetch_*`, `code_execution_*`, `tool_search_*`) run on Anthropic's servers, so a model behind another upstream cannot use them. With an executor configured for a tool type, the translator runs the tool itself:
+
+1. The tool goes to the upstream as an ordinary function tool. Its name is the `name` the client gave the tool and its input schema comes from the executor.
+2. When the model calls the function, the translator runs the executor (the client never sees the call as a client tool), appends the call and its result to the conversation and asks the upstream again. This repeats until the model stops calling server tools.
+3. The client gets Anthropic's blocks: `server_tool_use` (id `srvtoolu_...`), then the result block the executor produced, then the model's following output. `usage` is summed over all upstream calls and `usage.server_tool_use` counts calls per tool kind where Anthropic defines a counter (`web_search_requests`, `web_fetch_requests`).
+4. The tool's `max_uses` applies per request. A call past it is answered with the tool's error result (`error_code: "max_uses_exceeded"`) and the executor is not run.
+5. A request makes at most `maxRounds` upstream calls (default 10). When the model is still calling server tools at that point, the calls are run and the reply ends with `stop_reason: "pause_turn"` and all the blocks so far. Like Anthropic's, the client continues by sending the request again with that assistant message appended; `server_tool_use` and result blocks in the history become a function call and its result for the upstream.
+6. A model call of a server tool and a client tool in the same turn runs the server tools, returns all the blocks and ends with `stop_reason: "tool_use"` so the client answers its own call.
+
+Server tools with no executor are dropped and recorded as before, and a request that goes to an Anthropic-protocol upstream is passed through untouched. The runner works above the converters, so it serves every converted upstream (Chat Completions, Responses, Ollama, Bedrock, Gemini, Cohere); each upstream call is a `send` of its own with routing, failover, capture and events. Streaming requests stream: blocks from every round arrive in order with renumbered indexes, the `server_tool_use` and result blocks of a round are emitted once the model has finished that round, and there is a single `message_start` and `message_stop`. The executors run in the translator's process, so they have the translator's network access.
+
+```js
+const translator = await createTranslator({
+	upstreams: ["http://localhost:8000"],
+	serverTools: {
+		maxRounds: 6,
+		executors: [
+			{
+				type: /^web_search_/,
+				schema: (tool) => ({ type: "object", properties: { query: { type: "string" } }, required: ["query"] }),
+				description: "Search the web and return the best results.",
+				async run(input, { tool, id, signal, context }) {
+					const results = await mySearch(input.query, { signal });
+					return {
+						content: results.map((r) => ({ type: "web_search_result", url: r.url, title: r.title, encrypted_content: "", page_age: null }))
+					};
+				}
+			}
+		]
+	}
+});
+```
+
+`serverTools` is an array of executors, or `{ executors, maxRounds, webFetch }`. `send(body, { serverTools })` takes the same value; its executors are tried before the config's, and its `maxRounds` wins. An executor is an object:
+
+| Field         | Type                                                       | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`        | `RegExp` or string                                         | Matched against the tool's `type` in the request (`/^web_search_/`, or an exact `"web_fetch_20250910"`). The first matching executor wins.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `schema`      | `(tool) => object`                                         | The JSON schema (an object schema) of the function's input, for that tool definition. Receives the whole tool, so `allowed_domains`, `max_uses` and the like can shape it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `run`         | `async (input, details) => { content, type?, container? }` | Runs one call. `details` is `{ tool, id, name, signal, context, container, files }`: the tool definition, the `srvtoolu_` id, the name of the function the model called, the request's abort signal, `{ model, metadata, container }` of the client request, the container id of the request (or the one an earlier call of it reported), and the file store of the Files API (null when it is off). Resolves with the result block's `content`, its block `type` when it is not `<kind>_tool_result`, and the `container` (`{ id, expires_at? }`) the call ran in; the reply carries the last container reported as its `container` field (on `message_delta` when streaming). |
+| `members`     | `(tool) => [{ name, schema, description?, result? }]`      | For a tool that Anthropic serves as several functions (`code_execution_20250825` is `bash_code_execution` and `text_editor_code_execution`). Each member is offered to the upstream as a function of its own, a call of it comes back as a `server_tool_use` named `name` with a result block of type `result`, and `run` gets `name`. Optional.                                                                                                                                                                                                                                                                                                                                |
+| `description` | string or `(tool) => string`                               | Text offered to the model with the function. Optional.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `result`      | string                                                     | The result block type, for a tool kind with no `<kind>_tool_result` name. Optional; `run` can also return `type` per call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `deferred`    | boolean                                                    | `true` for a tool search executor: the runner withholds the request's `defer_loading` tools until a result's `tool_references` names them. Optional.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `usage`       | string                                                     | The `usage.server_tool_use` counter a call increments. Optional; defaults to `web_search_requests` and `web_fetch_requests` for those two kinds, and no counter for the others.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+
+An executor that throws, or resolves with no `content`, does not fail the request: the result block carries the tool's error content, `{ type: "web_search_tool_result_error", error_code: "unavailable" }` for web search (`web_fetch_tool_error` for web fetch, `<result type>_error` for the rest). A thrown error's `code` is used as the `error_code` when it is a lowercase string such as `too_many_requests` or `query_too_long`. Arguments the model sent that are not a JSON object become `invalid_tool_input` without running the executor. Errors and `max_uses_exceeded` are announced as `servertool` events (see [events.md](events.md)), as is a turn handed back with `pause_turn`.
+
+An invalid executor (no `type`, `schema` or `run`) or a `maxRounds` that is not a positive whole number throws a `TranslatorError` with code `INVALID_CONFIG` at startup (config) or as the call's error (option). An executor may also have `read(content)`, a function that returns the text the upstream model reads for a successful result (the default is the content as JSON). It is used for the result the runner just produced and for results the client replays in history.
+
+Executors ship for web search ([below](#web-search-websearch-and-searxng)), web fetch ([below](#web-fetch-webfetch)), code execution ([below](#code-execution-codeexecution)) and tool search ([below](#tool-search-toolsearch)).
+
+`details.context` (the `context` an executor's `run` receives) is `{ model, metadata, messages, tools, results }`: `tools` is the client's tools as sent, `messages` is the client's messages as sent, and `results` holds the `content` of every result the runner produced earlier in the same request.
+
+### Web search (`webSearch` and `searxng`)
+
+`webSearch({ provider })` returns the executor for `web_search_*`, built on a search provider adapter. Nothing is searched unless this is added to `serverTools`. `searxng({ url })` is the reference adapter.
+
+```js
+import { createTranslator, searxng, webSearch } from "@cldmv/llm-translator";
+
+const translator = await createTranslator({
+	upstreams: ["http://localhost:8000"],
+	serverTools: [webSearch({ provider: searxng({ url: "https://searx.example.com", headers: { "x-api-key": "..." } }) })]
+});
+```
+
+`webSearch` options: `provider` (required), `count` (results returned to the model, default 5), `maxQueryLength` (default 400; a longer query is answered with `query_too_long`) and `type` (the tool types served, default `/^web_search_/`).
+
+A provider adapter is `{ name, search(query, options) }`. `search` resolves with an array of `{ url, title, snippet?, page_age? }`, best result first, and receives `options` as `{ count, allowedDomains, blockedDomains, userLocation, signal }`:
+
+| Option           | Meaning                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `count`          | How many results are wanted.                                                                                        |
+| `allowedDomains` | The tool definition's `allowed_domains`, or `undefined`.                                                            |
+| `blockedDomains` | The tool definition's `blocked_domains`, or `undefined`.                                                            |
+| `userLocation`   | The tool definition's `user_location` (`{ type: "approximate", city, region, country, timezone }`), or `undefined`. |
+| `signal`         | The request's abort signal.                                                                                         |
+
+The executor applies `allowed_domains` and `blocked_domains` to the results itself (a host equal to an entry or a subdomain of it matches, and an entry with a path such as `example.com/blog` also needs the path), so an adapter can ignore them or use them to narrow its own query. Setting both lists is answered with `invalid_tool_input`. `max_uses` is enforced by the runner. A provider reports a failure by throwing an error whose `code` is `too_many_requests`, `query_too_long`, `invalid_tool_input` or `unavailable`; any other error becomes `unavailable`. The result block's `error_code` is that code, and `max_uses_exceeded` comes from the runner.
+
+The result is a `web_search_tool_result` whose content is an array of `{ type: "web_search_result", url, title, encrypted_content, page_age }`. `encrypted_content` is not encrypted: it is the base64url JSON of the snippet. When the client sends the conversation back, the translator reads it again and the upstream model sees each result as `n. title (page_age)`, the URL and the snippet. A result block from another server (whose `encrypted_content` is not readable) still shows the title and URL. Each call increments `usage.server_tool_use.web_search_requests`.
+
+Citations: the results are numbered across the whole request (the results in the replayed history first, then each search of the turn, so a number is never reused), and the tool description tells the model to write `[[cite:N]]` right after a statement that comes from result N. The translator reads those markers in the model's text blocks and removes them. The text since the previous marker or sentence boundary (`.`, `!` or `?` followed by white space, or a line break) in the same block becomes a text block of its own with `citations: [{ type: "web_search_result_location", url, title, encrypted_index, cited_text }]`; the text around it stays in plain text blocks. `cited_text` is the first 150 characters of the result's snippet and `encrypted_index` is the base64url JSON of the result URL (`{ "url": ... }`, not encrypted, like `encrypted_content`). Markers that follow each other cite the same block. A marker that names no known result is left in the text, and a marker with no text before it is dropped. Only text blocks written after a result was read are read for markers, and a text block that already has `citations` is left alone.
+
+In a stream the text goes out as it arrives and only a tail that may be the start of a marker is held back. A marker puts a `citations_delta` on the text block that is open and ends that block; the text after it is a new text block. Text already sent cannot be split by sentence, so a streamed cited block holds the text since the previous marker (or the start of the model's block) where a non-streamed one holds the sentence.
+
+When the client replays an answer, the translator drops the `web_search_result_location` citations from its text blocks (the upstream model sees the text only, without markers) and shows the results again numbered in order, so the model can cite an earlier result with its number. Citations of other kinds are kept.
+
+A custom executor gets the same behavior with a `cite(item)` function that returns the citation of one entry of its result `content` array; its `read(content, offset)` should number the entries from `offset + 1`.
+
+`searxng(options)`:
+
+| Option       | Meaning                                                                                                                                                   |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`        | Base URL of the instance (required). `GET <url>/search?q=...&format=json` is requested, so `json` must be in the instance's `search.formats`.             |
+| `headers`    | Extra request headers, for an API key or a gateway in front of the instance.                                                                              |
+| `language`   | The `language` parameter: a string, or a function of the tool's `user_location` that returns one (or `undefined`). `user_location` is not sent otherwise. |
+| `categories` | The `categories` parameter.                                                                                                                               |
+| `engines`    | The `engines` parameter.                                                                                                                                  |
+| `safesearch` | The `safesearch` parameter (0, 1 or 2).                                                                                                                   |
+| `timeout`    | Time limit per request in ms (default 15000).                                                                                                             |
+| `fetch`      | A `fetch`-compatible function (default `globalThis.fetch`).                                                                                               |
+
+A `publishedDate` in a result becomes `page_age` (`April 30, 2025`). HTTP 429 becomes `too_many_requests`; any other HTTP error, a network error, a reply that is not JSON or has no `results` list becomes `unavailable`. The search request is made from the translator's process, so the instance must be reachable from it.
+
+### Web fetch (`webFetch`)
+
+`webFetch(options)` returns the executor for `web_fetch_*`. Nothing is fetched unless it is added to `serverTools`, and it needs a host allow-list, as `documentUrls` does:
+
+```js
+import { createTranslator, webFetch } from "@cldmv/llm-translator";
+
+const translator = await createTranslator({
+	upstreams: ["http://localhost:8000"],
+	serverTools: [webFetch({ allow: ["docs.example.com", "*.wikipedia.org"] })]
+});
+```
+
+It sits next to `webSearch(...)` and your own executors in the same list; the first executor that matches a tool type wins. The URL is fetched with the same fetcher as `documentUrls`, so the SSRF protections in [protocol-support.md](protocol-support.md#ssrf-protections) apply unchanged: the host must match `allow`, every address it resolves to must be public, the connection is pinned to the checked address, every redirect hop is checked again, and the size and time limits are enforced while the body streams.
+
+| Option         | Default              | Meaning                                                                                                                           |
+| -------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `allow`        | required, no default | Hosts that may be fetched, as for [documentUrls](#documenturls): an exact host name, `*.example.com` or `"*"`. Must not be empty. |
+| `maxBytes`     | `33554432`           | Size limit in bytes for the downloaded page or PDF.                                                                               |
+| `timeout`      | `30000`              | Milliseconds for the whole fetch.                                                                                                 |
+| `maxRedirects` | `3`                  | Redirects followed; each hop is checked again.                                                                                    |
+| `maxPages`     | `100`                | Pages of a PDF that are read; a longer PDF is refused with `unsupported_content_type`.                                            |
+| `allowPrivate` | `false`              | Allow non-public addresses, for hosts on your own network. List those hosts by name in `allow`, never `"*"`.                      |
+
+An invalid option (a missing or empty `allow`, an unknown key, a limit that is not a positive integer) throws a `TranslatorError` with code `INVALID_CONFIG` when `webFetch` is called.
+
+What the tool does with a call:
+
+- The URL has to have appeared in the conversation, as Anthropic requires: in a user message (text, a client tool result, a document), in the result of a server tool in the history, or in a result produced earlier in the same request (a search that came back with it). Any other URL gets `url_not_allowed` and nothing is fetched. URLs are compared after normalization, so `HTTPS://Docs.Example.com:443/a` and `https://docs.example.com/a` are the same URL.
+- The tool definition's `allowed_domains` and `blocked_domains` narrow the allow-list per request. An entry is a domain without a scheme, which also covers its subdomains (`example.com` covers `docs.example.com`), optionally with a path (`example.com/blog` covers that path and everything below it). They are checked on the first URL and again on every redirect hop. The translator's `allow` stays the upper bound: a tool cannot enable a host the operator did not list.
+- HTML is converted to readable text (scripts, styles and other hidden elements are dropped, block elements become line breaks, character references are decoded, white space is collapsed) and the page title is returned as the document `title`. Plain text is returned as it is. A PDF goes through the same PDF reader as `document` blocks (`pdf.mjs`): its text is returned page by page as `--- Page N ---` sections, with the PDF's title when it has one. Other content types are refused with `unsupported_content_type`. HTML is read as UTF-8; there is no other charset handling.
+- `max_content_tokens` truncates the text at that many tokens, estimated at four characters per token like the rest of the translator. `citations: { enabled: true }` on the tool is passed on as `citations: { enabled: true }` in the returned document.
+- The result is `web_fetch_tool_result` with `{ type: "web_fetch_result", url, retrieved_at, content: { type: "document", source: { type: "text", media_type: "text/plain", data }, title?, citations? } }`, where `url` is the final URL after redirects. The source is always extracted text, also for a PDF, where Anthropic returns base64: the text is what the upstream model can read, and the same block is replayed to it on later turns. The upstream model reads the result as the page title, the URL and the text (the executor's `read`), not as JSON. Each call counts one `web_fetch_requests` in `usage.server_tool_use`, and `max_uses` applies as for any server tool.
+- Failures are the tool's own error result (`web_fetch_tool_error`, `error_code`): `url_not_allowed` (not in the conversation, not on `allow`, outside the tool's domains, a private address, a redirect from https to http, a scheme other than http and https), `url_not_accessible` (does not resolve, connection failed, HTTP error status, too large, timed out), `too_many_requests` (HTTP 429), `unsupported_content_type` (a type other than the ones above, or a PDF that cannot be read), `invalid_tool_input` (no usable `url`), `max_uses_exceeded` and `unavailable` (the PDF library is not installed). The reason goes to the `servertool` event, not to the client.
+
+### Code execution (`codeExecution`)
+
+`codeExecution({ sandbox })` returns the executor for `code_execution_*`, built on a sandbox adapter you supply. Nothing runs unless this is added to `serverTools`, and the library ships no sandbox: it never starts a process itself, not even a local one. Without the executor the tool is dropped as before.
+
+```js
+import { codeExecution, createTranslator } from "@cldmv/llm-translator";
+
+const translator = await createTranslator({
+	upstreams: ["http://localhost:8000"],
+	serverTools: [codeExecution({ sandbox: mySandbox, timeout: 20000 })]
+});
+```
+
+The caller owns the sandboxing. The model chooses the code, and a model behind another upstream is as likely to be steered by a prompt injection as any other, so the adapter must run it somewhere that cannot reach anything you care about: a container or VM with no credentials, a read-only or disposable file system, no network (or an allow list), and CPU, memory and process limits. The translator enforces only the time limit and the output size below.
+
+`codeExecution` options: `sandbox` (required), `timeout` (ms per run or file operation, default 30000; a longer one is answered with `execution_time_exceeded`), `maxOutput` (longest stdout, longest stderr and longest viewed file in characters, default 20000; more is cut and ends with `[truncated N characters]`) and `type` (the tool types served, default `/^code_execution_/`).
+
+The two tool versions differ in what the model sees:
+
+| Tool type                           | Functions offered to the model                                                                       | Result block                                                                                                  |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `code_execution_20250522`           | `code_execution` (`{ code }`, Python)                                                                | `code_execution_tool_result` with `code_execution_result`                                                     |
+| `code_execution_20250825` and later | `bash_code_execution` (`{ command }`), and `text_editor_code_execution` when the adapter has `files` | `bash_code_execution_tool_result` with `bash_code_execution_result`, `text_editor_code_execution_tool_result` |
+
+The `server_tool_use` block carries the function's own name, as Anthropic's does. A result is `{ type: "..._result", stdout, stderr, return_code, content }`; errors are `<result block type>_error` with an `error_code`. Anthropic defines no `usage.server_tool_use` counter for code execution, so none is added. The upstream model reads a result as `stdout:`, `stderr:`, `files:` and `exit code:` lines (and a viewed file as its text), for the result the runner just produced and for one the client replays in history.
+
+A sandbox adapter is `{ name?, run(job), files? }`. `run` resolves with `{ stdout?, stderr?, return_code?, container?, files? }`: missing text is empty and a missing `return_code` is 0. `job` is one of:
+
+| `job`                                          | When                                                                |
+| ---------------------------------------------- | ------------------------------------------------------------------- |
+| `{ kind: "python", code, signal, container }`  | The tool type is `code_execution_20250522`: the model sends Python. |
+| `{ kind: "bash", command, signal, container }` | Any later `code_execution_*` type: the model sends a bash command.  |
+
+`signal` aborts when the request is cancelled or the time limit passes; an adapter should stop the run when it fires, and the executor answers `execution_time_exceeded` even for an adapter that ignores it. A sandbox reports a failure by throwing an error whose `code` is `unavailable`, `invalid_tool_input`, `too_many_requests`, `execution_time_exceeded`, `container_expired`, `output_file_too_large` or `file_not_found`; any other error becomes `unavailable`. A program that ran and failed is not an error: return its `return_code` and `stderr`.
+
+Containers: `container` in a job is the container id of the request (the `container` field, a string or `{ id }`), or the one an earlier call of the same request reported. When `run` (or a file operation) resolves with `container` (`{ id, expires_at? }`, or just the id string), the reply carries it as its `container` field, so a client can send it back on the next request. The translator keeps no container state: whether an id still exists is up to the adapter (throw `container_expired` when it does not).
+
+Produced files: `files` in the result of `run` is `[{ name, bytes | data, media_type? }]` (`bytes` a Uint8Array, `data` a UTF-8 string). They are stored in the translator's file store (the Files API's, see [`files`](#files)) and listed in the result's `content` as `{ type: "code_execution_output", file_id }` (`bash_code_execution_output` for the bash form). The client can download them from `GET /v1/files/{id}/content`, which the Anthropic front serves for files a tool created. A file over the store's `maxFileSize` is answered with `output_file_too_large`, and a full store with `unavailable`. With `files: null` (the Files API off) produced files are dropped and `content` stays empty.
+
+The text editor (`text_editor_code_execution`: `view`, `create`, `str_replace`) is offered only when the adapter has `files: { read(path, context), write(path, text, context) }`, where `context` is `{ signal, container }`. `read` resolves with the file's text and throws an error with code `file_not_found` for a missing file. `write` resolves with `{ updated?, container? }` (`updated` is true when the file already existed). `str_replace` is a read and a write, and `old_str` must appear exactly once (otherwise `invalid_tool_input`). The results are `text_editor_code_execution_view_result` (`content`, `file_type: "text"`, `num_lines`, `start_line`, `total_lines`), `text_editor_code_execution_create_result` (`is_file_update`) and `text_editor_code_execution_str_replace_result` (`lines` as `-old` and `+new`, `old_start`, `old_lines`, `new_start`, `new_lines`). Viewing a file never returns images or PDFs, and `view_range` is not supported.
+
+### Tool search (`toolSearch`)
+
+`toolSearch()` returns the executor for `tool_search_tool_regex_*` and `tool_search_tool_bm25_*`. Like the other executors it is added to `serverTools` and is not on by default. It needs no external service, so it could run by default, but it changes what the upstream sees (deferred tools are withheld), so it is opt-in like the other executors. Without it a request that carries a tool search tool is handled as before: the tool is dropped and the deferred tools are offered up front (see [claude-code.md](claude-code.md#tool-search)).
+
+```js
+import { createTranslator, toolSearch } from "@cldmv/llm-translator";
+
+const translator = await createTranslator({ upstreams: ["http://localhost:8000"], serverTools: [toolSearch()] });
+```
+
+With the executor configured, a request with a tool search tool and tools marked `defer_loading: true` goes to the upstream with the deferred tools left out. The upstream sees the search tool as a function (`pattern` for the regex variant, `query` for BM25, and an optional `limit`) and every tool without `defer_loading`. When the model calls the search, the result is a `tool_search_tool_result` with a `tool_search_tool_search_result` holding `tool_references`, and from the next upstream call of the request on the tools it names are offered as ordinary function tools (without `defer_loading`). The model sees `Loaded tools, now available to call: <names>`, or `No matching tools found.` for a search with no hit. A tool that was never found is never offered. Streaming and non-streaming requests behave the same.
+
+The same applies across requests: the client sends the `tool_search_tool_result` back in the history, and the tools its `tool_references` name are offered again from the first call. A `tool_reference` in the content of a client `tool_result` (a custom search tool) loads its tool the same way.
+
+Both variants search a deferred tool's name, description, argument names and argument descriptions, and return at most `limit` tools (default 5, `toolSearch({ count })` changes it, and `toolSearch({ timeout })` sets the regex time limit; the model can ask for 1 to 10000).
+
+- **Regex** (`pattern`, at most 200 characters): a JavaScript regular expression, matched case-insensitively against each field. Anthropic's is a Python `re` pattern; plain words, `.*`, `|`, anchors and classes behave the same, Python-only syntax such as `(?P<name>...)` is an invalid pattern here.
+- **BM25** (`query`, at most 500 characters): the words of the query (split at punctuation, underscores and camelCase, lower-cased) are scored with BM25 against each tool's fields as one document, and tools with a score above zero are returned, best first.
+
+An empty or missing pattern or query, a pattern or query over its limit, an invalid regular expression and a `limit` outside 1 to 10000 are answered with `{ type: "tool_search_tool_result_error", error_code: "invalid_tool_input" }`. A search that matches nothing is an empty `tool_references` list, as on Anthropic's API. The tool search tools have no `usage.server_tool_use` counter. The regular expression runs in a separate `node:vm` context with a time limit (`toolSearch({ timeout })`, default 1000 ms for the whole search), so a pattern that backtracks without end is interrupted and answered with `error_code: "execution_time_exceeded"`; the request is held for at most that long.
+
+An executor sets `deferred: true` to get this behavior for a search of its own: the runner withholds the request's `defer_loading` tools until a result's `tool_references` (or the history) names them, and `details.context.tools` holds the request's tools for the search.
+
 ## Upstream `api` (not a converter setting)
 
 `api` is set on an upstream, next to `url` and `backend`, not in `settings`. It picks the protocol the translator speaks to that upstream: `"auto"` (the default), `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"`, `"ollama.chat"`, `"bedrock.converse"`, `"google.gemini"` or `"cohere.chat"`, plus the aliases `"converse"`, `"gemini"`, `"google"` and `"cohere"` and the aliases `"messages"`, `"anthropic"`, `"claude"`, `"chat"`, `"openai"`, `"chatgpt"`, `"responses"`, `"codex"`, `"native"` and `"ollama"`. Under `"auto"` each request goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. The full rules, the per-driver protocol lists and the fall back are in [drivers.md](drivers.md#choosing-the-protocol-api).

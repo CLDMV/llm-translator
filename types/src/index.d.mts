@@ -14,6 +14,7 @@
  * @property {boolean} [events] Emit events (default `true`); `false` turns emitting off. Logging does not depend on it.
  * @property {(event: import("./lib/events.mjs").TranslatorEvent) => any} [onEvent] Callback for every event, registered before startup so it also sees startup events (see docs/events.md).
  * @property {boolean} [silent] Deprecated alias for `logs: false` (the default); `logs` wins when both are given.
+ * @property {import("./lib/servertools.mjs").ServerTools} [serverTools] Executors for Anthropic server tools (`web_search_*`, `web_fetch_*`, `code_execution_*`, `tool_search_*`), as an array or `{ executors, maxRounds }`. A request whose upstream is converted runs these tools itself instead of dropping them (see docs/settings.md).
  * @property {{import?: (url: string) => Promise<any>}} [slothlet] Options forwarded to slothlet (for example `import` for coverage).
  */
 /**
@@ -89,6 +90,10 @@ export type TranslatorConfig = {
      * Deprecated alias for `logs: false` (the default); `logs` wins when both are given.
      */
     silent?: boolean;
+    /**
+     * Executors for Anthropic server tools (`web_search_*`, `web_fetch_*`, `code_execution_*`, `tool_search_*`), as an array or `{ executors, maxRounds }`. A request whose upstream is converted runs these tools itself instead of dropping them (see docs/settings.md).
+     */
+    serverTools?: import("./lib/servertools.mjs").ServerTools;
     /**
      * Options forwarded to slothlet (for example `import` for coverage).
      */

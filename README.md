@@ -17,17 +17,17 @@ Use it as a library when you want the conversion without any I/O (`request`, `re
 
 ## ✨ What's New
 
-### Latest: v0.18.0 (November 2026)
+### Latest: v0.19.0 (November 2026)
 
-- **Batch APIs and the stateful Responses API**: the OpenAI Batch API and Anthropic Message Batches run in-process through the normal request path, so every upstream can serve a batch. The Responses front now stores responses and serves `previous_response_id`, the Conversations API, background mode with polling and cancel, `item_reference` inputs and stored prompts. Responses can be kept in memory, on disk or in your own backend.
-- [View full v0.18.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.18.0.md)
+- **Anthropic server tools on every upstream**: `web_search`, `web_fetch`, `code_execution` and `tool_search` now run in the translator through pluggable executors, so a model behind any converted upstream can use them. The client gets Anthropic's own `server_tool_use` and result blocks. The library ships a SearXNG search adapter, a safeguarded web fetcher, a sandbox adapter interface for code execution, and regex and BM25 tool search with deferred loading. Web search answers carry `web_search_result_location` citations. Nothing is on by default.
+- [View full v0.19.0 Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.19.0.md)
 
 ### Recent Releases
 
+- **v0.18.0** (November 2026) — the OpenAI Batch API, Anthropic Message Batches and the stateful Responses API ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.18.0.md))
 - **v0.17.0** (November 2026) — the Files API on both fronts, Anthropic client tools on every upstream, and the Bedrock gaps closed ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.17.0.md))
 - **v0.16.0** (November 2026) — citations across protocols, Gemini models on Vertex AI, and the last Gemini and Cohere native gaps closed ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.16.0.md))
 - **v0.15.0** (November 2026) — the Gemini `generateContent` and Cohere v2 chat native protocols, from either front ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.15.0.md))
-- **v0.14.0** (November 2026) — Claude on Google Vertex AI and Amazon Bedrock, Bedrock's Converse protocol, and opt-in downloading of URL documents ([Changelog](https://github.com/CLDMV/llm-translator/blob/master/docs/changelog/v0/v0.14.0.md))
 
 📚 **For complete version history and detailed release notes, see the [docs/changelog/](https://github.com/CLDMV/llm-translator/tree/master/docs/changelog/) folder.**
 

@@ -1,9 +1,9 @@
 /**
- * A Responses style id: `resp_`, `msg_`, `fc_` or `rs_` and 24 hex digits.
- * @param {"resp" | "msg" | "fc" | "rs"} prefix - Id family.
+ * A Responses style id: `resp_`, `msg_`, `fc_`, `fco_`, `rs_` or `conv_` and 24 hex digits.
+ * @param {"resp" | "msg" | "fc" | "fco" | "rs" | "conv"} prefix - Id family.
  * @returns {string} The id.
  */
-export function itemId(prefix: "resp" | "msg" | "fc" | "rs"): string;
+export function itemId(prefix: "resp" | "msg" | "fc" | "fco" | "rs" | "conv"): string;
 /**
  * Pack the `reasoning_details` of a reply into the `encrypted_content` of a reasoning item, so the client sends them back with the next turn.
  * @param {unknown} details - `reasoning_details` list.

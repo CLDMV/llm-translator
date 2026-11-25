@@ -6,7 +6,7 @@
  * item per tool call. The message's `annotations` are the `annotations` of the `output_text` part (`url_citation`, `file_citation`; see `lib/citations.mjs`). A `length` stop makes the response `incomplete` with reason `max_output_tokens`, a content filter one with reason
  * `content_filter`.
  * @param {any} completion - Chat Completions `chat.completion` object.
- * @param {any} state - State from the request converter (`model`, `echo`).
+ * @param {any} state - State from the request converter (`model`, `echo`); `id` is the response id when the caller chose it, else one is made.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {any} Responses object.
  * @throws {TranslatorError} When the completion has no choices.

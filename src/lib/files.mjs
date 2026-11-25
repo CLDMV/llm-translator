@@ -37,6 +37,9 @@ export function storeOf(config, state) {
 	return state.files;
 }
 
+/** The purpose of a file a server tool created (code execution output): the only files the Anthropic front lets a client download. */
+export const TOOL_PURPOSE = "code_execution_output";
+
 /** The `anthropic-beta` value that selects the beta shapes of the Files API (cursor pagination, no `expires_at`). */
 export const BETA = "files-api-2025-04-14";
 
@@ -154,7 +157,7 @@ export function anthropicFile(meta, legacy = false) {
 		mime_type: meta.mime_type,
 		size_bytes: meta.size,
 		created_at: new Date(meta.created_at).toISOString(),
-		downloadable: false,
+		downloadable: meta.purpose === TOOL_PURPOSE,
 		...(legacy ? {} : { expires_at: meta.expires_at === null ? null : new Date(meta.expires_at).toISOString() })
 	};
 }

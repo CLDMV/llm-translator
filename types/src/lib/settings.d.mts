@@ -26,6 +26,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {null|{ allow: string[], maxBytes: number, timeout: number, maxRedirects: number, maxDocuments: number, allowPrivate: boolean }} documentUrls - Fetch the `url` sources of `document` blocks before conversion; `null` (the default) is off, and an object turns it on (`allow` is required).
  * @property {null|{ store: "memory"|"disk", dir: string|null, maxFileSize: number, maxTotalBytes: number, maxCount: number, ttl: number }} files - The Files API store (`/v1/files`) and its limits; the default is an in-memory store, and `null` turns the Files API off.
  * @property {null|{ store: "memory"|"disk", dir: string|null, concurrency: number, maxRequests: number, maxCount: number, window: number, ttl: number }} batches - The batch store behind `/v1/batches` and `/v1/messages/batches` and its limits; the default is an in-memory store, and `null` turns both batch APIs off.
+ * @property {null|import("./responses-store.mjs").ResponsesSetting} responses - The store behind the stateful Responses API (`store`, `previous_response_id`, `conversation`, `background`, `item_reference`, `prompt`, `GET`, `DELETE` and cancel on `/v1/responses`, and `/v1/conversations`), its limits and the stored prompts (`prompts`); `store` may also be your own backend object; the default is an in-memory store, and `null` turns the stateful features off.
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
@@ -159,6 +160,10 @@ export type Settings = {
         window: number;
         ttl: number;
     };
+    /**
+     * - The store behind the stateful Responses API (`store`, `previous_response_id`, `conversation`, `background`, `item_reference`, `prompt`, `GET`, `DELETE` and cancel on `/v1/responses`, and `/v1/conversations`), its limits and the stored prompts (`prompts`); `store` may also be your own backend object; the default is an in-memory store, and `null` turns the stateful features off.
+     */
+    responses: null | import("./responses-store.mjs").ResponsesSetting;
     /**
      * - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
      */

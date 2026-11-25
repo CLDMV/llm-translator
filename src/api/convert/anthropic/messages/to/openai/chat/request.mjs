@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T12:58:59-07:00 (1792958339)
+ *	@Last modified time: 2026-11-24T21:51:04-08:00 (1795585864)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -622,7 +622,7 @@ function convertTools(tools, s, state, fit, cache) {
 	for (const tool of tools) {
 		if (tool.type !== undefined && tool.type !== "custom") {
 			// Anthropic's client tools (bash, text editor, computer, memory) have no schema in the request: the function tools that stand for them
-			// are offered instead (see `lib/clienttools`). Any other typed tool (a server tool, a version without a schema here) is dropped.
+			// are offered instead (see `lib/clienttools`). Any other typed tool (a server tool the runner of `lib/servertools` did not take over, a version without a schema here) is dropped.
 			const stand = emulate(tool);
 			if (stand === null) drop(state, `tool:${tool.name}`);
 			else {

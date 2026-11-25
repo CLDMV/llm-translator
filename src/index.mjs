@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-01T09:42:17-08:00 (1793554937)
+ *	@Last modified time: 2026-11-25T00:38:06-08:00 (1795595886)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -46,6 +46,7 @@ import { warn } from "./lib/warn.mjs";
  * @property {boolean} [events] Emit events (default `true`); `false` turns emitting off. Logging does not depend on it.
  * @property {(event: import("./lib/events.mjs").TranslatorEvent) => any} [onEvent] Callback for every event, registered before startup so it also sees startup events (see docs/events.md).
  * @property {boolean} [silent] Deprecated alias for `logs: false` (the default); `logs` wins when both are given.
+ * @property {import("./lib/servertools.mjs").ServerTools} [serverTools] Executors for Anthropic server tools (`web_search_*`, `web_fetch_*`, `code_execution_*`, `tool_search_*`), as an array or `{ executors, maxRounds }`. A request whose upstream is converted runs these tools itself instead of dropping them (see docs/settings.md).
  * @property {{import?: (url: string) => Promise<any>}} [slothlet] Options forwarded to slothlet (for example `import` for coverage).
  */
 
@@ -102,4 +103,8 @@ export async function createTranslator(config) {
 }
 
 export { TranslatorError } from "./lib/errors.mjs";
+export { webSearch, searxng } from "./lib/websearch.mjs";
+export { webFetch } from "./lib/webfetch.mjs";
+export { codeExecution } from "./lib/codeexec.mjs";
+export { toolSearch } from "./lib/toolsearchtool.mjs";
 export default createTranslator;
