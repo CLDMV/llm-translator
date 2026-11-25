@@ -31,7 +31,8 @@
  *   it is not `<tool kind>_tool_result`) or throws. A thrown error becomes the tool's error result (`error_code` from the error's `code`
  *   when it is a string, else `unavailable`). `context` is `{ model, metadata, messages, results }`: the client request's model, metadata and
  *   messages, and the content of the results the runner produced earlier in this request.
- * - `result`: the result block type, for a tool kind this module does not know.
+ * - `result`: the result block type (or `(tool) => type`), for a tool kind this module does not know or one whose result type depends on the
+ *   tool version.
  * - `usage`: the `usage.server_tool_use` counter this tool increments (`web_search_requests`, `web_fetch_requests`; none for other kinds).
  * - `read(content)`: the text the upstream model reads for a successful result, for a result whose `content` is not readable as JSON (it is used
  *   for a result the runner just produced and for one the client replays in history). Without it the content is sent as JSON.
@@ -50,7 +51,7 @@ import { emit } from "./events.mjs";
  * @property {(tool: any) => any} schema JSON schema (an object schema) of the function's input, for that tool definition.
  * @property {(input: any, details: {tool: any, id: string, signal?: AbortSignal, context: {model?: string, metadata?: any, messages?: any[], results?: any[]}}) => Promise<{content: any, type?: string}>} run Runs one call; resolves with the result block's `content` (and its `type` when it is not `<kind>_tool_result`) or throws.
  * @property {string | ((tool: any) => string)} [description] Text offered to the model with the function.
- * @property {string} [result] The result block type, for a tool kind that has no `<kind>_tool_result`.
+ * @property {string | ((tool: any) => string)} [result] The result block type (or a function of the tool definition), for a tool kind that has no `<kind>_tool_result`.
  * @property {string} [usage] The `usage.server_tool_use` counter a call increments (defaults to `web_search_requests` / `web_fetch_requests` for those kinds).
  * @property {(content: any) => string} [read] The text the upstream model reads for a successful result (default: the content as JSON).
  */
@@ -273,7 +274,7 @@ export async function execute(call, plan, state) {
 	const use = { type: "server_tool_use", id: id(), name: call.name, input: call.input };
 	const base = kind(tool.type);
 	const done = (type, content) => ({ use, result: { type, tool_use_id: use.id, content } });
-	const resultType = executor.result ?? `${base}_tool_result`;
+	const resultType = (typeof executor.result === "function" ? executor.result(tool) : executor.result) ?? `${base}_tool_result`;
 	const problem = (code, message) => {
 		state.announce({ type: "servertool", kind: code, level: "warn", message, tool: call.name });
 		return done(resultType, { type: ERRORS[base] ?? `${resultType}_error`, error_code: code });

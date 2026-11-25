@@ -244,14 +244,14 @@ const translator = await createTranslator({
 | `schema`      | `(tool) => object`                             | The JSON schema (an object schema) of the function's input, for that tool definition. Receives the whole tool, so `allowed_domains`, `max_uses` and the like can shape it.                                                                                                              |
 | `run`         | `async (input, details) => { content, type? }` | Runs one call. `details` is `{ tool, id, signal, context }`: the tool definition, the `srvtoolu_` id, the request's abort signal and `{ model, metadata }` of the client request. Resolves with the result block's `content`, and its block `type` when it is not `<kind>_tool_result`. |
 | `description` | string or `(tool) => string`                   | Text offered to the model with the function. Optional.                                                                                                                                                                                                                                  |
-| `result`      | string                                         | The result block type, for a tool kind with no `<kind>_tool_result` name. Optional; `run` can also return `type` per call.                                                                                                                                                              |
+| `result`      | string or `(tool) => string`                   | The result block type, for a tool kind with no `<kind>_tool_result` name, or a function of the tool definition when it depends on the version. Optional; `run` can also return `type` per call.                                                                                         |
 | `usage`       | string                                         | The `usage.server_tool_use` counter a call increments. Optional; defaults to `web_search_requests` and `web_fetch_requests` for those two kinds, and no counter for the others.                                                                                                         |
 
 An executor that throws, or resolves with no `content`, does not fail the request: the result block carries the tool's error content, `{ type: "web_search_tool_result_error", error_code: "unavailable" }` for web search (`web_fetch_tool_error` for web fetch, `<result type>_error` for the rest). A thrown error's `code` is used as the `error_code` when it is a lowercase string such as `too_many_requests` or `query_too_long`. Arguments the model sent that are not a JSON object become `invalid_tool_input` without running the executor. Errors and `max_uses_exceeded` are announced as `servertool` events (see [events.md](events.md)), as is a turn handed back with `pause_turn`.
 
 An invalid executor (no `type`, `schema` or `run`) or a `maxRounds` that is not a positive whole number throws a `TranslatorError` with code `INVALID_CONFIG` at startup (config) or as the call's error (option). An executor may also have `read(content)`, a function that returns the text the upstream model reads for a successful result (the default is the content as JSON). It is used for the result the runner just produced and for results the client replays in history.
 
-Executors ship for web search ([below](#web-search-websearch-and-searxng)) and web fetch ([below](#web-fetch-webfetch)); code execution is tracked in [#12](https://github.com/CLDMV/llm-translator/issues/12).
+Executors ship for web search ([below](#web-search-websearch-and-searxng)), web fetch ([below](#web-fetch-webfetch)) and code execution ([below](#code-execution-codeexecution)).
 
 `details.context` (the `context` an executor's `run` receives) is `{ model, metadata, messages, results }`: `messages` is the client's messages as sent, and `results` holds the `content` of every result the runner produced earlier in the same request.
 
@@ -333,6 +333,36 @@ What the tool does with a call:
 - `max_content_tokens` truncates the text at that many tokens, estimated at four characters per token like the rest of the translator. `citations: { enabled: true }` on the tool is passed on as `citations: { enabled: true }` in the returned document.
 - The result is `web_fetch_tool_result` with `{ type: "web_fetch_result", url, retrieved_at, content: { type: "document", source: { type: "text", media_type: "text/plain", data }, title?, citations? } }`, where `url` is the final URL after redirects. The source is always extracted text, also for a PDF, where Anthropic returns base64: the text is what the upstream model can read, and the same block is replayed to it on later turns. The upstream model reads the result as the page title, the URL and the text (the executor's `read`), not as JSON. Each call counts one `web_fetch_requests` in `usage.server_tool_use`, and `max_uses` applies as for any server tool.
 - Failures are the tool's own error result (`web_fetch_tool_error`, `error_code`): `url_not_allowed` (not in the conversation, not on `allow`, outside the tool's domains, a private address, a redirect from https to http, a scheme other than http and https), `url_not_accessible` (does not resolve, connection failed, HTTP error status, too large, timed out), `too_many_requests` (HTTP 429), `unsupported_content_type` (a type other than the ones above, or a PDF that cannot be read), `invalid_tool_input` (no usable `url`), `max_uses_exceeded` and `unavailable` (the PDF library is not installed). The reason goes to the `servertool` event, not to the client.
+
+### Code execution (`codeExecution`)
+
+`codeExecution({ sandbox })` returns the executor for `code_execution_*`, built on a sandbox adapter you supply. Nothing runs unless this is added to `serverTools`, and the library ships no sandbox: it never starts a process itself, not even a local one. Without the executor the tool is dropped as before.
+
+```js
+import { codeExecution, createTranslator } from "@cldmv/llm-translator";
+
+const translator = await createTranslator({
+	upstreams: ["http://localhost:8000"],
+	serverTools: [codeExecution({ sandbox: mySandbox, timeout: 20000 })]
+});
+```
+
+The caller owns the sandboxing. The model chooses the code, and a model behind another upstream is as likely to be steered by a prompt injection as any other, so the adapter must run it somewhere that cannot reach anything you care about: a container or VM with no credentials, a read-only or disposable file system, no network (or an allow list), and CPU, memory and process limits. The translator enforces only the time limit and the output size below.
+
+`codeExecution` options: `sandbox` (required), `timeout` (ms per run, default 30000; a longer run is answered with `execution_time_exceeded`), `maxOutput` (longest stdout and longest stderr in characters, default 20000; more is cut and ends with `[truncated N characters]`) and `type` (the tool types served, default `/^code_execution_/`).
+
+A sandbox adapter is `{ name?, run(job) }`. `run` resolves with `{ stdout?, stderr?, return_code? }` (missing text is empty, a missing `return_code` is 0). `job` is one of:
+
+| `job`                               | When                                                                |
+| ----------------------------------- | ------------------------------------------------------------------- |
+| `{ kind: "python", code, signal }`  | The tool type is `code_execution_20250522`: the model sends Python. |
+| `{ kind: "bash", command, signal }` | Any later `code_execution_*` type: the model sends a bash command.  |
+
+`signal` aborts when the request is cancelled or the time limit passes; an adapter should stop the run when it fires, and the executor answers `execution_time_exceeded` even for an adapter that ignores it. A sandbox reports a failure by throwing an error whose `code` is `unavailable`, `invalid_tool_input`, `too_many_requests`, `execution_time_exceeded`, `container_expired` or `output_file_too_large`; any other error becomes `unavailable`. A program that ran and failed is not an error: return its `return_code` and `stderr`.
+
+The result for `code_execution_20250522` is a `code_execution_tool_result` whose content is `{ type: "code_execution_result", stdout, stderr, return_code, content: [] }`. For `code_execution_20250825` it is a `bash_code_execution_tool_result` with `{ type: "bash_code_execution_result", ... }`; errors use `code_execution_tool_result_error` and `bash_code_execution_tool_result_error`. The upstream model reads a result as `stdout:`, `stderr:` and `exit code:` lines, for the result the runner just produced and for one the client replays in history. Anthropic defines no `usage.server_tool_use` counter for code execution, so none is added.
+
+What is not done: the `text_editor_code_execution` tool of `code_execution_20250825` (the model gets the bash command only, under the tool's own name rather than `bash_code_execution`), files (`content` is always empty and no Files API objects are produced), and containers (no `container` object on the reply and no reuse by id, so state between calls is whatever your adapter keeps).
 
 ## Upstream `api` (not a converter setting)
 

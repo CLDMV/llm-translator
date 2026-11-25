@@ -105,4 +105,5 @@ export async function createTranslator(config) {
 export { TranslatorError } from "./lib/errors.mjs";
 export { webSearch, searxng } from "./lib/websearch.mjs";
 export { webFetch } from "./lib/webfetch.mjs";
+export { codeExecution } from "./lib/codeexec.mjs";
 export default createTranslator;
