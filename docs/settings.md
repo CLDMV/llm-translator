@@ -249,7 +249,53 @@ const translator = await createTranslator({
 
 An executor that throws, or resolves with no `content`, does not fail the request: the result block carries the tool's error content, `{ type: "web_search_tool_result_error", error_code: "unavailable" }` for web search (`web_fetch_tool_error` for web fetch, `<result type>_error` for the rest). A thrown error's `code` is used as the `error_code` when it is a lowercase string such as `too_many_requests` or `query_too_long`. Arguments the model sent that are not a JSON object become `invalid_tool_input` without running the executor. Errors and `max_uses_exceeded` are announced as `servertool` events (see [events.md](events.md)), as is a turn handed back with `pause_turn`.
 
-An invalid executor (no `type`, `schema` or `run`) or a `maxRounds` that is not a positive whole number throws a `TranslatorError` with code `INVALID_CONFIG` at startup (config) or as the call's error (option). No executors ship with the translator yet; web search, web fetch and code execution adapters are tracked in [#10](https://github.com/CLDMV/llm-translator/issues/10), [#11](https://github.com/CLDMV/llm-translator/issues/11) and [#12](https://github.com/CLDMV/llm-translator/issues/12).
+An invalid executor (no `type`, `schema` or `run`) or a `maxRounds` that is not a positive whole number throws a `TranslatorError` with code `INVALID_CONFIG` at startup (config) or as the call's error (option). An executor may also have `read(content)`, a function that returns the text the upstream model reads for a successful result (the default is the content as JSON). It is used for the result the runner just produced and for results the client replays in history.
+
+Executors ship for web search ([below](#web-search-websearch-and-searxng)); web fetch and code execution are tracked in [#11](https://github.com/CLDMV/llm-translator/issues/11) and [#12](https://github.com/CLDMV/llm-translator/issues/12).
+
+### Web search (`webSearch` and `searxng`)
+
+`webSearch({ provider })` returns the executor for `web_search_*`, built on a search provider adapter. Nothing is searched unless this is added to `serverTools`. `searxng({ url })` is the reference adapter.
+
+```js
+import { createTranslator, searxng, webSearch } from "@cldmv/llm-translator";
+
+const translator = await createTranslator({
+	upstreams: ["http://localhost:8000"],
+	serverTools: [webSearch({ provider: searxng({ url: "https://searx.example.com", headers: { "x-api-key": "..." } }) })]
+});
+```
+
+`webSearch` options: `provider` (required), `count` (results returned to the model, default 5), `maxQueryLength` (default 400; a longer query is answered with `query_too_long`) and `type` (the tool types served, default `/^web_search_/`).
+
+A provider adapter is `{ name, search(query, options) }`. `search` resolves with an array of `{ url, title, snippet?, page_age? }`, best result first, and receives `options` as `{ count, allowedDomains, blockedDomains, userLocation, signal }`:
+
+| Option           | Meaning                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `count`          | How many results are wanted.                                                                                        |
+| `allowedDomains` | The tool definition's `allowed_domains`, or `undefined`.                                                            |
+| `blockedDomains` | The tool definition's `blocked_domains`, or `undefined`.                                                            |
+| `userLocation`   | The tool definition's `user_location` (`{ type: "approximate", city, region, country, timezone }`), or `undefined`. |
+| `signal`         | The request's abort signal.                                                                                         |
+
+The executor applies `allowed_domains` and `blocked_domains` to the results itself (a host equal to an entry or a subdomain of it matches, and an entry with a path such as `example.com/blog` also needs the path), so an adapter can ignore them or use them to narrow its own query. Setting both lists is answered with `invalid_tool_input`. `max_uses` is enforced by the runner. A provider reports a failure by throwing an error whose `code` is `too_many_requests`, `query_too_long`, `invalid_tool_input` or `unavailable`; any other error becomes `unavailable`. The result block's `error_code` is that code, and `max_uses_exceeded` comes from the runner.
+
+The result is a `web_search_tool_result` whose content is an array of `{ type: "web_search_result", url, title, encrypted_content, page_age }`. `encrypted_content` is not encrypted: it is the base64url JSON of the snippet. When the client sends the conversation back, the translator reads it again and the upstream model sees each result as `n. title (page_age)`, the URL and the snippet. A result block from another server (whose `encrypted_content` is not readable) still shows the title and URL. Each call increments `usage.server_tool_use.web_search_requests`. Citations in the model's text (`web_search_result_location`) are not produced: the upstream model writes plain text and the translator does not match it against results.
+
+`searxng(options)`:
+
+| Option       | Meaning                                                                                                                                                   |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`        | Base URL of the instance (required). `GET <url>/search?q=...&format=json` is requested, so `json` must be in the instance's `search.formats`.             |
+| `headers`    | Extra request headers, for an API key or a gateway in front of the instance.                                                                              |
+| `language`   | The `language` parameter: a string, or a function of the tool's `user_location` that returns one (or `undefined`). `user_location` is not sent otherwise. |
+| `categories` | The `categories` parameter.                                                                                                                               |
+| `engines`    | The `engines` parameter.                                                                                                                                  |
+| `safesearch` | The `safesearch` parameter (0, 1 or 2).                                                                                                                   |
+| `timeout`    | Time limit per request in ms (default 15000).                                                                                                             |
+| `fetch`      | A `fetch`-compatible function (default `globalThis.fetch`).                                                                                               |
+
+A `publishedDate` in a result becomes `page_age` (`April 30, 2025`). HTTP 429 becomes `too_many_requests`; any other HTTP error, a network error, a reply that is not JSON or has no `results` list becomes `unavailable`. The search request is made from the translator's process, so the instance must be reachable from it.
 
 ## Upstream `api` (not a converter setting)
 

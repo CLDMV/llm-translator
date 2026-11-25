@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-11-24T21:51:14-08:00 (1795585874)
+ *	@Last modified time: 2026-11-25T00:38:06-08:00 (1795595886)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -103,4 +103,5 @@ export async function createTranslator(config) {
 }
 
 export { TranslatorError } from "./lib/errors.mjs";
+export { webSearch, searxng } from "./lib/websearch.mjs";
 export default createTranslator;
