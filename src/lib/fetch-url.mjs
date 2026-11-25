@@ -83,12 +83,14 @@ export class FetchError extends Error {
 	 * @param {string} kind - `scheme`, `allow`, `dns`, `address`, `network`, `redirects`, `downgrade`, `status`, `size`, `type`, `encoding` or `timeout`.
 	 * @param {string} message - What to tell the client.
 	 * @param {string} [detail] - What to log.
+	 * @param {number} [status] - The HTTP status of a `status` failure.
 	 */
-	constructor(kind, message, detail = message) {
+	constructor(kind, message, detail = message, status = undefined) {
 		super(message);
 		this.name = "FetchError";
 		this.kind = kind;
 		this.detail = detail;
+		this.status = status;
 	}
 }
 
@@ -160,6 +162,9 @@ async function vet(url, options, resolver) {
 	const bracketed = url.hostname.startsWith("[");
 	const host = (bracketed ? url.hostname.slice(1, -1) : url.hostname).toLowerCase().replace(/\.$/, "");
 	if (host === "" || !allowed(host, options.allow)) throw new FetchError("allow", "the host is not on the allow list", `host ${host}`);
+	// An extra rule of the caller (the domain fields of a web fetch tool), checked on every hop like the allow list.
+	if (options.permit !== undefined && !options.permit(url))
+		throw new FetchError("allow", "the URL is not allowed", `url ${url.host}${url.pathname}`);
 	let addresses;
 	if (net.isIP(host) !== 0) addresses = [{ address: host, family: net.isIP(host) }];
 	else {
@@ -192,16 +197,17 @@ async function vet(url, options, resolver) {
  * @param {{address: string, family: number}} target - Checked address.
  * @param {AbortSignal} signal - Aborts the request.
  * @param {{http: any, https: any}} modules - Protocol modules.
+ * @param {string} accept - The `accept` header.
  * @returns {Promise<import("node:http").IncomingMessage>} The response.
  */
-function get(url, target, signal, modules) {
+function get(url, target, signal, modules, accept) {
 	return new Promise((resolve, reject) => {
 		const client = url.protocol === "https:" ? modules.https : modules.http;
 		const pinned = (_host, query, done) =>
 			query?.all ? done(null, [{ address: target.address, family: target.family }]) : done(null, target.address, target.family);
 		const request = client.request(
 			url,
-			{ method: "GET", agent: false, lookup: pinned, headers: { accept: "application/pdf, text/plain", "accept-encoding": "identity" } },
+			{ method: "GET", agent: false, lookup: pinned, headers: { accept, "accept-encoding": "identity" } },
 			resolve
 		);
 		const stop = () => request.destroy(signal.reason);
@@ -236,9 +242,9 @@ async function read(res, maxBytes) {
 /**
  * Fetch a document.
  * @param {string} input - The URL.
- * @param {{allow: string[], maxBytes: number, timeout: number, maxRedirects: number, allowPrivate?: boolean, signal?: AbortSignal, types?: Map<string, string>}} options - Limits and rules (see the `documentUrls` setting); `types` replaces the content types that are accepted (content type to the media type it is stored as).
+ * @param {{allow: string[], maxBytes: number, timeout: number, maxRedirects: number, allowPrivate?: boolean, signal?: AbortSignal, types?: Map<string, string>, permit?: (url: URL) => boolean}} options - Limits and rules (see the `documentUrls` setting); `types` replaces the content types that are accepted (content type to the media type it is stored as) and `permit` is an extra check of every URL, each redirect hop included.
  * @param {{lookup?: (host: string) => Promise<{address: string, family: number}[]>, modules?: {http: any, https: any}}} [deps] - Host name lookup and protocol modules (replaceable for tests).
- * @returns {Promise<{bytes: Buffer, mediaType: string, url: string}>} The body, its media type (`application/pdf` or `text/plain`) and the final URL.
+ * @returns {Promise<{bytes: Buffer, mediaType: string, url: string}>} The body, its media type (`application/pdf` and `text/plain` unless `types` says otherwise) and the final URL.
  * @throws {FetchError} For anything that stops the fetch; never any other error.
  */
 export async function fetchUrl(input, options, deps = {}) {
@@ -283,6 +289,9 @@ export async function fetchUrl(input, options, deps = {}) {
  * @returns {Promise<{bytes: Buffer, mediaType: string, url: string}>} Result.
  */
 async function run(input, options, resolver, modules, signal) {
+	const types = options.types ?? TYPES;
+	const names = [...types.keys()];
+	const accept = names.join(", ");
 	let url;
 	try {
 		url = new URL(input);
@@ -291,7 +300,7 @@ async function run(input, options, resolver, modules, signal) {
 	}
 	for (let hops = 0; ; hops++) {
 		const target = await vet(url, options, resolver);
-		const res = await get(url, target, signal, modules);
+		const res = await get(url, target, signal, modules, accept);
 		const status = res.statusCode;
 		const location = res.headers.location;
 		if (REDIRECTS.has(status) && typeof location === "string") {
@@ -311,14 +320,14 @@ async function run(input, options, resolver, modules, signal) {
 		}
 		if (status !== 200) {
 			res.resume();
-			throw new FetchError("status", `the server answered HTTP ${status}`);
+			throw new FetchError("status", `the server answered HTTP ${status}`, undefined, status);
 		}
 		const encoding = String(res.headers["content-encoding"] ?? "identity").toLowerCase();
 		if (encoding !== "identity") {
 			res.destroy();
 			throw new FetchError("encoding", "the response is compressed, which is not supported", `content-encoding ${encoding}`);
 		}
-		const type = (options.types ?? TYPES).get(
+		const type = types.get(
 			String(res.headers["content-type"] ?? "")
 				.split(";")[0]
 				.trim()
@@ -328,7 +337,7 @@ async function run(input, options, resolver, modules, signal) {
 			res.destroy();
 			throw new FetchError(
 				"type",
-				"the content type is not supported (application/pdf and text/plain are)",
+				`the content type is not supported (${names.length === 1 ? `${names[0]} is` : `${names.slice(0, -1).join(", ")} and ${names.at(-1)} are`})`,
 				`content-type ${res.headers["content-type"]}`
 			);
 		}
