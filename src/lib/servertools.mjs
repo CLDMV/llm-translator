@@ -41,7 +41,11 @@
  *   ordinary function tools from then on. A result `content` with `tool_references` (`[{ type: "tool_reference", tool_name }]`) loads the tools it names.
  *   `context.tools` is the request's tools.
  * - `read(content)`: the text the upstream model reads for a successful result, for a result whose `content` is not readable as JSON (it is used
- *   for a result the runner just produced and for one the client replays in history). Without it the content is sent as JSON.
+ *   for a result the runner just produced and for one the client replays in history). Without it the content is sent as JSON. It also gets `offset`,
+ *   the number of citable results that came before this one in the request, so an executor that has `cite` numbers its results from `offset + 1`.
+ * - `cite(item)`: makes the executor's results citable. `item` is one entry of a result's `content` array; `cite` returns the Anthropic citation
+ *   (`web_search_result_location`) for it. The runner numbers the items of every result of the request in order (the history's first), and a
+ *   text of the model that has `[[cite:N]]` markers (see citemarks.mjs) becomes text blocks with the citations of source N.
  * @module @cldmv/llm-translator/lib/servertools
  */
 import { randomBytes } from "node:crypto";
@@ -50,6 +54,7 @@ import { TranslatorError } from "./errors.mjs";
 import { resolve } from "./route.mjs";
 import { combine, deliver } from "./usage.mjs";
 import { emit } from "./events.mjs";
+import { split, streamer } from "./citemarks.mjs";
 
 /**
  * @typedef {object} ServerToolExecutor
@@ -61,7 +66,8 @@ import { emit } from "./events.mjs";
  * @property {string} [usage] The `usage.server_tool_use` counter a call increments (defaults to `web_search_requests` / `web_fetch_requests` for those kinds).
  * @property {(tool: any) => {name: string, schema: any, description?: string, result?: string}[]} [members] The functions one tool definition is offered as, when it is more than one.
  * @property {boolean} [deferred] Whether the executor searches the tools marked `defer_loading` (the runner withholds them until a result names them).
- * @property {(content: any) => string} [read] The text the upstream model reads for a successful result (default: the content as JSON).
+ * @property {(content: any, offset?: number) => string} [read] The text the upstream model reads for a successful result (default: the content as JSON); `offset` is the number of citable items before it in the request.
+ * @property {(item: any) => any} [cite] The citation of one item of a result's `content` array; makes the executor's results citable with `[[cite:N]]` markers.
  */
 
 /** @typedef {ServerToolExecutor[] | {executors?: ServerToolExecutor[], maxRounds?: number}} ServerTools */
@@ -106,6 +112,7 @@ export function normalize(value) {
 		if (executor.members !== undefined && typeof executor.members !== "function") throw bad("an executor's members must be a function");
 		if (executor.deferred !== undefined && typeof executor.deferred !== "boolean") throw bad("an executor's deferred must be a boolean");
 		if (executor.read !== undefined && typeof executor.read !== "function") throw bad("an executor's read must be a function");
+		if (executor.cite !== undefined && typeof executor.cite !== "function") throw bad("an executor's cite must be a function");
 	}
 	if (spec.maxRounds !== undefined && (!Number.isInteger(spec.maxRounds) || spec.maxRounds < 1)) {
 		throw bad("maxRounds must be a positive whole number");
@@ -206,10 +213,58 @@ function text(content) {
  * The text of a result for the upstream model: the executor's `read` for a successful result, the JSON of the content otherwise.
  * @param {any} executor - Executor of the tool, or undefined when unknown.
  * @param {any} content - The result block's `content`.
+ * @param {number} [offset] - Citable items that came before this result in the request.
  * @returns {string} Text.
  */
-function render(executor, content) {
-	return typeof executor?.read === "function" && !failed(content) ? executor.read(content) : text(content);
+function render(executor, content, offset = 0) {
+	return typeof executor?.read === "function" && !failed(content) ? executor.read(content, offset) : text(content);
+}
+
+/**
+ * The items of a result that can be cited: the entries of a successful result's content array, for an executor that has `cite`.
+ * @param {any} executor - Executor of the tool, or undefined when unknown.
+ * @param {any} content - The result block's `content`.
+ * @returns {any[]} The items, or none.
+ */
+function citable(executor, content) {
+	return typeof executor?.cite === "function" && Array.isArray(content) ? content : [];
+}
+
+/**
+ * The citations of the results in a request's history, in order: the sources that `[[cite:N]]` markers may name before this turn's searches.
+ * @param {any[]} messages - Client messages.
+ * @param {any} plan - Plan from {@link wants}.
+ * @returns {any[]} Citations; source N is entry N - 1.
+ */
+export function sources(messages, plan) {
+	const out = [];
+	for (const message of messages) {
+		if (message?.role !== "assistant" || !Array.isArray(message.content)) continue;
+		const named = new Map(message.content.filter((block) => block?.type === "server_tool_use").map((block) => [block.id, block.name]));
+		for (const block of message.content) {
+			if (!isResult(block)) continue;
+			const executor = plan.tools.get(named.get(block.tool_use_id))?.executor;
+			out.push(...citable(executor, block.content).map((item) => executor.cite(item)));
+		}
+	}
+	return out;
+}
+
+/**
+ * A block of the model's answer with its `[[cite:N]]` markers turned into citations.
+ * @param {any} block - A content block of the answer.
+ * @param {any[]} known - The citations the markers may name.
+ * @returns {any[]} The block as it was, or the text blocks it was cut into.
+ */
+function expand(block, known) {
+	if (known.length === 0 || block.type !== "text" || block.citations?.length > 0) return [block];
+	const parts = split(block.text, known);
+	if (parts.every((part) => part.citations.length === 0)) return [block];
+	return parts.map((part) => ({
+		type: "text",
+		text: part.text,
+		...(part.citations.length > 0 ? { citations: part.citations.map((citation) => ({ ...citation })) } : {})
+	}));
 }
 
 /**
@@ -231,6 +286,8 @@ function failed(content) {
  */
 export function history(messages, plan) {
 	const out = [];
+	// The results the model could cite are numbered across the whole history, so a result's offset is the citable items before it.
+	let seen = 0;
 	for (const message of messages) {
 		if (message?.role !== "assistant" || !Array.isArray(message.content)) {
 			out.push(message);
@@ -244,23 +301,39 @@ export function history(messages, plan) {
 			if (isResult(block)) {
 				if (assistant.length > 0) out.push({ ...message, content: assistant });
 				assistant = [];
+				const executor = plan?.tools.get(named.get(block.tool_use_id))?.executor;
+				const offset = seen;
+				seen += citable(executor, block.content).length;
 				results.push({
 					type: "tool_result",
 					tool_use_id: block.tool_use_id,
-					content: render(plan?.tools.get(named.get(block.tool_use_id))?.executor, block.content),
+					content: render(executor, block.content, offset),
 					...(failed(block.content) ? { is_error: true } : {})
 				});
 				continue;
 			}
 			if (results.length > 0) out.push({ role: "user", content: results });
 			results = [];
-			if (block?.type !== "server_tool_use") assistant.push(block);
+			if (block?.type !== "server_tool_use") assistant.push(plan === undefined ? block : unmarked(block));
 			else if (answered.has(block.id)) assistant.push({ type: "tool_use", id: block.id, name: block.name, input: block.input ?? {} });
 		}
 		if (assistant.length > 0) out.push({ ...message, content: assistant });
 		if (results.length > 0) out.push({ role: "user", content: results });
 	}
 	return out;
+}
+
+/**
+ * A replayed text block without the citations this translator wrote (`web_search_result_location`): the upstream model sees the text, and the
+ * results it came from are in the history as numbered function results.
+ * @param {any} block - Content block of an assistant message.
+ * @returns {any} The block, without those citations.
+ */
+function unmarked(block) {
+	if (block?.type !== "text" || !Array.isArray(block.citations)) return block;
+	const { citations, ...rest } = block;
+	const left = citations.filter((citation) => citation.type !== "web_search_result_location");
+	return left.length > 0 ? { ...rest, citations: left } : rest;
 }
 
 /**
@@ -338,7 +411,7 @@ function id() {
  * Run one server tool call.
  * @param {any} call - `{ id, name, input }` as the upstream model called it.
  * @param {any} plan - Plan from {@link wants}.
- * @param {{used: Map<string, number>, counts: Record<string, number>, signal: AbortSignal | undefined, context: any, files: any, container?: {id: string, expires_at?: string}, announce: (spec: any) => void}} state - Request-wide state.
+ * @param {{used: Map<string, number>, counts: Record<string, number>, signal: AbortSignal | undefined, context: any, files: any, container?: {id: string, expires_at?: string}, announce: (spec: any) => void, sources: any[], offsets: Map<any, number>}} state - Request-wide state.
  * @returns {Promise<{use: any, result: any}>} The `server_tool_use` block (new id) and the result block.
  */
 export async function execute(call, plan, state) {
@@ -368,6 +441,10 @@ export async function execute(call, plan, state) {
 		if (!out || typeof out !== "object" || out.content === undefined) throw new TypeError("the executor returned no content");
 		// Later calls of the request may fetch the URLs this result names.
 		state.context.results?.push(out.content);
+		if (typeof executor.cite === "function" && Array.isArray(out.content)) {
+			state.offsets.set(out.content, state.sources.length);
+			state.sources.push(...out.content.map((item) => executor.cite(item)));
+		}
 		if (executor.deferred === true) {
 			for (const item of out.content?.tool_references ?? []) if (typeof item?.tool_name === "string") plan.loaded.add(item.tool_name);
 		}
@@ -384,9 +461,10 @@ export async function execute(call, plan, state) {
  * @param {any[]} blocks - The round's content blocks as the upstream reply gave them (text, thinking, `tool_use`).
  * @param {{call: any, result: any}[]} ran - The executed calls with their result blocks.
  * @param {any} plan - Plan from {@link wants}.
+ * @param {Map<any, number>} offsets - Citable items before each result's content, by the content.
  * @returns {any[]} An assistant message and the user message with the function results.
  */
-function turn(blocks, ran, plan) {
+function turn(blocks, ran, plan, offsets) {
 	return [
 		{ role: "assistant", content: blocks },
 		{
@@ -394,7 +472,7 @@ function turn(blocks, ran, plan) {
 			content: ran.map(({ call, result }) => ({
 				type: "tool_result",
 				tool_use_id: call.id,
-				content: render(plan.tools.get(call.name).executor, result.content),
+				content: render(plan.tools.get(call.name).executor, result.content, offsets.get(result.content)),
 				...(failed(result.content) ? { is_error: true } : {})
 			}))
 		}
@@ -487,7 +565,9 @@ export async function run({ body, plan, options, send: direct, warn, c }) {
 			container: containerId(body.container)
 		},
 		files: c.files(),
-		announce
+		announce,
+		sources: sources(body.messages, plan),
+		offsets: new Map()
 	};
 	const stream = body.stream === true;
 	let handed = false;
@@ -520,9 +600,11 @@ async function collected({ first, ask, plan, state }) {
 		const message = reply.body;
 		sum = add(sum, message.usage);
 		const content = message.content;
+		// Markers in this round's text can only name the sources the model had read when it wrote it.
+		const known = state.sources.slice();
 		const calls = content.filter((block) => block.type === "tool_use" && plan.tools.has(block.name));
 		if (calls.length === 0) {
-			blocks.push(...content);
+			blocks.push(...content.flatMap((block) => expand(block, known)));
 			return {
 				status: 200,
 				headers: first.headers,
@@ -534,7 +616,7 @@ async function collected({ first, ask, plan, state }) {
 		for (const block of content) {
 			const entry = ran.find((item) => item.call === block);
 			if (entry) blocks.push(entry.use, entry.result);
-			else blocks.push(block);
+			else blocks.push(...expand(block, known));
 		}
 		const client = content.some((block) => block.type === "tool_use" && !plan.tools.has(block.name));
 		const pause = !client && rounds >= plan.maxRounds;
@@ -547,7 +629,7 @@ async function collected({ first, ask, plan, state }) {
 				body: { ...message, id: first.body.id, content: blocks, ...stop, ...held(state), usage: usageOf(sum, state.counts) }
 			};
 		}
-		extra.push(...turn(content, ran, plan));
+		extra.push(...turn(content, ran, plan, state.offsets));
 		reply = await ask(extra);
 		rounds++;
 		if (reply.status !== 200) return reply;
@@ -594,6 +676,50 @@ function pair({ use, result }, next) {
 		frame("content_block_start", { index: to, content_block: result }),
 		frame("content_block_stop", { index: to })
 	];
+}
+
+/**
+ * The frames of a text block that is read for citation markers. Text goes out as it comes; a marker puts a `citations_delta` on the open block,
+ * which then ends: the text after it is a new text block (white space between markers is dropped, so adjacent markers cite the same block).
+ * A marker with no text before it in its block is dropped.
+ * @param {any} entry - The block's entry (`weave` holds the marker reader and its state, `out` the block's index in the reply).
+ * @param {{event: string, data: any}} step - The upstream frame for the block (a delta or the stop).
+ * @param {() => number} next - Takes the next block index.
+ * @returns {Generator<{event: string, data: any}>} Frames.
+ */
+function* woven(entry, step, next) {
+	const weave = entry.weave;
+	const { data } = step;
+	const isText = data.type === "content_block_delta" && data.delta.type === "text_delta";
+	if (!isText && data.type !== "content_block_stop") {
+		yield { ...step, data: { ...data, index: entry.out } };
+		return;
+	}
+	for (const op of isText ? weave.read.feed(data.delta.text) : weave.read.end()) {
+		if ("mark" in op) {
+			if (!weave.had) continue;
+			weave.after = true;
+			weave.gap = "";
+			yield frame("content_block_delta", { index: entry.out, delta: { type: "citations_delta", citation: { ...op.mark } } });
+			continue;
+		}
+		let piece = op.text;
+		if (weave.after) {
+			if (piece.trim() === "") {
+				weave.gap += piece;
+				continue;
+			}
+			yield frame("content_block_stop", { index: entry.out });
+			entry.out = next();
+			yield frame("content_block_start", { index: entry.out, content_block: { type: "text", text: "" } });
+			piece = weave.gap + piece;
+			weave.after = false;
+			weave.gap = "";
+		}
+		if (piece.trim() !== "") weave.had = true;
+		yield frame("content_block_delta", { index: entry.out, delta: { type: "text_delta", text: piece } });
+	}
+	if (!isText) yield { ...step, data: { ...data, index: entry.out } };
 }
 
 /**
@@ -666,6 +792,10 @@ async function* streaming({ first, ask, plan, state, finish }) {
 				if (data.type === "content_block_start") {
 					const held = data.content_block.type === "tool_use" && plan.tools.has(data.content_block.name);
 					const entry = { block: { ...data.content_block }, held, json: [], out: held ? -1 : next() };
+					// A text block of a request with sources is read for `[[cite:N]]` markers.
+					if (data.content_block.type === "text" && state.sources.length > 0) {
+						entry.weave = { read: streamer(state.sources.slice()), after: false, had: false, gap: "" };
+					}
 					open.set(data.index, entry);
 					if (!held) yield { ...step.value, data: { ...data, index: entry.out } };
 					continue;
@@ -673,6 +803,10 @@ async function* streaming({ first, ask, plan, state, finish }) {
 				const entry = open.get(data.index);
 				if (data.type === "content_block_delta") record(entry, data.delta);
 				else recorded.push(entry);
+				if (entry.weave !== undefined) {
+					yield* woven(entry, step.value, next);
+					continue;
+				}
 				if (!entry.held) yield { ...step.value, data: { ...data, index: entry.out } };
 			}
 			iterator = undefined;
@@ -700,7 +834,7 @@ async function* streaming({ first, ask, plan, state, finish }) {
 				yield frames.message_stop;
 				return;
 			}
-			extra.push(...turn(content, ran, plan));
+			extra.push(...turn(content, ran, plan, state.offsets));
 			reply = await ask(extra);
 			rounds++;
 			if (reply.stream === undefined) {
