@@ -24,8 +24,15 @@
  * branch that failed first). The first branch to fail ends the request: the others are aborted and the failure is the reply, or, once
  * a stream has started, an error chunk and `[DONE]`. Aborting the caller's signal aborts every branch. An OpenAI-protocol upstream
  * receives `n` unchanged and answers it itself.
+ *
+ * An Anthropic-front request whose server tools (`web_search_*`, `web_fetch_*`, `code_execution_*`, `tool_search_*`) have an executor
+ * (the `serverTools` config or call option, see `lib/servertools`) and whose upstream is converted is answered by the server tool runner:
+ * the tools are offered as function tools, the executor runs when the model calls one, and the upstream is asked again until the model
+ * stops calling them. The reply carries `server_tool_use` and result blocks, `usage.server_tool_use` counters and the usage summed over the
+ * rounds (`onUsage` is called once with the combined report); a turn cut off by the round cap ends with `stop_reason: "pause_turn"`. A
+ * request passed through to an Anthropic upstream, or with no executor, is not affected.
  * @param {any} body - Client request body (per `front`).
- * @param {any} [options] - `{ signal, front, wire, headers, clientHeaders, filter, cacheSalt, onUsage, log }`: abort signal for the upstream call, per-call front, `wire: "responses"` for the Chat Completions form of a Responses API request, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply) and the logger this request's events also go to (used by the server).
+ * @param {any} [options] - `{ signal, front, wire, headers, clientHeaders, filter, cacheSalt, onUsage, log, serverTools }`: abort signal for the upstream call, per-call front, `wire: "responses"` for the Chat Completions form of a Responses API request, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply), the logger this request's events also go to (used by the server) and `serverTools` (`[executors]` or `{ executors, maxRounds }`, tried before the config's).
  * @returns {Promise<{status: number, headers: Record<string,string>, body: any, usage: Promise<any>} | {status: number, headers: Record<string,string>, stream: AsyncIterable<{event?: string, data: *}>, usage: Promise<any>}>} A JSON reply, or a stream reply when the client asked for streaming and the upstream accepted.
  */
 export function send(body: any, options?: any): Promise<{
