@@ -23,7 +23,15 @@ const pkg = require("../package.json");
 
 describe("package surface", () => {
 	it("exposes only the documented exports", () => {
-		expect(Object.keys(entry).sort()).toEqual(["TranslatorError", "createTranslator", "default", "searxng", "webFetch", "webSearch"]);
+		expect(Object.keys(entry).sort()).toEqual([
+			"TranslatorError",
+			"codeExecution",
+			"createTranslator",
+			"default",
+			"searxng",
+			"webFetch",
+			"webSearch"
+		]);
 		expect(entry.default).toBe(entry.createTranslator);
 		expect(entry.TranslatorError).toBe(TranslatorError);
 	});

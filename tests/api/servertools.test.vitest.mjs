@@ -635,7 +635,11 @@ describe("streaming", () => {
 
 	it("lets pings through and records thinking, signature and citation deltas", async () => {
 		const { executor } = searcher();
-		const plan = { tools: new Map([["web_search", { tool: search, executor }]]), maxRounds: 3 };
+		const plan = {
+			tools: new Map([["web_search", { tool: search, executor }]]),
+			maxRounds: 3,
+			hosted: new Map([[search, [{ tool: search, executor }]]])
+		};
 		const frame = (type, rest) => ({ event: type, data: { type, ...rest } });
 		const rounds = [
 			[
@@ -685,7 +689,14 @@ describe("streaming", () => {
 			options.onUsage(report);
 			return { status: 200, headers: {}, stream: asyncOf(rounds[sent.length - 1]) };
 		};
-		const reply = await run({ body: { ...ask, stream: true }, plan, options: {}, send, warn: () => {}, c: { config: {}, state: {} } });
+		const reply = await run({
+			body: { ...ask, stream: true },
+			plan,
+			options: {},
+			send,
+			warn: () => {},
+			c: { config: {}, state: {}, files: () => null }
+		});
 		const events = await collect(reply.stream);
 		expect(names(events).filter((name) => name === "ping")).toHaveLength(1);
 		expect(blocks(events).map((block) => block.type)).toEqual(["thinking", "text", "server_tool_use", "web_search_tool_result", "text"]);
@@ -876,7 +887,10 @@ describe("the executor interface", () => {
 
 	it("rewrites tools and history without touching the original body", () => {
 		const { executor } = searcher();
-		const plan = { tools: new Map([["web_search", { tool: search, executor }]]) };
+		const plan = {
+			tools: new Map([["web_search", { tool: search, executor }]]),
+			hosted: new Map([[search, [{ tool: search, executor }]]])
+		};
 		const body = { tools: [search, { name: "keep", input_schema: {} }], messages: [{ role: "user", content: "x" }] };
 		const out = rewrite(body, plan, [{ role: "assistant", content: "y" }]);
 		expect(out.tools.map((tool) => tool.name)).toEqual(["web_search", "keep"]);

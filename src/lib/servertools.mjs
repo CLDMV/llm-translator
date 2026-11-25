@@ -33,6 +33,9 @@
  *   messages, and the content of the results the runner produced earlier in this request.
  * - `result`: the result block type, for a tool kind this module does not know.
  * - `usage`: the `usage.server_tool_use` counter this tool increments (`web_search_requests`, `web_fetch_requests`; none for other kinds).
+ * - `members(tool)`: for a tool that Anthropic serves as several functions (`code_execution_20250825` is `bash_code_execution` and
+ *   `text_editor_code_execution`), returns `[{ name, schema, description?, result? }]`; each member is offered to the upstream as a function of its
+ *   own, a call of it is returned as a `server_tool_use` named `name`, and its result block type is `result`. `run` receives `name`.
  * - `read(content)`: the text the upstream model reads for a successful result, for a result whose `content` is not readable as JSON (it is used
  *   for a result the runner just produced and for one the client replays in history). Without it the content is sent as JSON.
  * @module @cldmv/llm-translator/lib/servertools
@@ -48,10 +51,11 @@ import { emit } from "./events.mjs";
  * @typedef {object} ServerToolExecutor
  * @property {RegExp | string} type Matches the tool's `type` (`/^web_search_/`, or an exact `"web_fetch_20250910"`).
  * @property {(tool: any) => any} schema JSON schema (an object schema) of the function's input, for that tool definition.
- * @property {(input: any, details: {tool: any, id: string, signal?: AbortSignal, context: {model?: string, metadata?: any, messages?: any[], results?: any[]}}) => Promise<{content: any, type?: string}>} run Runs one call; resolves with the result block's `content` (and its `type` when it is not `<kind>_tool_result`) or throws.
+ * @property {(input: any, details: {tool: any, id: string, name: string, signal?: AbortSignal, context: {model?: string, metadata?: any, messages?: any[], results?: any[], container?: string}, container?: string, files: any | null}) => Promise<{content: any, type?: string, container?: {id: string, expires_at?: string}}>} run Runs one call; resolves with the result block's `content` (its `type` when it is not `<kind>_tool_result`, and the `container` the call ran in) or throws. `container` is the container id of the request (or of an earlier call of it) and `files` the file store of the Files API (null when it is off).
  * @property {string | ((tool: any) => string)} [description] Text offered to the model with the function.
  * @property {string} [result] The result block type, for a tool kind that has no `<kind>_tool_result`.
  * @property {string} [usage] The `usage.server_tool_use` counter a call increments (defaults to `web_search_requests` / `web_fetch_requests` for those kinds).
+ * @property {(tool: any) => {name: string, schema: any, description?: string, result?: string}[]} [members] The functions one tool definition is offered as, when it is more than one.
  * @property {(content: any) => string} [read] The text the upstream model reads for a successful result (default: the content as JSON).
  */
 
@@ -94,6 +98,7 @@ export function normalize(value) {
 		}
 		if (typeof executor.schema !== "function") throw bad("an executor's schema must be a function");
 		if (typeof executor.run !== "function") throw bad("an executor's run must be a function");
+		if (executor.members !== undefined && typeof executor.members !== "function") throw bad("an executor's members must be a function");
 		if (executor.read !== undefined && typeof executor.read !== "function") throw bad("an executor's read must be a function");
 	}
 	if (spec.maxRounds !== undefined && (!Number.isInteger(spec.maxRounds) || spec.maxRounds < 1)) {
@@ -118,7 +123,7 @@ function find(executors, type) {
  * @param {any} c - Captured translator parts (`capture`).
  * @param {any} body - Client request body.
  * @param {any} options - The `send` options (`serverTools`).
- * @returns {{executors: any[], maxRounds: number, tools: Map<string, {tool: any, executor: any}>} | null} The plan, or null for the normal path.
+ * @returns {{executors: any[], maxRounds: number, tools: Map<string, {tool: any, executor: any, member?: any}>, hosted: Map<any, any[]>} | null} The plan, or null for the normal path.
  */
 export function wants(c, body, options) {
 	if (
@@ -134,16 +139,22 @@ export function wants(c, body, options) {
 	const global = c.config.serverTools;
 	const executors = [...own.executors, ...global.executors];
 	if (executors.length === 0) return null;
-	/** @type {Map<string, {tool: any, executor: any}>} */
+	/** @type {Map<string, {tool: any, executor: any, member?: any}>} */
 	const tools = new Map();
+	/** @type {Map<any, {tool: any, executor: any, member?: any}[]>} */
+	const hosted = new Map();
 	for (const tool of body.tools) {
 		if (typeof tool?.type !== "string" || tool.type === "custom") continue;
 		const executor = find(executors, tool.type);
-		if (executor !== undefined) tools.set(tool.name, { tool, executor });
+		if (executor === undefined) continue;
+		const members = typeof executor.members === "function" ? executor.members(tool) : [];
+		const entries = members.length > 0 ? members.map((member) => ({ tool, executor, member })) : [{ tool, executor }];
+		for (const entry of entries) tools.set(entry.member?.name ?? tool.name, entry);
+		hosted.set(tool, entries);
 	}
 	if (tools.size === 0) return null;
 	if (resolve(c, body).convert === null) return null;
-	return { executors, maxRounds: own.maxRounds ?? global.maxRounds ?? ROUNDS, tools };
+	return { executors, maxRounds: own.maxRounds ?? global.maxRounds ?? ROUNDS, tools, hosted };
 }
 
 /**
@@ -239,18 +250,39 @@ function isResult(block) {
  * @returns {any} Anthropic-shaped body with only custom tools.
  */
 export function rewrite(body, plan, extra = []) {
-	const tools = body.tools.map((tool) => {
-		const entry = plan.tools.get(tool.name);
-		if (entry === undefined) return tool;
-		const { executor } = entry;
-		const description = typeof executor.description === "function" ? executor.description(tool) : executor.description;
-		return {
-			name: tool.name,
-			...(typeof description === "string" ? { description } : {}),
-			input_schema: executor.schema(tool)
-		};
+	const tools = body.tools.flatMap((tool) => {
+		const entries = plan.hosted.get(tool);
+		if (entries === undefined) return [tool];
+		return entries.map(({ executor, member }) => {
+			const description =
+				member?.description ?? (typeof executor.description === "function" ? executor.description(tool) : executor.description);
+			return {
+				name: member?.name ?? tool.name,
+				...(typeof description === "string" ? { description } : {}),
+				input_schema: member?.schema ?? executor.schema(tool)
+			};
+		});
 	});
 	return { ...body, tools, messages: [...history(body.messages, plan), ...extra] };
+}
+
+/**
+ * The container id of a request's `container` field (an id, or an object with one).
+ * @param {any} value - The request's `container`.
+ * @returns {string | undefined} The id.
+ */
+function containerId(value) {
+	const id = typeof value === "string" ? value : value?.id;
+	return typeof id === "string" && id !== "" ? id : undefined;
+}
+
+/**
+ * The `container` field of the reply, when an executor reported the container a call ran in.
+ * @param {{container?: any}} state - Request-wide state.
+ * @returns {{container: any} | {}} The field, or nothing.
+ */
+function held(state) {
+	return state.container === undefined ? {} : { container: state.container };
 }
 
 /**
@@ -265,15 +297,15 @@ function id() {
  * Run one server tool call.
  * @param {any} call - `{ id, name, input }` as the upstream model called it.
  * @param {any} plan - Plan from {@link wants}.
- * @param {{used: Map<string, number>, counts: Record<string, number>, signal: AbortSignal | undefined, context: any, announce: (spec: any) => void}} state - Request-wide state.
+ * @param {{used: Map<string, number>, counts: Record<string, number>, signal: AbortSignal | undefined, context: any, files: any, container?: {id: string, expires_at?: string}, announce: (spec: any) => void}} state - Request-wide state.
  * @returns {Promise<{use: any, result: any}>} The `server_tool_use` block (new id) and the result block.
  */
 export async function execute(call, plan, state) {
-	const { tool, executor } = plan.tools.get(call.name);
+	const { tool, executor, member } = plan.tools.get(call.name);
 	const use = { type: "server_tool_use", id: id(), name: call.name, input: call.input };
 	const base = kind(tool.type);
 	const done = (type, content) => ({ use, result: { type, tool_use_id: use.id, content } });
-	const resultType = executor.result ?? `${base}_tool_result`;
+	const resultType = member?.result ?? executor.result ?? `${base}_tool_result`;
 	const problem = (code, message) => {
 		state.announce({ type: "servertool", kind: code, level: "warn", message, tool: call.name });
 		return done(resultType, { type: ERRORS[base] ?? `${resultType}_error`, error_code: code });
@@ -289,10 +321,13 @@ export async function execute(call, plan, state) {
 		return problem("invalid_tool_input", `${call.name} was called with arguments that are not a JSON object`);
 	}
 	try {
-		const out = await executor.run(call.input, { tool, id: use.id, signal: state.signal, context: state.context });
+		const container = state.container?.id ?? state.context.container;
+		const details = { tool, id: use.id, name: call.name, signal: state.signal, context: state.context, container, files: state.files };
+		const out = await executor.run(call.input, details);
 		if (!out || typeof out !== "object" || out.content === undefined) throw new TypeError("the executor returned no content");
 		// Later calls of the request may fetch the URLs this result names.
 		state.context.results?.push(out.content);
+		if (out.container?.id !== undefined) state.container = out.container;
 		return done(out.type ?? resultType, out.content);
 	} catch (cause) {
 		const code = typeof cause?.code === "string" && /^[a-z_]+$/.test(cause.code) ? cause.code : "unavailable";
@@ -399,7 +434,8 @@ export async function run({ body, plan, options, send: direct, warn, c }) {
 		used: new Map(),
 		counts: {},
 		signal: options.signal,
-		context: { model: body.model, metadata: body.metadata, messages: body.messages, results: [] },
+		context: { model: body.model, metadata: body.metadata, messages: body.messages, results: [], container: containerId(body.container) },
+		files: c.files(),
 		announce
 	};
 	const stream = body.stream === true;
@@ -439,7 +475,7 @@ async function collected({ first, ask, plan, state }) {
 			return {
 				status: 200,
 				headers: first.headers,
-				body: { ...message, id: first.body.id, content: blocks, usage: usageOf(sum, state.counts) }
+				body: { ...message, id: first.body.id, content: blocks, ...held(state), usage: usageOf(sum, state.counts) }
 			};
 		}
 		const ran = [];
@@ -457,7 +493,7 @@ async function collected({ first, ask, plan, state }) {
 			return {
 				status: 200,
 				headers: first.headers,
-				body: { ...message, id: first.body.id, content: blocks, ...stop, usage: usageOf(sum, state.counts) }
+				body: { ...message, id: first.body.id, content: blocks, ...stop, ...held(state), usage: usageOf(sum, state.counts) }
 			};
 		}
 		extra.push(...turn(content, ran, plan));
@@ -609,7 +645,7 @@ async function* streaming({ first, ask, plan, state, finish }) {
 			if (calls.length === 0 || client || pause) {
 				if (pause) state.announce(paused(rounds));
 				const stop = pause ? { stop_reason: "pause_turn" } : {};
-				yield frame("message_delta", { ...delta, delta: { ...delta.delta, ...stop }, usage: usageOf(sum, state.counts) });
+				yield frame("message_delta", { ...delta, delta: { ...delta.delta, ...stop, ...held(state) }, usage: usageOf(sum, state.counts) });
 				yield frames.message_stop;
 				return;
 			}
