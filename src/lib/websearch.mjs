@@ -22,6 +22,9 @@
  * to whatever the provider returns, so an adapter may ignore them (or use them to narrow its own query). A provider signals a failure with an
  * error whose `code` is one of Anthropic's web search error codes (`too_many_requests`, `query_too_long`, `invalid_tool_input`,
  * `unavailable`); any other error becomes `unavailable`.
+ *
+ * The results are numbered across the whole request (see `read` and `cite`), and the model is told to write `[[cite:N]]` after a statement
+ * that comes from result N. The runner turns those markers into `web_search_result_location` citations (see citemarks.mjs).
  * @module @cldmv/llm-translator/lib/websearch
  */
 import { TranslatorError } from "./errors.mjs";
@@ -72,6 +75,19 @@ export function unseal(value) {
 }
 
 /**
+ * The opaque `encrypted_index` of a citation: the base64url JSON of the result's URL. Like `encrypted_content` it is not encrypted; it only
+ * identifies the result the cited text came from.
+ * @param {string} url - Result URL.
+ * @returns {string} Opaque string.
+ */
+export function locate(url) {
+	return Buffer.from(JSON.stringify({ url })).toString("base64url");
+}
+
+/** The longest `cited_text` of a citation, in characters (Anthropic's own limit). */
+const CITED = 150;
+
+/**
  * Whether a URL belongs to a domain list entry: the host equals the entry or is a subdomain of it. An entry with a path (`example.com/blog`)
  * also requires the URL's path to start with it.
  * @param {string} url - Result URL.
@@ -114,7 +130,10 @@ export function webSearch({ provider, count = COUNT, maxQueryLength = QUERY_LENG
 	if (!Number.isInteger(maxQueryLength) || maxQueryLength < 1) throw bad("maxQueryLength must be a positive whole number");
 	return {
 		type,
-		description: "Search the web for current information. Returns result titles, URLs and snippets.",
+		description:
+			"Search the web for current information. Returns numbered results with titles, URLs and snippets. " +
+			"When a statement in your answer comes from a result, write [[cite:N]] right after it, where N is that result's number " +
+			"(numbers continue across searches in the conversation). Write only numbers you were given.",
 		schema: () => ({
 			type: "object",
 			properties: { query: { type: "string", description: "The search query." } },
@@ -155,13 +174,22 @@ export function webSearch({ provider, count = COUNT, maxQueryLength = QUERY_LENG
 				}))
 			};
 		},
-		read(content) {
+		cite(hit) {
+			return {
+				type: "web_search_result_location",
+				url: hit.url,
+				title: hit.title ?? hit.url,
+				encrypted_index: locate(hit.url),
+				cited_text: unseal(hit.encrypted_content).slice(0, CITED)
+			};
+		},
+		read(content, offset = 0) {
 			if (!Array.isArray(content) || content.length === 0) return "No results.";
 			return content
 				.map((hit, index) => {
 					const snippet = unseal(hit.encrypted_content);
 					const age = hit.page_age ? ` (${hit.page_age})` : "";
-					return `${index + 1}. ${hit.title}${age}\n${hit.url}${snippet === "" ? "" : `\n${snippet}`}`;
+					return `${offset + index + 1}. ${hit.title}${age}\n${hit.url}${snippet === "" ? "" : `\n${snippet}`}`;
 				})
 				.join("\n\n");
 		}
