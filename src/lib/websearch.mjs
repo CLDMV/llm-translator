@@ -200,7 +200,8 @@ export function searxng(
 	const bad = (message) => new TranslatorError(`searxng: ${message}`, { code: "INVALID_CONFIG", status: 500 });
 	if (typeof url !== "string" || url === "") throw bad("url is required");
 	if (!Number.isInteger(timeout) || timeout < 1) throw bad("timeout must be a positive whole number");
-	const base = url.replace(/\/+$/, "");
+	let base = url;
+	while (base.endsWith("/")) base = base.slice(0, -1);
 	return {
 		name: "searxng",
 		async search(query, { signal, userLocation } = /** @type {any} */ ({})) {
