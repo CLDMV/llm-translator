@@ -201,6 +201,56 @@ settings: {
 
 An invalid value (an unknown key, a store other than the two, a `"disk"` store without `dir`, a limit that is not a positive whole number, a negative `ttl`) throws a `TranslatorError` with code `invalid_setting`.
 
+## `serverTools` (not a converter setting)
+
+`serverTools` is a translator config key (and a `send` option), not an entry in `settings`, because its executors are functions. Anthropic's server tools (`web_search_*`, `web_fetch_*`, `code_execution_*`, `tool_search_*`) run on Anthropic's servers, so a model behind another upstream cannot use them. With an executor configured for a tool type, the translator runs the tool itself:
+
+1. The tool goes to the upstream as an ordinary function tool. Its name is the `name` the client gave the tool and its input schema comes from the executor.
+2. When the model calls the function, the translator runs the executor (the client never sees the call as a client tool), appends the call and its result to the conversation and asks the upstream again. This repeats until the model stops calling server tools.
+3. The client gets Anthropic's blocks: `server_tool_use` (id `srvtoolu_...`), then the result block the executor produced, then the model's following output. `usage` is summed over all upstream calls and `usage.server_tool_use` counts calls per tool kind where Anthropic defines a counter (`web_search_requests`, `web_fetch_requests`).
+4. The tool's `max_uses` applies per request. A call past it is answered with the tool's error result (`error_code: "max_uses_exceeded"`) and the executor is not run.
+5. A request makes at most `maxRounds` upstream calls (default 10). When the model is still calling server tools at that point, the calls are run and the reply ends with `stop_reason: "pause_turn"` and all the blocks so far. Like Anthropic's, the client continues by sending the request again with that assistant message appended; `server_tool_use` and result blocks in the history become a function call and its result for the upstream.
+6. A model call of a server tool and a client tool in the same turn runs the server tools, returns all the blocks and ends with `stop_reason: "tool_use"` so the client answers its own call.
+
+Server tools with no executor are dropped and recorded as before, and a request that goes to an Anthropic-protocol upstream is passed through untouched. The runner works above the converters, so it serves every converted upstream (Chat Completions, Responses, Ollama, Bedrock, Gemini, Cohere); each upstream call is a `send` of its own with routing, failover, capture and events. Streaming requests stream: blocks from every round arrive in order with renumbered indexes, the `server_tool_use` and result blocks of a round are emitted once the model has finished that round, and there is a single `message_start` and `message_stop`. The executors run in the translator's process, so they have the translator's network access.
+
+```js
+const translator = await createTranslator({
+	upstreams: ["http://localhost:8000"],
+	serverTools: {
+		maxRounds: 6,
+		executors: [
+			{
+				type: /^web_search_/,
+				schema: (tool) => ({ type: "object", properties: { query: { type: "string" } }, required: ["query"] }),
+				description: "Search the web and return the best results.",
+				async run(input, { tool, id, signal, context }) {
+					const results = await mySearch(input.query, { signal });
+					return {
+						content: results.map((r) => ({ type: "web_search_result", url: r.url, title: r.title, encrypted_content: "", page_age: null }))
+					};
+				}
+			}
+		]
+	}
+});
+```
+
+`serverTools` is an array of executors, or `{ executors, maxRounds }`. `send(body, { serverTools })` takes the same value; its executors are tried before the config's, and its `maxRounds` wins. An executor is an object:
+
+| Field         | Type                                           | Meaning                                                                                                                                                                                                                                                                                 |
+| ------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`        | `RegExp` or string                             | Matched against the tool's `type` in the request (`/^web_search_/`, or an exact `"web_fetch_20250910"`). The first matching executor wins.                                                                                                                                              |
+| `schema`      | `(tool) => object`                             | The JSON schema (an object schema) of the function's input, for that tool definition. Receives the whole tool, so `allowed_domains`, `max_uses` and the like can shape it.                                                                                                              |
+| `run`         | `async (input, details) => { content, type? }` | Runs one call. `details` is `{ tool, id, signal, context }`: the tool definition, the `srvtoolu_` id, the request's abort signal and `{ model, metadata }` of the client request. Resolves with the result block's `content`, and its block `type` when it is not `<kind>_tool_result`. |
+| `description` | string or `(tool) => string`                   | Text offered to the model with the function. Optional.                                                                                                                                                                                                                                  |
+| `result`      | string                                         | The result block type, for a tool kind with no `<kind>_tool_result` name. Optional; `run` can also return `type` per call.                                                                                                                                                              |
+| `usage`       | string                                         | The `usage.server_tool_use` counter a call increments. Optional; defaults to `web_search_requests` and `web_fetch_requests` for those two kinds, and no counter for the others.                                                                                                         |
+
+An executor that throws, or resolves with no `content`, does not fail the request: the result block carries the tool's error content, `{ type: "web_search_tool_result_error", error_code: "unavailable" }` for web search (`web_fetch_tool_error` for web fetch, `<result type>_error` for the rest). A thrown error's `code` is used as the `error_code` when it is a lowercase string such as `too_many_requests` or `query_too_long`. Arguments the model sent that are not a JSON object become `invalid_tool_input` without running the executor. Errors and `max_uses_exceeded` are announced as `servertool` events (see [events.md](events.md)), as is a turn handed back with `pause_turn`.
+
+An invalid executor (no `type`, `schema` or `run`) or a `maxRounds` that is not a positive whole number throws a `TranslatorError` with code `INVALID_CONFIG` at startup (config) or as the call's error (option). No executors ship with the translator yet; web search, web fetch and code execution adapters are tracked in [#10](https://github.com/CLDMV/llm-translator/issues/10), [#11](https://github.com/CLDMV/llm-translator/issues/11) and [#12](https://github.com/CLDMV/llm-translator/issues/12).
+
 ## Upstream `api` (not a converter setting)
 
 `api` is set on an upstream, next to `url` and `backend`, not in `settings`. It picks the protocol the translator speaks to that upstream: `"auto"` (the default), `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"`, `"ollama.chat"`, `"bedrock.converse"`, `"google.gemini"` or `"cohere.chat"`, plus the aliases `"converse"`, `"gemini"`, `"google"` and `"cohere"` and the aliases `"messages"`, `"anthropic"`, `"claude"`, `"chat"`, `"openai"`, `"chatgpt"`, `"responses"`, `"codex"`, `"native"` and `"ollama"`. Under `"auto"` each request goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. The full rules, the per-driver protocol lists and the fall back are in [drivers.md](drivers.md#choosing-the-protocol-api).

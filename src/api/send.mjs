@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-31T14:45:53-07:00 (1793483153)
+ *	@Last modified time: 2026-11-24T21:51:14-08:00 (1795585874)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -34,6 +34,7 @@ import { MESSAGES, RESPONSES, CONVERSE, remember } from "../lib/protocol.mjs";
 import * as pool from "../lib/pool.mjs";
 import { createBudget } from "../lib/thinking.mjs";
 import * as fanout from "../lib/fanout.mjs";
+import * as servertools from "../lib/servertools.mjs";
 import { refresh } from "../lib/health.mjs";
 
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
@@ -64,8 +65,15 @@ const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache
  * branch that failed first). The first branch to fail ends the request: the others are aborted and the failure is the reply, or, once
  * a stream has started, an error chunk and `[DONE]`. Aborting the caller's signal aborts every branch. An OpenAI-protocol upstream
  * receives `n` unchanged and answers it itself.
+ *
+ * An Anthropic-front request whose server tools (`web_search_*`, `web_fetch_*`, `code_execution_*`, `tool_search_*`) have an executor
+ * (the `serverTools` config or call option, see `lib/servertools`) and whose upstream is converted is answered by the server tool runner:
+ * the tools are offered as function tools, the executor runs when the model calls one, and the upstream is asked again until the model
+ * stops calling them. The reply carries `server_tool_use` and result blocks, `usage.server_tool_use` counters and the usage summed over the
+ * rounds (`onUsage` is called once with the combined report); a turn cut off by the round cap ends with `stop_reason: "pause_turn"`. A
+ * request passed through to an Anthropic upstream, or with no executor, is not affected.
  * @param {any} body - Client request body (per `front`).
- * @param {any} [options] - `{ signal, front, wire, headers, clientHeaders, filter, cacheSalt, onUsage, log }`: abort signal for the upstream call, per-call front, `wire: "responses"` for the Chat Completions form of a Responses API request, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply) and the logger this request's events also go to (used by the server).
+ * @param {any} [options] - `{ signal, front, wire, headers, clientHeaders, filter, cacheSalt, onUsage, log, serverTools }`: abort signal for the upstream call, per-call front, `wire: "responses"` for the Chat Completions form of a Responses API request, extra upstream headers, client headers forwarded to a native Anthropic upstream, the pass-through body filter (see `request`) and the usage callback (an exception in it is reported as a `usage` event and never breaks the reply), the logger this request's events also go to (used by the server) and `serverTools` (`[executors]` or `{ executors, maxRounds }`, tried before the config's).
  * @returns {Promise<{status: number, headers: Record<string,string>, body: any, usage: Promise<any>} | {status: number, headers: Record<string,string>, stream: AsyncIterable<{event?: string, data: *}>, usage: Promise<any>}>} A JSON reply, or a stream reply when the client asked for streaming and the upstream accepted.
  */
 export async function send(body, options = {}) {
@@ -86,19 +94,25 @@ export async function send(body, options = {}) {
 		warn(config, state, message, { type: "usage", ...details, log: options.log })
 	);
 	const attach = (reply) => Object.defineProperty(reply, "usage", { value: meter.usage, enumerable: false, configurable: true });
-	let fanned = false;
+	let nested = false;
 	try {
 		// `n` above 1 for an Anthropic-protocol upstream (which has no `n`) becomes `n` parallel single-choice requests, each a `send` of its own.
+		const warning = (message, details) => warn(config, state, message, { type: "usage", ...details, log: options.log });
 		const count = fanout.wants(captured, body);
 		if (count > 0) {
-			fanned = true;
-			const warning = (message, details) => warn(config, state, message, { type: "usage", ...details, log: options.log });
+			nested = true;
 			return await fanout.run({ body, count, options, send, warn: warning });
+		}
+		// Server tools with an executor, on a converted upstream, are run by the translator: each upstream round is a `send` of its own.
+		const plan = servertools.wants(captured, body, options);
+		if (plan !== null) {
+			nested = true;
+			return await servertools.run({ body, plan, options, send, warn: warning, c: captured });
 		}
 		return attach(await round({ transport, textOnly, jsonInstruction, request, response, stream, error, captured }, body, options, meter));
 	} catch (cause) {
-		// The branches reported their usage (once, summed) and their events themselves.
-		if (fanned) throw cause;
+		// The branches (or rounds) reported their usage (once, summed) and their events themselves.
+		if (nested) throw cause;
 		if (!(cause instanceof TranslatorError)) {
 			if (!options.signal?.aborted) {
 				emit(captured, { type: "error", kind: "exception", level: "error", message: String(cause?.message ?? cause), log: options.log });

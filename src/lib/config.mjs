@@ -7,7 +7,7 @@
  *	@Email: <Shinrai@users.noreply.github.com>
  *	-----
  *	@Last modified by: Nate Corcoran <CLDMV> (Shinrai@users.noreply.github.com)
- *	@Last modified time: 2026-10-25T14:05:38-07:00 (1792962338)
+ *	@Last modified time: 2026-11-24T21:51:15-08:00 (1795585875)
  *	-----
  *	@Copyright: Copyright (c) 2013-2026 Catalyzed Motivation Inc. All rights reserved.
  *
@@ -24,6 +24,7 @@ import { normalizeAliases, normalizeEfforts } from "./effort.mjs";
 import { ALIASES, canonical } from "./protocol.mjs";
 import { host as vertexHost, regionFor } from "./vertex.mjs";
 import { defaultUrl } from "./bedrock.mjs";
+import * as serverTools from "./servertools.mjs";
 
 /**
  * @typedef {object} UpstreamConfig
@@ -192,6 +193,7 @@ export function normalize(config = {}) {
 		logs,
 		capture: config.capture || false,
 		events: config.events !== false,
-		onEvent: config.onEvent
+		onEvent: config.onEvent,
+		serverTools: serverTools.normalize(config.serverTools)
 	};
 }
