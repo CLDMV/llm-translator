@@ -34,13 +34,13 @@ import { readAll, toResponses } from "../../../../../../../lib/citations.mjs";
  * (as a summary part), the message text (or refusal) and one function call per tool call index. An `error` chunk, a fatal finish reason or
  * a stream that ends without a finish reason ends with `response.failed`. Annotations (`delta.annotations`) are sent as `response.output_text.annotation.added` events and are in the closed part. There is no `[DONE]` sentinel.
  * @param {ReadableStream|AsyncIterable<unknown>|Iterable<unknown>|string|Uint8Array} source - Chat Completions stream.
- * @param {any} state - State from the request converter (`model`, `echo`).
+ * @param {any} state - State from the request converter (`model`, `echo`); `id` is the response id when the caller chose it, else one is made.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {AsyncGenerator<{ event: string, data: any }, void, undefined>} Responses events.
  */
 export async function* stream(source, state, settings) {
 	const s = resolve(settings);
-	const id = itemId("resp");
+	const id = state.id ?? itemId("resp");
 	const created = Math.floor(Date.now() / 1000);
 	let model = state.model;
 	let sequence = 0;

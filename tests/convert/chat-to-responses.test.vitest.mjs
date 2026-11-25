@@ -17,6 +17,20 @@ const wrap = (message, finish = "stop", usage) => ({
 	...(usage ? { usage } : {})
 });
 
+describe("response id", () => {
+	it("is the one the caller chose in state.id, else a new one, in the object and in the stream", async () => {
+		const chosen = { ...state, id: "resp_chosen000000" };
+		expect(response(wrap({ content: "x" }), chosen).id).toBe("resp_chosen000000");
+		expect(response(wrap({ content: "x" }), state).id).not.toBe("resp_chosen000000");
+		const chunks = [
+			{ choices: [{ index: 0, delta: { content: "x" }, finish_reason: null }] },
+			{ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }
+		];
+		expect((await run(chunks, undefined, chosen)).at(-1).data.response.id).toBe("resp_chosen000000");
+		expect((await run(chunks, undefined, state)).at(-1).data.response.id).toMatch(/^resp_[0-9a-f]{24}$/);
+	});
+});
+
 describe("response", () => {
 	it("builds a completed response from text, with usage and the echoed request parameters", () => {
 		const out = response(

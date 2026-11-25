@@ -68,6 +68,8 @@ export async function createTranslator(config) {
 		missing: new Map(),
 		cursors: new Map(),
 		files: undefined,
+		responses: undefined,
+		jobs: undefined,
 		front: undefined
 	};
 	open(state.events, normalized.logs);
