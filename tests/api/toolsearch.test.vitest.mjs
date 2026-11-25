@@ -142,6 +142,16 @@ describe("toolSearch executor", () => {
 		}
 	});
 
+	it("interrupts a catastrophic pattern with execution_time_exceeded", async () => {
+		const trap = [custom("trap", `${"a".repeat(60)}b`)];
+		const started = Date.now();
+		const error = await failing(run(toolSearch({ timeout: 50 }), regexTool, { pattern: "(a+)+$" }, trap));
+		expect(error).toMatchObject({ code: "execution_time_exceeded" });
+		expect(Date.now() - started).toBeLessThan(5000);
+		expect(() => toolSearch({ timeout: 0 })).toThrow(/timeout/);
+		expect(() => toolSearch({ timeout: 1.5 })).toThrow(TranslatorError);
+	});
+
 	it("ranks with BM25 over names, descriptions and arguments, best first", async () => {
 		const executor = toolSearch();
 		expect(names(await run(executor, bm25Tool, { query: "what is the weather in a city" }))).toEqual(["get_weather"]);
@@ -263,6 +273,15 @@ describe("the executor in the server tool runner", () => {
 			"text"
 		]);
 		expect(reply.body.content[3].content).toEqual({ type: "tool_search_tool_result_error", error_code: "invalid_tool_input" });
+	});
+
+	it("answers a runaway pattern with the execution_time_exceeded result and loads nothing", async () => {
+		const trap = custom("trap", `${"a".repeat(60)}b`);
+		const transport = script([json(calling([["c1", "tool_search_tool_regex", { pattern: "(a+)+$" }]])), json(saying("ok"))]);
+		const api = await make({ upstreams: [chat], transport, detect: false, serverTools: [toolSearch({ timeout: 50 })] });
+		const reply = await api.send({ ...ask, tools: [regexTool, trap, clock] });
+		expect(reply.body.content[1].content).toEqual({ type: "tool_search_tool_result_error", error_code: "execution_time_exceeded" });
+		expect(offered(transport.bodies()[1])).toEqual(["tool_search_tool_regex", "get_time"]);
 	});
 
 	it("streams the call and the result blocks and loads the tools for the next round", async () => {

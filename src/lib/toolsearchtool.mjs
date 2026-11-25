@@ -24,6 +24,7 @@
  * tools (default 5, at most 10000) as `tool_reference` blocks. This is not the client-side `ToolSearch` of Claude Code (see toolsearch.mjs).
  * @module @cldmv/llm-translator/lib/toolsearchtool
  */
+import { runInNewContext } from "node:vm";
 import { TranslatorError } from "./errors.mjs";
 
 /** Longest regex pattern, in characters. */
@@ -34,6 +35,9 @@ const QUERY_LENGTH = 500;
 
 /** Most tools one search may return. */
 const MOST = 10000;
+
+/** Default time limit of one regex search, in ms. */
+const TIMEOUT = 1000;
 
 /** Default number of tools one search returns. */
 const COUNT = 5;
@@ -120,16 +124,42 @@ function rank(tools, query) {
 }
 
 /**
+ * Match a regex against every tool's fields in a separate context, so a pattern that backtracks without end is interrupted at `timeout`.
+ * @param {string} source - Pattern.
+ * @param {string[][]} groups - The fields of each tool.
+ * @param {number} timeout - Time limit in ms.
+ * @returns {boolean[]} Whether each tool matched.
+ * @throws {Error} `invalid_tool_input` for a pattern that is not a valid regular expression, `execution_time_exceeded` after `timeout`.
+ */
+function matching(source, groups, timeout) {
+	try {
+		return runInNewContext(
+			"const re = new RegExp(source, 'i'); Array.from(groups, (fields) => fields.some((field) => re.test(field)))",
+			{ source, groups },
+			{ timeout }
+		);
+	} catch (cause) {
+		if (cause?.code === "ERR_SCRIPT_EXECUTION_TIMEOUT")
+			throw failure("execution_time_exceeded", `the search took longer than ${timeout} ms`);
+		throw failure("invalid_tool_input", `Invalid regular expression pattern: ${cause.message}`);
+	}
+}
+
+/**
  * The `tool_search_tool_*` executor for the server tool runner.
  * @param {object} [options] - Options.
  * @param {number} [options.count] - Tools returned when the model sets no `limit` (default 5).
+ * @param {number} [options.timeout] - Time limit of one regex search in ms (default 1000); a pattern that runs longer is answered with `execution_time_exceeded`.
  * @param {RegExp | string} [options.type] - Tool types served (default `/^tool_search_tool_(regex|bm25)_/`).
  * @returns {import("./servertools.mjs").ServerToolExecutor} The executor.
- * @throws {TranslatorError} `INVALID_CONFIG` for a `count` that is not a positive whole number.
+ * @throws {TranslatorError} `INVALID_CONFIG` for a `count` or `timeout` that is not a positive whole number.
  */
-export function toolSearch({ count = COUNT, type = /^tool_search_tool_(regex|bm25)_/ } = /** @type {any} */ ({})) {
+export function toolSearch({ count = COUNT, timeout = TIMEOUT, type = /^tool_search_tool_(regex|bm25)_/ } = /** @type {any} */ ({})) {
 	if (!Number.isInteger(count) || count < 1) {
 		throw new TranslatorError("toolSearch: count must be a positive whole number", { code: "INVALID_CONFIG", status: 500 });
+	}
+	if (!Number.isInteger(timeout) || timeout < 1) {
+		throw new TranslatorError("toolSearch: timeout must be a positive whole number", { code: "INVALID_CONFIG", status: 500 });
 	}
 	const regex = (tool) => String(tool?.type).startsWith("tool_search_tool_regex_");
 	return {
@@ -163,13 +193,8 @@ export function toolSearch({ count = COUNT, type = /^tool_search_tool_(regex|bm2
 			let found;
 			if (regex(tool)) {
 				if (text.length > PATTERN_LENGTH) throw failure("invalid_tool_input", `the pattern is longer than ${PATTERN_LENGTH} characters`);
-				let pattern;
-				try {
-					pattern = new RegExp(text, "i");
-				} catch (cause) {
-					throw failure("invalid_tool_input", `Invalid regular expression pattern: ${cause.message}`);
-				}
-				found = tools.filter((candidate) => fields(candidate).some((field) => pattern.test(field)));
+				const hits = matching(text, tools.map(fields), timeout);
+				found = tools.filter((_, index) => hits[index]);
 			} else {
 				if (text.length > QUERY_LENGTH) throw failure("invalid_tool_input", `the query is longer than ${QUERY_LENGTH} characters`);
 				found = rank(tools, text);
