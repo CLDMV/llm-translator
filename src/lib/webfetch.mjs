@@ -77,6 +77,18 @@ function invalid(problem) {
 }
 
 /**
+ * A string without the given characters at its end (a loop, so no backtracking regex runs on client text).
+ * @param {string} text - Text.
+ * @param {string} chars - Characters to remove.
+ * @returns {string} The trimmed text.
+ */
+function trimEnd(text, chars) {
+	let end = text.length;
+	while (end > 0 && chars.includes(text[end - 1])) end--;
+	return text.slice(0, end);
+}
+
+/**
  * Collect every URL in a value into a set, as `URL.href` strings.
  * @param {any} value - A string, or arrays and objects holding strings.
  * @param {Set<string>} out - The set.
@@ -86,7 +98,7 @@ function collect(value, out) {
 	if (typeof value === "string") {
 		for (const [found] of value.matchAll(URL_PATTERN)) {
 			// A URL at the end of a sentence or in brackets keeps no closing punctuation; both readings are accepted.
-			for (const candidate of [found, found.replace(/[.,;:!?)\]}]+$/, "")]) if (URL.canParse(candidate)) out.add(new URL(candidate).href);
+			for (const candidate of [found, trimEnd(found, ".,;:!?)]}")]) if (URL.canParse(candidate)) out.add(new URL(candidate).href);
 		}
 	} else if (value !== null && typeof value === "object") {
 		for (const item of Object.values(value)) collect(item, out);
@@ -126,7 +138,7 @@ function rules(list) {
 				.toLowerCase()
 				.replace(/^https?:\/\//, "");
 			const slash = bare.indexOf("/");
-			return slash === -1 ? { host: bare, path: "" } : { host: bare.slice(0, slash), path: bare.slice(slash).replace(/\/+$/, "") };
+			return slash === -1 ? { host: bare, path: "" } : { host: bare.slice(0, slash), path: trimEnd(bare.slice(slash), "/") };
 		});
 }
 

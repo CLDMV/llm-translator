@@ -168,7 +168,7 @@ export function htmlToText(html) {
 		if (name === "title" && title === null) {
 			const stop = lower.indexOf("</title", at);
 			const raw = html.slice(at, stop === -1 ? html.length : stop);
-			title = tidy(decode(raw.replace(/<[^>]*>/g, ""))) || null;
+			title = tidy(decode(raw.replace(/<[^>]*>/g, "").replace(/[<>]/g, ""))) || null;
 		}
 		if (HIDDEN.has(name)) {
 			// The element's content is skipped up to its closing tag, or to the end when the page never closes it.
