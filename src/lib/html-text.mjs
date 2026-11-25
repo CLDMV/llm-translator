@@ -87,6 +87,22 @@ const NAMED = {
 const NAME = /[a-z][a-z0-9]*/y;
 
 /**
+ * Text with every tag removed: characters from a `<` up to the next `>` are dropped, and a `<` that is never closed drops the rest.
+ * @param {string} text - Raw text that may contain tags.
+ * @returns {string} Text without tags or angle brackets.
+ */
+function untag(text) {
+	let out = "";
+	let inside = false;
+	for (const char of text) {
+		if (char === "<") inside = true;
+		else if (char === ">") inside = false;
+		else if (!inside) out += char;
+	}
+	return out;
+}
+
+/**
  * Decode the character references of a text.
  * @param {string} text - Text with `&amp;`, `&#38;` or `&#x26;` forms.
  * @returns {string} Text with them replaced; a reference that is not known stays as written.
@@ -168,7 +184,7 @@ export function htmlToText(html) {
 		if (name === "title" && title === null) {
 			const stop = lower.indexOf("</title", at);
 			const raw = html.slice(at, stop === -1 ? html.length : stop);
-			title = tidy(decode(raw.replace(/<[^>]*>/g, "").replace(/[<>]/g, ""))) || null;
+			title = tidy(decode(untag(raw))) || null;
 		}
 		if (HIDDEN.has(name)) {
 			// The element's content is skipped up to its closing tag, or to the end when the page never closes it.

@@ -48,6 +48,7 @@ describe("htmlToText", () => {
 		expect(htmlToText("<title>  </title>text").title).toBeNull();
 		expect(htmlToText("plain").title).toBeNull();
 		expect(htmlToText("<title>a<b>c</b></title>").title).toBe("ac");
+		expect(htmlToText("<title>a > b <i</title>").title).toBe("a b");
 	});
 
 	it("treats an unclosed comment, tag, hidden element or title as the end of the page", () => {
