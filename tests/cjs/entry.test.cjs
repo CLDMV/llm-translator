@@ -63,7 +63,7 @@ test("CJS shim re-exports the ESM entry", async () => {
 	const names = Object.keys(cjs)
 		.filter((key) => key !== "__esModule")
 		.sort();
-	assert.deepEqual(names, ["TranslatorError", "createTranslator", "default"]);
+	assert.deepEqual(names, ["TranslatorError", "createTranslator", "default", "searxng", "webSearch"]);
 	assert.deepEqual(names, Object.keys(esm).sort());
 	assert.equal(cjs.createTranslator, esm.createTranslator);
 });
