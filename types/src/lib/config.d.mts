@@ -67,6 +67,10 @@ export type UpstreamConfig = {
      */
     sessionToken?: string;
     /**
+     * Amazon Bedrock: a profile of the AWS shared config files (`~/.aws/config`, `~/.aws/credentials`) to take the credentials from: access keys, a `credential_process` or an SSO login. It is used when the upstream has no `apiKey` or access keys, and ahead of the `AWS_*` environment variables. Without it, and without keys in the environment, the `AWS_PROFILE` or `default` profile, an ECS task role and an EC2 instance role are tried in that order.
+     */
+    profile?: string;
+    /**
      * Which protocol of the server to speak, `"auto"` by default. Canonical ids are `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"`, `"ollama.chat"`, `"bedrock.converse"`, `"google.gemini"` and `"cohere.chat"`; `"messages"`, `"anthropic"` and `"claude"` mean the first, `"chat"`, `"openai"` and `"chatgpt"` the second, `"responses"` and `"codex"` the third, `"native"` and `"ollama"` the fourth, `"converse"` the fifth, `"gemini"` and `"google"` the sixth and `"cohere"` the last. `"auto"` goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. A protocol the driver does not list fails detection with `unsupported_api`.
      */
     api?: string;

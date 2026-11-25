@@ -25,9 +25,15 @@ import { CONTENT_TYPE, recorder } from "./metrics.mjs";
 import { cors as corsPolicy, rateLimit as limiter } from "./guard.mjs";
 import { beta } from "./files.mjs";
 import { parse as multipart } from "./multipart.mjs";
+import { envelope } from "./responses.mjs";
+import { create as createJob, follow, run } from "./background.mjs";
+import { joined } from "./responses-state.mjs";
 
 const BODY_LIMIT = 64 * 1024 * 1024;
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
+
+/** The Responses stream events that carry a response's final state. */
+const ENDINGS = new Set(["response.completed", "response.incomplete", "response.failed"]);
 
 const STALLED = Symbol("stalled");
 const GONE = Symbol("gone");
@@ -48,6 +54,21 @@ async function settle(promise, interval) {
 		return await Promise.race([promise, stalled]);
 	} finally {
 		clearTimeout(timer);
+	}
+}
+
+/**
+ * Pass a Responses event stream through, keeping the response when its closing event comes (before the client sees it, so a retrieval right after
+ * the stream ends finds it).
+ * @param {AsyncIterable<any>} events - Responses events.
+ * @param {any} made - The request's plan, or null when nothing is kept.
+ * @param {(made: any, response: any) => Promise<void>} keep - Keeps a finished response.
+ * @returns {AsyncGenerator<any>} The same events.
+ */
+async function* remembered(events, made, keep) {
+	for await (const event of events) {
+		if (made !== null && ENDINGS.has(event.event)) await keep(made, event.data.response);
+		yield event;
 	}
 }
 
@@ -174,6 +195,8 @@ async function stream(reply, api, controller, events, interval, status = 200, he
 	reply.hijack();
 	const raw = reply.raw;
 	raw.writeHead(status, headers);
+	// The client sees the stream open now, not with the first event (a background response can wait a long time for it).
+	raw.flushHeaders();
 	try {
 		await api.write(raw, events, { front: api.front, interval });
 	} catch (error) {
@@ -274,6 +297,12 @@ export function register(fastify, options, captured) {
 			["create", "list", "get", "content", "remove"].map((name) => [
 				name,
 				(input, extra) => captured.files[name](input, { ...extra, front })
+			])
+		),
+		batches: Object.fromEntries(
+			["create", "list", "get", "cancel", "remove", "results"].map((name) => [
+				name,
+				(input, extra) => captured.batches[name](input, { ...extra, front })
 			])
 		)
 	};
@@ -466,9 +495,10 @@ export function register(fastify, options, captured) {
 	 * @param {any} reply - Fastify reply.
 	 * @param {any} body - Body in the front's protocol (for the Responses front: the converted Chat Completions body).
 	 * @param {{ state: any, settings: any } | null} via - Set on the Responses front: the request converter's state and the upstream's settings, for converting the reply.
+	 * @param {any} [made] - Set on the Responses front with stored responses on: the request's plan, so the response is kept (`store`) when it is done.
 	 * @returns {Promise<any>} The reply.
 	 */
-	const converse = async (request, reply, body, via) => {
+	const converse = async (request, reply, body, via, made = null) => {
 		// The client may have left before this handler ran (for example during a slow hook); then no upstream call is made.
 		if (reply.raw.destroyed) return reply;
 		const controller = new AbortController();
@@ -499,12 +529,16 @@ export function register(fastify, options, captured) {
 			);
 			return reply;
 		}
-		const convert = via ? (source) => api.responses.stream(source, via.state, via.settings) : undefined;
+		const convert = via
+			? (source) => remembered(api.responses.stream(source, via.state, via.settings), made, api.responses.keep)
+			: undefined;
 		if (result === STALLED)
 			return stream(reply, via ? asResponses : api, controller, late(sending, via ? asResponses : api, body?.model, convert), interval);
 		if (!result.stream) {
 			if (!via || result.status >= 400) return reject(reply, result);
-			return reject(reply, { ...result, body: await api.responses.response(result.body, via.state, via.settings) });
+			const response = await api.responses.response(result.body, via.state, via.settings);
+			if (made !== null) await api.responses.keep(made, response);
+			return reject(reply, { ...result, body: response });
 		}
 		return stream(
 			reply,
@@ -524,13 +558,21 @@ export function register(fastify, options, captured) {
 		// The Responses API is served through the Chat Completions path: the request is converted to a chat body, so routing, pools, failover,
 		// conversion to Anthropic or Ollama, usage and capture all apply, and the reply is converted back.
 		/**
-		 * Convert a Responses body to its Chat Completions form, reporting what was dropped.
+		 * Convert a Responses body to its Chat Completions form, reporting what was dropped. With stored responses on, `previous_response_id` and
+		 * `conversation` are resolved first: the history goes before the request's own input.
 		 * @param {any} request - Fastify request.
-		 * @returns {Promise<{ chat: any, via: { state: any, settings: any } }>} Chat body and the reply conversion context.
+		 * @returns {Promise<{ chat: any, via: { state: any, settings: any }, made: any }>} Chat body, the reply conversion context and the request's plan (null when stateless).
 		 */
 		const converted = async (request) => {
+			const made = await api.responses.plan(request.body);
 			const settings = api.settings(request.body);
-			const { body, state } = await api.responses.request(request.body, settings);
+			let { body, state } = await api.responses.request(made === null ? request.body : made.body, settings);
+			if (made !== null) {
+				// The request's own input was just checked on its own, so an error names its positions; now it is converted after the history.
+				if (made.history.length > 0) ({ body, state } = await api.responses.request(joined(made), settings));
+				state.id = made.id;
+				Object.assign(state.echo, made.echo);
+			}
 			if (state.dropped.length > 0) {
 				api.emit({
 					type: "dropped",
@@ -540,11 +582,47 @@ export function register(fastify, options, captured) {
 					log: request.log
 				});
 			}
-			return { chat: body, via: { state, settings } };
+			return { chat: body, via: { state, settings }, made };
+		};
+		/**
+		 * Answer a `background: true` request: the response is stored as `queued`, run to the end whether or not the client stays, and answered at once with
+		 * the queued response object (or, with `stream: true`, with the stream of its events, which can be read again with `GET /v1/responses/{id}`).
+		 * @param {any} request - Fastify request.
+		 * @param {any} reply - Fastify reply.
+		 * @param {any} chat - The converted Chat Completions body.
+		 * @param {{ state: any, settings: any }} via - The request converter's state and the upstream's settings.
+		 * @param {any} made - The request's plan.
+		 * @returns {Promise<any>} The reply.
+		 */
+		const background = async (request, reply, chat, via, made) => {
+			const jobs = api.responses.jobs();
+			const created = Math.floor(Date.now() / 1000);
+			const snapshot = (status, extra = {}) => envelope(via.state, { id: made.id, created, status, output: [], ...extra });
+			const queued = snapshot("queued");
+			await api.responses.begin(made, queued);
+			const job = createJob(made.id, via.state.stream);
+			jobs.set(made.id, job);
+			const onUsage = typeof options.onUsage === "function" ? (report) => options.onUsage(report, contexts.get(request)) : undefined;
+			const headers = forwardable(request.headers);
+			const cacheSalt = salts.get(request);
+			// The job outlives the request: it only stops when it is cancelled or deleted.
+			run(jobs, job, {
+				snapshot,
+				sending: (signal) => api.send(chat, { signal, wire: "responses", clientHeaders: headers, cacheSalt, onUsage, log: request.log }),
+				toResponse: (result) => api.responses.response(result, via.state, via.settings),
+				toEvents: (source) => api.responses.stream(source, via.state, via.settings),
+				save: (response) =>
+					response.status === "queued" || response.status === "in_progress"
+						? api.responses.progress(made.id, response)
+						: api.responses.keep(made, response)
+			});
+			if (!job.streaming) return reply.send(queued);
+			return stream(reply, asResponses, new AbortController(), follow(job), api.interval(chat));
 		};
 		fastify.post("/v1/responses", { bodyLimit }, async (request, reply) => {
-			const { chat, via } = await converted(request);
-			return converse(request, reply, chat, via);
+			const { chat, via, made } = await converted(request);
+			if (made?.background) return background(request, reply, chat, via, made);
+			return converse(request, reply, chat, via, made);
 		});
 		fastify.post("/v1/responses/input_tokens", { bodyLimit }, async (request, reply) => {
 			const controller = new AbortController();
@@ -553,6 +631,53 @@ export function register(fastify, options, captured) {
 			const { input_tokens } = await api.count(chat, { signal: controller.signal });
 			return reply.send({ object: "response.input_tokens", input_tokens });
 		});
+		// Stored responses (`store`, on by default) and background responses. `GET` answers the response object, or with `stream=true` the events of a
+		// background response created with `stream: true`, from the one after `starting_after`.
+		fastify.get("/v1/responses/:id", async (request, reply) => {
+			const response = await api.responses.get(request.params.id);
+			if (request.query.stream !== "true") return reply.send(response);
+			const job = api.responses.jobs().get(request.params.id);
+			if (job === undefined || !job.streaming) {
+				throw new TranslatorError(
+					"The event stream of this response is not available: only a response created with background and stream can be streamed again, and only while the translator holds its events",
+					{ code: "stream_unavailable", status: 400, type: "invalid_request_error", param: "stream" }
+				);
+			}
+			const after = request.query.starting_after === undefined ? -1 : Number(request.query.starting_after);
+			if (!Number.isInteger(after) || after < -1) {
+				throw new TranslatorError("starting_after must be a whole number", {
+					code: "invalid_request",
+					status: 400,
+					type: "invalid_request_error",
+					param: "starting_after"
+				});
+			}
+			return stream(reply, asResponses, new AbortController(), follow(job, after), api.interval({}));
+		});
+		fastify.delete("/v1/responses/:id", async (request, reply) => reply.send(await api.responses.remove(request.params.id)));
+		fastify.post("/v1/responses/:id/cancel", async (request, reply) => reply.send(await api.responses.cancel(request.params.id)));
+		fastify.get("/v1/responses/:id/input_items", async (request, reply) =>
+			reply.send(await api.responses.input.list(request.params.id, request.query))
+		);
+		// The Conversations API.
+		fastify.post("/v1/conversations", { bodyLimit }, async (request, reply) => reply.send(await api.conversations.create(request.body)));
+		fastify.get("/v1/conversations/:id", async (request, reply) => reply.send(await api.conversations.get(request.params.id)));
+		fastify.post("/v1/conversations/:id", { bodyLimit }, async (request, reply) =>
+			reply.send(await api.conversations.update(request.params.id, request.body))
+		);
+		fastify.delete("/v1/conversations/:id", async (request, reply) => reply.send(await api.conversations.remove(request.params.id)));
+		fastify.post("/v1/conversations/:id/items", { bodyLimit }, async (request, reply) =>
+			reply.send(await api.conversations.items.create(request.params.id, request.body))
+		);
+		fastify.get("/v1/conversations/:id/items", async (request, reply) =>
+			reply.send(await api.conversations.items.list(request.params.id, request.query))
+		);
+		fastify.get("/v1/conversations/:id/items/:item", async (request, reply) =>
+			reply.send(await api.conversations.items.get(request.params.id, request.params.item))
+		);
+		fastify.delete("/v1/conversations/:id/items/:item", async (request, reply) =>
+			reply.send(await api.conversations.items.remove(request.params.id, request.params.item))
+		);
 		// A plain forward: no streaming, no conversion, so none of the chat route's early-commit machinery applies.
 		fastify.post("/v1/embeddings", { bodyLimit }, async (request, reply) => {
 			const controller = new AbortController();
@@ -567,7 +692,29 @@ export function register(fastify, options, captured) {
 		});
 	}
 
+	// The Batch APIs: OpenAI's `/v1/batches` and Anthropic's Message Batches, each on its own front. Batches run in the background; the routes only make,
+	// read and cancel them.
+	if (api.front === "openai") {
+		fastify.post("/v1/batches", { bodyLimit }, async (request, reply) => reply.send(await api.batches.create(request.body)));
+		fastify.get("/v1/batches", async (request, reply) => reply.send(await api.batches.list(request.query)));
+		fastify.get("/v1/batches/:id", async (request, reply) => reply.send(await api.batches.get(request.params.id)));
+		fastify.post("/v1/batches/:id/cancel", async (request, reply) => reply.send(await api.batches.cancel(request.params.id)));
+	}
+
 	if (api.front === "anthropic") {
+		const base = (request) => ({ base: `${request.protocol}://${request.host}` });
+		fastify.post("/v1/messages/batches", { bodyLimit }, async (request, reply) =>
+			reply.send(await api.batches.create(request.body, base(request)))
+		);
+		fastify.get("/v1/messages/batches", async (request, reply) => reply.send(await api.batches.list(request.query, base(request))));
+		fastify.get("/v1/messages/batches/:id", async (request, reply) => reply.send(await api.batches.get(request.params.id, base(request))));
+		fastify.post("/v1/messages/batches/:id/cancel", async (request, reply) =>
+			reply.send(await api.batches.cancel(request.params.id, base(request)))
+		);
+		fastify.delete("/v1/messages/batches/:id", async (request, reply) => reply.send(await api.batches.remove(request.params.id)));
+		fastify.get("/v1/messages/batches/:id/results", async (request, reply) =>
+			reply.header("content-type", "application/x-jsonl").send(await api.batches.results(request.params.id))
+		);
 		fastify.post("/v1/messages/count_tokens", { bodyLimit }, async (request, reply) => {
 			const controller = new AbortController();
 			reply.raw.on("close", () => controller.abort());

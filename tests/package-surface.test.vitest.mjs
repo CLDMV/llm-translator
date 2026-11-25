@@ -59,6 +59,8 @@ describe("package surface", () => {
 					.sort()
 			).toEqual(
 				[
+					"batches",
+					"conversations",
 					"convert",
 					"detect",
 					"driver",
@@ -72,6 +74,7 @@ describe("package surface", () => {
 					"request",
 					"route",
 					"response",
+					"responses",
 					"send",
 					"server",
 					"sse",
