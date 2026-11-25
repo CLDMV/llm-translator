@@ -29,6 +29,7 @@ describe("package surface", () => {
 			"createTranslator",
 			"default",
 			"searxng",
+			"toolSearch",
 			"webFetch",
 			"webSearch"
 		]);
