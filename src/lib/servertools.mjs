@@ -36,6 +36,10 @@
  * - `members(tool)`: for a tool that Anthropic serves as several functions (`code_execution_20250825` is `bash_code_execution` and
  *   `text_editor_code_execution`), returns `[{ name, schema, description?, result? }]`; each member is offered to the upstream as a function of its
  *   own, a call of it is returned as a `server_tool_use` named `name`, and its result block type is `result`. `run` receives `name`.
+ * - `deferred`: `true` for an executor that searches the request's tools marked `defer_loading: true` (tool search). The runner then withholds those
+ *   tools from the upstream until a search result of this request, or a `tool_reference` in the history, names them, and offers them as
+ *   ordinary function tools from then on. A result `content` with `tool_references` (`[{ type: "tool_reference", tool_name }]`) loads the tools it names.
+ *   `context.tools` is the request's tools.
  * - `read(content)`: the text the upstream model reads for a successful result, for a result whose `content` is not readable as JSON (it is used
  *   for a result the runner just produced and for one the client replays in history). Without it the content is sent as JSON.
  * @module @cldmv/llm-translator/lib/servertools
@@ -51,11 +55,12 @@ import { emit } from "./events.mjs";
  * @typedef {object} ServerToolExecutor
  * @property {RegExp | string} type Matches the tool's `type` (`/^web_search_/`, or an exact `"web_fetch_20250910"`).
  * @property {(tool: any) => any} schema JSON schema (an object schema) of the function's input, for that tool definition.
- * @property {(input: any, details: {tool: any, id: string, name: string, signal?: AbortSignal, context: {model?: string, metadata?: any, messages?: any[], results?: any[], container?: string}, container?: string, files: any | null}) => Promise<{content: any, type?: string, container?: {id: string, expires_at?: string}}>} run Runs one call; resolves with the result block's `content` (its `type` when it is not `<kind>_tool_result`, and the `container` the call ran in) or throws. `container` is the container id of the request (or of an earlier call of it) and `files` the file store of the Files API (null when it is off).
+ * @property {(input: any, details: {tool: any, id: string, name: string, signal?: AbortSignal, context: {model?: string, metadata?: any, messages?: any[], tools?: any[], results?: any[], container?: string}, container?: string, files: any | null}) => Promise<{content: any, type?: string, container?: {id: string, expires_at?: string}}>} run Runs one call; resolves with the result block's `content` (its `type` when it is not `<kind>_tool_result`, and the `container` the call ran in) or throws. `container` is the container id of the request (or of an earlier call of it) and `files` the file store of the Files API (null when it is off).
  * @property {string | ((tool: any) => string)} [description] Text offered to the model with the function.
  * @property {string} [result] The result block type, for a tool kind that has no `<kind>_tool_result`.
  * @property {string} [usage] The `usage.server_tool_use` counter a call increments (defaults to `web_search_requests` / `web_fetch_requests` for those kinds).
  * @property {(tool: any) => {name: string, schema: any, description?: string, result?: string}[]} [members] The functions one tool definition is offered as, when it is more than one.
+ * @property {boolean} [deferred] Whether the executor searches the tools marked `defer_loading` (the runner withholds them until a result names them).
  * @property {(content: any) => string} [read] The text the upstream model reads for a successful result (default: the content as JSON).
  */
 
@@ -99,6 +104,7 @@ export function normalize(value) {
 		if (typeof executor.schema !== "function") throw bad("an executor's schema must be a function");
 		if (typeof executor.run !== "function") throw bad("an executor's run must be a function");
 		if (executor.members !== undefined && typeof executor.members !== "function") throw bad("an executor's members must be a function");
+		if (executor.deferred !== undefined && typeof executor.deferred !== "boolean") throw bad("an executor's deferred must be a boolean");
 		if (executor.read !== undefined && typeof executor.read !== "function") throw bad("an executor's read must be a function");
 	}
 	if (spec.maxRounds !== undefined && (!Number.isInteger(spec.maxRounds) || spec.maxRounds < 1)) {
@@ -123,7 +129,7 @@ function find(executors, type) {
  * @param {any} c - Captured translator parts (`capture`).
  * @param {any} body - Client request body.
  * @param {any} options - The `send` options (`serverTools`).
- * @returns {{executors: any[], maxRounds: number, tools: Map<string, {tool: any, executor: any, member?: any}>, hosted: Map<any, any[]>} | null} The plan, or null for the normal path.
+ * @returns {{executors: any[], maxRounds: number, tools: Map<string, {tool: any, executor: any, member?: any}>, hosted: Map<any, any[]>, loaded: Set<string> | null} | null} The plan, or null for the normal path.
  */
 export function wants(c, body, options) {
 	if (
@@ -154,7 +160,37 @@ export function wants(c, body, options) {
 	}
 	if (tools.size === 0) return null;
 	if (resolve(c, body).convert === null) return null;
-	return { executors, maxRounds: own.maxRounds ?? global.maxRounds ?? ROUNDS, tools, hosted };
+	const searching = [...tools.values()].some((entry) => entry.executor.deferred === true);
+	return {
+		executors,
+		maxRounds: own.maxRounds ?? global.maxRounds ?? ROUNDS,
+		tools,
+		hosted,
+		loaded: searching ? new Set(references(body.messages)) : null
+	};
+}
+
+/**
+ * The names of the tools the history's results loaded: `tool_reference` blocks in a server tool result's content (`tool_search_tool_result`) and
+ * in a client `tool_result`'s content array (a custom search tool).
+ * @param {any[]} messages - Client messages.
+ * @returns {string[]} Tool names.
+ */
+function references(messages) {
+	const names = [];
+	for (const message of messages) {
+		if (!Array.isArray(message?.content)) continue;
+		for (const block of message.content) {
+			if (!String(block?.type).endsWith("tool_result")) continue;
+			const inner = Array.isArray(block.content)
+				? block.content
+				: Array.isArray(block.content?.tool_references)
+					? block.content.tool_references
+					: [];
+			for (const item of inner) if (item?.type === "tool_reference" && typeof item.tool_name === "string") names.push(item.tool_name);
+		}
+	}
+	return names;
 }
 
 /**
@@ -252,7 +288,12 @@ function isResult(block) {
 export function rewrite(body, plan, extra = []) {
 	const tools = body.tools.flatMap((tool) => {
 		const entries = plan.hosted.get(tool);
-		if (entries === undefined) return [tool];
+		if (entries === undefined) {
+			if (plan.loaded === null || tool.defer_loading !== true) return [tool];
+			// A deferred tool stays out of the upstream's tools until a search has named it; then it is an ordinary tool.
+			const { defer_loading: _, ...rest } = tool;
+			return plan.loaded.has(tool.name) ? [rest] : [];
+		}
 		return entries.map(({ executor, member }) => {
 			const description =
 				member?.description ?? (typeof executor.description === "function" ? executor.description(tool) : executor.description);
@@ -327,6 +368,9 @@ export async function execute(call, plan, state) {
 		if (!out || typeof out !== "object" || out.content === undefined) throw new TypeError("the executor returned no content");
 		// Later calls of the request may fetch the URLs this result names.
 		state.context.results?.push(out.content);
+		if (executor.deferred === true) {
+			for (const item of out.content?.tool_references ?? []) if (typeof item?.tool_name === "string") plan.loaded.add(item.tool_name);
+		}
 		if (out.container?.id !== undefined) state.container = out.container;
 		return done(out.type ?? resultType, out.content);
 	} catch (cause) {
@@ -434,7 +478,14 @@ export async function run({ body, plan, options, send: direct, warn, c }) {
 		used: new Map(),
 		counts: {},
 		signal: options.signal,
-		context: { model: body.model, metadata: body.metadata, messages: body.messages, results: [], container: containerId(body.container) },
+		context: {
+			model: body.model,
+			metadata: body.metadata,
+			messages: body.messages,
+			tools: body.tools,
+			results: [],
+			container: containerId(body.container)
+		},
 		files: c.files(),
 		announce
 	};

@@ -106,4 +106,5 @@ export { TranslatorError } from "./lib/errors.mjs";
 export { webSearch, searxng } from "./lib/websearch.mjs";
 export { webFetch } from "./lib/webfetch.mjs";
 export { codeExecution } from "./lib/codeexec.mjs";
+export { toolSearch } from "./lib/toolsearchtool.mjs";
 export default createTranslator;
