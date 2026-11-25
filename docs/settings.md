@@ -236,7 +236,7 @@ const translator = await createTranslator({
 });
 ```
 
-`serverTools` is an array of executors, or `{ executors, maxRounds }`. `send(body, { serverTools })` takes the same value; its executors are tried before the config's, and its `maxRounds` wins. An executor is an object:
+`serverTools` is an array of executors, or `{ executors, maxRounds, webFetch }`. `send(body, { serverTools })` takes the same value; its executors are tried before the config's, and its `maxRounds` wins. An executor is an object:
 
 | Field         | Type                                           | Meaning                                                                                                                                                                                                                                                                                 |
 | ------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -251,7 +251,9 @@ An executor that throws, or resolves with no `content`, does not fail the reques
 
 An invalid executor (no `type`, `schema` or `run`) or a `maxRounds` that is not a positive whole number throws a `TranslatorError` with code `INVALID_CONFIG` at startup (config) or as the call's error (option). An executor may also have `read(content)`, a function that returns the text the upstream model reads for a successful result (the default is the content as JSON). It is used for the result the runner just produced and for results the client replays in history.
 
-Executors ship for web search ([below](#web-search-websearch-and-searxng)); web fetch and code execution are tracked in [#11](https://github.com/CLDMV/llm-translator/issues/11) and [#12](https://github.com/CLDMV/llm-translator/issues/12).
+Executors ship for web search ([below](#web-search-websearch-and-searxng)) and web fetch ([below](#web-fetch-webfetch)); code execution is tracked in [#12](https://github.com/CLDMV/llm-translator/issues/12).
+
+`details.context` (the `context` an executor's `run` receives) is `{ model, metadata, messages, results }`: `messages` is the client's messages as sent, and `results` holds the `content` of every result the runner produced earlier in the same request.
 
 ### Web search (`webSearch` and `searxng`)
 
@@ -296,6 +298,41 @@ The result is a `web_search_tool_result` whose content is an array of `{ type: "
 | `fetch`      | A `fetch`-compatible function (default `globalThis.fetch`).                                                                                               |
 
 A `publishedDate` in a result becomes `page_age` (`April 30, 2025`). HTTP 429 becomes `too_many_requests`; any other HTTP error, a network error, a reply that is not JSON or has no `results` list becomes `unavailable`. The search request is made from the translator's process, so the instance must be reachable from it.
+
+### Web fetch (`webFetch`)
+
+`webFetch(options)` returns the executor for `web_fetch_*`. Nothing is fetched unless it is added to `serverTools`, and it needs a host allow-list, as `documentUrls` does:
+
+```js
+import { createTranslator, webFetch } from "@cldmv/llm-translator";
+
+const translator = await createTranslator({
+	upstreams: ["http://localhost:8000"],
+	serverTools: [webFetch({ allow: ["docs.example.com", "*.wikipedia.org"] })]
+});
+```
+
+It sits next to `webSearch(...)` and your own executors in the same list; the first executor that matches a tool type wins. The URL is fetched with the same fetcher as `documentUrls`, so the SSRF protections in [protocol-support.md](protocol-support.md#ssrf-protections) apply unchanged: the host must match `allow`, every address it resolves to must be public, the connection is pinned to the checked address, every redirect hop is checked again, and the size and time limits are enforced while the body streams.
+
+| Option         | Default              | Meaning                                                                                                                           |
+| -------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `allow`        | required, no default | Hosts that may be fetched, as for [documentUrls](#documenturls): an exact host name, `*.example.com` or `"*"`. Must not be empty. |
+| `maxBytes`     | `33554432`           | Size limit in bytes for the downloaded page or PDF.                                                                               |
+| `timeout`      | `30000`              | Milliseconds for the whole fetch.                                                                                                 |
+| `maxRedirects` | `3`                  | Redirects followed; each hop is checked again.                                                                                    |
+| `maxPages`     | `100`                | Pages of a PDF that are read; a longer PDF is refused with `unsupported_content_type`.                                            |
+| `allowPrivate` | `false`              | Allow non-public addresses, for hosts on your own network. List those hosts by name in `allow`, never `"*"`.                      |
+
+An invalid option (a missing or empty `allow`, an unknown key, a limit that is not a positive integer) throws a `TranslatorError` with code `INVALID_CONFIG` when `webFetch` is called.
+
+What the tool does with a call:
+
+- The URL has to have appeared in the conversation, as Anthropic requires: in a user message (text, a client tool result, a document), in the result of a server tool in the history, or in a result produced earlier in the same request (a search that came back with it). Any other URL gets `url_not_allowed` and nothing is fetched. URLs are compared after normalization, so `HTTPS://Docs.Example.com:443/a` and `https://docs.example.com/a` are the same URL.
+- The tool definition's `allowed_domains` and `blocked_domains` narrow the allow-list per request. An entry is a domain without a scheme, which also covers its subdomains (`example.com` covers `docs.example.com`), optionally with a path (`example.com/blog` covers that path and everything below it). They are checked on the first URL and again on every redirect hop. The translator's `allow` stays the upper bound: a tool cannot enable a host the operator did not list.
+- HTML is converted to readable text (scripts, styles and other hidden elements are dropped, block elements become line breaks, character references are decoded, white space is collapsed) and the page title is returned as the document `title`. Plain text is returned as it is. A PDF goes through the same PDF reader as `document` blocks (`pdf.mjs`): its text is returned page by page as `--- Page N ---` sections, with the PDF's title when it has one. Other content types are refused with `unsupported_content_type`. HTML is read as UTF-8; there is no other charset handling.
+- `max_content_tokens` truncates the text at that many tokens, estimated at four characters per token like the rest of the translator. `citations: { enabled: true }` on the tool is passed on as `citations: { enabled: true }` in the returned document.
+- The result is `web_fetch_tool_result` with `{ type: "web_fetch_result", url, retrieved_at, content: { type: "document", source: { type: "text", media_type: "text/plain", data }, title?, citations? } }`, where `url` is the final URL after redirects. The source is always extracted text, also for a PDF, where Anthropic returns base64: the text is what the upstream model can read, and the same block is replayed to it on later turns. The upstream model reads the result as the page title, the URL and the text (the executor's `read`), not as JSON. Each call counts one `web_fetch_requests` in `usage.server_tool_use`, and `max_uses` applies as for any server tool.
+- Failures are the tool's own error result (`web_fetch_tool_error`, `error_code`): `url_not_allowed` (not in the conversation, not on `allow`, outside the tool's domains, a private address, a redirect from https to http, a scheme other than http and https), `url_not_accessible` (does not resolve, connection failed, HTTP error status, too large, timed out), `too_many_requests` (HTTP 429), `unsupported_content_type` (a type other than the ones above, or a PDF that cannot be read), `invalid_tool_input` (no usable `url`), `max_uses_exceeded` and `unavailable` (the PDF library is not installed). The reason goes to the `servertool` event, not to the client.
 
 ## Upstream `api` (not a converter setting)
 

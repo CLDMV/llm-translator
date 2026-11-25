@@ -703,3 +703,44 @@ describe("against a local server", () => {
 		expect(error.kind).toBe("network");
 	});
 });
+
+describe("rules a web fetch adds", () => {
+	it("checks the caller's permit rule on the first URL and on every redirect hop", async () => {
+		const { modules, calls } = fake((url) => (url.pathname === "/a" ? { status: 302, headers: { location: "/private" } } : { body: pdf }));
+		const permit = (url) => url.pathname !== "/private";
+		const error = await failure(fetchUrl("https://files.example.com/a", { ...base, permit }, { modules, lookup: resolveTo(PUBLIC) }));
+		expect(error).toMatchObject({ kind: "allow", message: "the URL is not allowed" });
+		expect(calls).toHaveLength(1);
+		const first = await failure(fetchUrl("https://files.example.com/private", { ...base, permit }, { modules, lookup: resolveTo(PUBLIC) }));
+		expect(first.kind).toBe("allow");
+		expect(calls).toHaveLength(1);
+	});
+
+	it("asks for the content types it accepts and names them in the refusal", async () => {
+		const { modules, calls } = fake(() => ({ body: "x", headers: { "content-type": "image/png" } }));
+		const html = new Map([
+			["text/html", "text/html"],
+			["text/plain", "text/plain"],
+			["application/pdf", "application/pdf"]
+		]);
+		const refused = await failure(
+			fetchUrl("https://files.example.com/a", { ...base, types: html }, { modules, lookup: resolveTo(PUBLIC) })
+		);
+		expect(refused.message).toBe("the content type is not supported (text/html, text/plain and application/pdf are)");
+		expect(calls[0].headers.accept).toBe("text/html, text/plain, application/pdf");
+		const one = await failure(
+			fetchUrl(
+				"https://files.example.com/a",
+				{ ...base, types: new Map([["text/html", "text/html"]]) },
+				{ modules, lookup: resolveTo(PUBLIC) }
+			)
+		);
+		expect(one.message).toBe("the content type is not supported (text/html is)");
+	});
+
+	it("keeps the HTTP status of a status failure", async () => {
+		const { modules } = fake(() => ({ status: 429 }));
+		const error = await failure(fetchUrl("https://files.example.com/a", base, { modules, lookup: resolveTo(PUBLIC) }));
+		expect(error).toMatchObject({ kind: "status", status: 429 });
+	});
+});
