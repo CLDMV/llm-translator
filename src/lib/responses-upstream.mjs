@@ -144,14 +144,25 @@ function reasoningItems(message) {
  * @param {any} message - Chat assistant message.
  * @param {{ dropped: string[] }} state - Conversion state.
  * @param {boolean} round - Whether reasoning items travel (`reasoningRoundTrip`).
+ * @param {Set<string>} custom - Receives the ids of the custom tool calls, so their results become `custom_tool_call_output` items.
  * @returns {any[]} Input items.
  */
-function assistantItems(message, state, round) {
+function assistantItems(message, state, round, custom) {
 	const parts = [];
 	let text = plainText(message.content);
 	if (text === "" && typeof message.refusal === "string") text = message.refusal;
 	if (text !== "") parts.push({ role: "assistant", content: text });
 	for (const call of message.tool_calls ?? []) {
+		if (call?.type === "custom") {
+			custom.add(call.id);
+			parts.push({
+				type: "custom_tool_call",
+				call_id: call.id,
+				name: call.custom?.name,
+				input: typeof call.custom?.input === "string" ? call.custom.input : ""
+			});
+			continue;
+		}
 		if (call?.type !== undefined && call.type !== "function") {
 			drop(state, `tool_call:${call.type}`);
 			continue;
@@ -180,6 +191,7 @@ function assistantItems(message, state, round) {
 function convertMessages(list, state, round) {
 	const input = [];
 	const lead = [];
+	const custom = new Set();
 	for (const message of list) {
 		switch (message?.role) {
 			case "system":
@@ -197,10 +209,14 @@ function convertMessages(list, state, round) {
 				});
 				break;
 			case "assistant":
-				input.push(...assistantItems(message, state, round));
+				input.push(...assistantItems(message, state, round, custom));
 				break;
 			case "tool":
-				input.push({ type: "function_call_output", call_id: message.tool_call_id, output: toolOutput(message.content, state) });
+				input.push({
+					type: custom.has(message.tool_call_id) ? "custom_tool_call_output" : "function_call_output",
+					call_id: message.tool_call_id,
+					output: toolOutput(message.content, state)
+				});
 				break;
 			default:
 				throw new TranslatorError(`messages: unsupported role "${message?.role}"`, { code: "invalid_request", param: "messages" });
@@ -489,6 +505,12 @@ export function response(reply, state, settings) {
 				type: "function",
 				function: { name: item.name, arguments: typeof item.arguments === "string" ? item.arguments : "{}" }
 			});
+		} else if (item?.type === "custom_tool_call") {
+			calls.push({
+				id: item.call_id ?? item.id,
+				type: "custom",
+				custom: { name: item.name, input: typeof item.input === "string" ? item.input : "" }
+			});
 		}
 	}
 	const message = { role: "assistant", content: text.length === 0 && calls.length > 0 ? null : text.join("") };
@@ -558,9 +580,11 @@ export async function* stream(source, state, settings) {
 		const known = entry(index);
 		if (known.tool !== null) return;
 		known.tool = tools++;
-		yield chunk({
-			tool_calls: [{ index: known.tool, id: item.call_id ?? item.id, type: "function", function: { name: item.name, arguments: "" } }]
-		});
+		const call =
+			item.type === "custom_tool_call"
+				? { type: "custom", custom: { name: item.name, input: "" } }
+				: { type: "function", function: { name: item.name, arguments: "" } };
+		yield chunk({ tool_calls: [{ index: known.tool, id: item.call_id ?? item.id, ...call }] });
 	}
 	function* text(value) {
 		if (value === "") return;
@@ -583,7 +607,7 @@ export async function* stream(source, state, settings) {
 				id = `chatcmpl-${String(data.response?.id ?? "").replace(/^resp_/, "") || id.slice(9)}`;
 				model = state?.model ?? data.response?.model;
 				yield chunk({ role: "assistant", content: "" });
-			} else if (type === "response.output_item.added" && data.item?.type === "function_call") {
+			} else if (type === "response.output_item.added" && (data.item?.type === "function_call" || data.item?.type === "custom_tool_call")) {
 				yield* start(index, data.item);
 			} else if (type === "response.output_text.delta") {
 				entry(index).streamed = true;
@@ -603,6 +627,10 @@ export async function* stream(source, state, settings) {
 			} else if (type === "response.reasoning_summary_text.delta" || type === "response.reasoning_text.delta") {
 				entry(index).streamed = true;
 				yield chunk({ [s.reasoningField]: data.delta ?? "" });
+			} else if (type === "response.custom_tool_call_input.delta") {
+				const known = entry(index);
+				known.streamed = true;
+				if (known.tool !== null) yield chunk({ tool_calls: [{ index: known.tool, custom: { input: data.delta ?? "" } }] });
 			} else if (type === "response.function_call_arguments.delta") {
 				const known = entry(index);
 				known.streamed = true;
@@ -623,6 +651,11 @@ export async function* stream(source, state, settings) {
 							if (!known.streamed) yield* text(part.text ?? "");
 							if (!known.annotated) yield* cite(part.annotations, start);
 						} else if (part?.type === "refusal" && !known.streamed) yield chunk({ refusal: part.refusal ?? "" });
+					}
+				} else if (item.type === "custom_tool_call") {
+					yield* start(index, item);
+					if (!known.streamed && typeof item.input === "string" && item.input !== "") {
+						yield chunk({ tool_calls: [{ index: known.tool, custom: { input: item.input } }] });
 					}
 				} else if (item.type === "function_call") {
 					yield* start(index, item);
