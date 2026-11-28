@@ -99,6 +99,7 @@ export function request(body, settings) {
 	if (typeof body.truncation === "string" && body.truncation !== "disabled")
 		skip(state, s, "truncation", 'truncation: only "disabled" is supported');
 
+	/** @type {any[]} */
 	const messages = [];
 	if (typeof body.instructions === "string" && body.instructions !== "") messages.push({ role: "system", content: body.instructions });
 	const carried = s.reasoningRoundTrip;

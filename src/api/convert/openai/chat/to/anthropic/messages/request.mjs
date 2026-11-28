@@ -131,6 +131,7 @@ export async function request(chatBody, settings, context) {
 				break;
 			}
 			case "tool": {
+				/** @type {any} */
 				const result = { type: "tool_result", tool_use_id: fitId(message.tool_call_id), content: plainText(message.content) };
 				// A screenshot a Responses client returned for a computer call: an image block.
 				if (message.llmt_screenshot !== undefined) result.content = [screenshotBlock(message.llmt_screenshot.url)];

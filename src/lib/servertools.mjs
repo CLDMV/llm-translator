@@ -98,7 +98,7 @@ export function kind(type) {
  * @throws {TranslatorError} `INVALID_CONFIG` for an executor with no usable `type`, `schema` or `run`, or a `maxRounds` that is not a positive whole number.
  */
 export function normalize(value) {
-	if (value === undefined || value === null) return { executors: [], maxRounds: undefined };
+	if (value === undefined || value === null) return { executors: [], maxRounds: undefined, mcp: undefined };
 	const spec = Array.isArray(value) ? { executors: value } : value;
 	const executors = spec.executors ?? [];
 	const bad = (message) => new TranslatorError(`serverTools: ${message}`, { code: "INVALID_CONFIG", status: 500 });

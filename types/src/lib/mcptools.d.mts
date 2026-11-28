@@ -76,14 +76,11 @@ export function requestItem(plan: any, call: {
 /**
  * The `mcp_call` item for a call the runner made.
  * @param {any} plan - The MCP plan.
- * @param {{name: string, input: any}} made - The call the model made.
+ * @param {any} made - The call the model made (`{ name, input }`, with the id it was made under).
  * @param {any} content - The result content (`{ text, error }`, or an error object when the arguments were not an object).
  * @returns {any} The item.
  */
-export function madeItem(plan: any, made: {
-    name: string;
-    input: any;
-}, content: any): any;
+export function madeItem(plan: any, made: any, content: any): any;
 /**
  * The function name that forces a tool, for `tool_choice` `{ type: "mcp", server_label, name }`.
  * @param {any} plan - The MCP plan.

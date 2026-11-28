@@ -380,7 +380,7 @@ async function* converted(source, state, settings) {
  */
 export async function* stream(source, state, settings) {
 	const iterator = messages(source)[Symbol.asyncIterator]();
-	const first = await iterator.next();
+	const first = /** @type {any} */ (await iterator.next());
 	/**
 	 * The messages again, from the one that was read to see what kind of stream this is.
 	 * @returns {AsyncGenerator<any>} Messages.

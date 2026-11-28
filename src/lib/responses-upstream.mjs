@@ -145,7 +145,7 @@ function reasoningItems(message) {
  * Responses input items for one Chat Completions assistant message: its reasoning items, its text and its tool calls, with each
  * reasoning item before the part it preceded.
  * @param {any} message - Chat assistant message.
- * @param {{ dropped: string[] }} state - Conversion state.
+ * @param {{ dropped: string[], nativeHosted?: boolean }} state - Conversion state.
  * @param {boolean} round - Whether reasoning items travel (`reasoningRoundTrip`).
  * @param {Set<string>} custom - Receives the ids of the custom tool calls, so their results become `custom_tool_call_output` items.
  * @returns {any[]} Input items.
@@ -192,7 +192,7 @@ function assistantItems(message, state, round, custom) {
 /**
  * The Responses `input` and `instructions` for Chat Completions messages.
  * @param {any[]} list - Chat messages.
- * @param {{ dropped: string[] }} state - Conversion state.
+ * @param {{ dropped: string[], nativeHosted?: boolean }} state - Conversion state.
  * @param {boolean} round - Whether reasoning items travel.
  * @returns {{ input: any[], instructions: string }} Conversation items and the leading system text.
  */
@@ -247,7 +247,7 @@ function convertMessages(list, state, round) {
 /**
  * Responses tools for Chat Completions tools. Chat's `strict` defaults to off and Responses' to on, so it is always written.
  * @param {any[]} tools - Chat tools.
- * @param {{ dropped: string[] }} state - Conversion state.
+ * @param {{ dropped: string[], nativeHosted?: boolean }} state - Conversion state.
  * @returns {any[]} Responses tools.
  */
 function convertTools(tools, state) {
@@ -346,6 +346,7 @@ export function request(chat, settings) {
 	if (chat.n !== undefined && chat.n !== 1) {
 		throw new TranslatorError("n: only a single choice (n = 1) is supported", { code: "unsupported_field", param: "n" });
 	}
+	/** @type {any} */
 	const state = {
 		front: "openai",
 		model: chat.model,

@@ -367,7 +367,7 @@ export function requestItem(plan, call) {
 /**
  * The `mcp_call` item for a call the runner made.
  * @param {any} plan - The MCP plan.
- * @param {{name: string, input: any}} made - The call the model made.
+ * @param {any} made - The call the model made (`{ name, input }`, with the id it was made under).
  * @param {any} content - The result content (`{ text, error }`, or an error object when the arguments were not an object).
  * @returns {any} The item.
  */
