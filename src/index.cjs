@@ -14,21 +14,13 @@
  */
 
 /**
- * CommonJS entry point — a thin, synchronous re-export of the real ESM build.
+ * @fileoverview CommonJS entry point: the generic CLDMV drop-in shim
+ * (CLDMV/.github docs/conventions/package-layout.md).
  *
- * Node's `require()` can load an ES module synchronously and get back its
- * exports directly as long as the target module doesn't use top-level await,
- * so this shim re-exports dist/index.mjs instead of tsup bundling a second,
- * independent copy of the library for the CJS format.
- *
- * Node.js versions without require(esm) (before 24) would fail with
- * a bare ERR_REQUIRE_ESM, so the check below fails early with a message that
- * says what to do instead.
- *
- * tsup.config.mjs copies this file verbatim to dist/index.cjs, so it never
- * passes through esbuild itself. Its `require("./index.mjs")` resolves to the
- * sibling src/index.mjs in a checkout and to the bundle in dist/.
- *
+ * It returns what `import` gives. The package exports several distinct values, so
+ * `require("@cldmv/llm-translator")` is the module object (`{ default, createTranslator, ... }`).
+ * tsup.config.mjs copies it verbatim into dist/, where `./index.mjs` resolves to the built entry
+ * (in a checkout, to the sibling src/index.mjs).
  * @module @cldmv/llm-translator
  */
 "use strict";
@@ -41,4 +33,12 @@ if (!process.features?.require_module) {
 	throw error;
 }
 
-module.exports = require("./index.mjs");
+// Same exports as `import`. One distinct exported value (aliases of it count once) comes back as that value,
+// so require(x)(...) works; anything else comes back as the module object ({ default, ...named }).
+const esm = require("./index.mjs");
+const values = new Set(
+	Object.keys(esm)
+		.filter((key) => key !== "__esModule")
+		.map((key) => esm[key])
+);
+module.exports = values.size === 1 ? values.values().next().value : esm;

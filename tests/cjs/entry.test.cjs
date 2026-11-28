@@ -74,7 +74,8 @@ test("CJS shim re-exports the ESM entry", async () => {
 		"webSearch"
 	]);
 	assert.deepEqual(names, Object.keys(esm).sort());
-	assert.equal(cjs.createTranslator, esm.createTranslator);
+	assert.equal(typeof cjs, "object");
+	for (const name of names) assert.equal(cjs[name], esm[name], `${name} is a different value`);
 });
 
 test("dist mirrors the api folder slothlet scans", () => {
