@@ -82,7 +82,7 @@ describe("the tool table", () => {
 			image_generation: "rejected",
 			local_shell: "rejected",
 			computer_use_preview: "rejected",
-			mcp: "rejected"
+			mcp: "emulated"
 		});
 		expect(rowOf("web_searcher")).toBeUndefined();
 		expect(rowOf(undefined)).toBeUndefined();

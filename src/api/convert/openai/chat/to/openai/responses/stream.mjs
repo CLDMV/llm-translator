@@ -206,7 +206,21 @@ async function* converted(source, state, settings) {
 			yield emit("response.code_interpreter_call_code.done", { ...at, code: item.code });
 			yield emit("response.code_interpreter_call.interpreting", at);
 			yield emit("response.code_interpreter_call.completed", at);
-		} else if (item.type === "compaction") {
+		} else if (item.type === "mcp_list_tools") {
+			// UNSURE: the event names follow OpenAI's documented `response.mcp_list_tools.*` family.
+			yield emit("response.output_item.added", { output_index: index, item: { ...item, tools: [] } });
+			yield emit("response.mcp_list_tools.in_progress", at);
+			yield emit(item.error === undefined ? "response.mcp_list_tools.completed" : "response.mcp_list_tools.failed", at);
+		} else if (item.type === "mcp_call") {
+			yield emit("response.output_item.added", {
+				output_index: index,
+				item: { ...item, output: null, error: null, status: "in_progress" }
+			});
+			yield emit("response.mcp_call.in_progress", at);
+			yield emit("response.mcp_call_arguments.delta", { ...at, delta: item.arguments });
+			yield emit("response.mcp_call_arguments.done", { ...at, arguments: item.arguments });
+			yield emit(item.error === null ? "response.mcp_call.completed" : "response.mcp_call.failed", at);
+		} else if (item.type === "compaction" || item.type === "mcp_approval_request") {
 			// UNSURE: OpenAI documents no events of its own for the compaction item; it is sent as an added and a done item.
 			yield emit("response.output_item.added", { output_index: index, item });
 		} else {

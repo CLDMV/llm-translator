@@ -44,6 +44,20 @@ export function argumentsOf(value: unknown): string;
  */
 export function parsed(text: unknown): Record<string, any>;
 /**
+ * The function name an MCP tool is offered to the model under: `mcp_<server_label>_<tool>` with every character outside `[A-Za-z0-9_-]` replaced by
+ * `_`, and a hash suffix instead of the tail when it would be longer than 64 characters (the limit of function names).
+ * @param {string} label - The `server_label`.
+ * @param {string} name - The tool's name on the server.
+ * @returns {string} The function name.
+ */
+export function mcpName(label: string, name: string): string;
+/**
+ * Whether a Responses input item is one of the MCP items (`mcp_list_tools`, `mcp_call`, `mcp_approval_request`, `mcp_approval_response`).
+ * @param {any} item - Input item.
+ * @returns {boolean} True for an MCP item.
+ */
+export function mcpItem(item: any): boolean;
+/**
  * The Responses item of a client-executed tool call, from the function call the model made.
  * UNSURE: `shell_call` is `{ id, type, call_id, status, action: { commands, timeout_ms, max_output_length } }` and `apply_patch_call` is
  * `{ id, type, call_id, status, operation: { type, path, diff } }`.
@@ -88,7 +102,7 @@ export function nativeMark(message: any): boolean;
  * @property {string} kind - The tool's name in this module.
  * @property {RegExp} match - Matches the tool's `type`.
  * @property {"mapped" | "emulated" | "rejected"} handling - What the translator does.
- * @property {"function" | "custom" | "serverTools" | "none"} via - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
+ * @property {"function" | "custom" | "serverTools" | "mcp" | "none"} via - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
  * @property {string} [executor] - For `via: "serverTools"`: the tool type pattern an executor must serve.
  * @property {string} [offered] - The name of the function the model is offered (emulated tools).
  * @property {string} note - One line for the documentation and the error message.
@@ -153,7 +167,7 @@ export type ToolRow = {
     /**
      * - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
      */
-    via: "function" | "custom" | "serverTools" | "none";
+    via: "function" | "custom" | "serverTools" | "mcp" | "none";
     /**
      * - For `via: "serverTools"`: the tool type pattern an executor must serve.
      */

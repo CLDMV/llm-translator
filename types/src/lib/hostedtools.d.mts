@@ -13,7 +13,7 @@ export function view(kind: string, tool?: any): any;
  * @param {any} c - Captured translator parts (`capture`).
  * @param {any} body - Chat body of a Responses request (markers from the request converter).
  * @param {any} options - The `send` options (`serverTools`).
- * @returns {{executors: any[], maxRounds: number, tools: Map<string, {tool: any, executor: any, member?: any}>, hosted: Map<any, any[]>, loaded: Set<string> | null} | null} The plan, or null for the normal path.
+ * @returns {{executors: any[], maxRounds: number, tools: Map<string, {tool: any, executor: any, member?: any}>, hosted: Map<any, any[]>, loaded: Set<string> | null, mcp: any} | null} The plan (`mcp` is the part for the `mcp` tool, see `lib/mcptools.mjs`), or null for the normal path.
  * @throws {TranslatorError} `unsupported_tool`, status 400, `param` the tool's path, for a hosted tool with no executor in `serverTools`.
  */
 export function wants(c: any, body: any, options: any): {
@@ -26,6 +26,7 @@ export function wants(c: any, body: any, options: any): {
     }>;
     hosted: Map<any, any[]>;
     loaded: Set<string> | null;
+    mcp: any;
 } | null;
 /**
  * Whether the request goes to an upstream that takes hosted tools as they are: the Responses protocol with `hostedTools: "native"`.

@@ -6,13 +6,14 @@
 export function kind(type: string): string;
 /**
  * Validate the `serverTools` option of the config or of a `send` call.
- * @param {any} value - `undefined`, an array of executors, or `{ executors, maxRounds }`.
- * @returns {{executors: any[], maxRounds: number | undefined}} Normalized option.
+ * @param {any} value - `undefined`, an array of executors, or `{ executors, maxRounds, mcp }`.
+ * @returns {{executors: any[], maxRounds: number | undefined, mcp: any}} Normalized option (`mcp` is the allowlist for the Responses `mcp` tool, see `lib/mcp.mjs`, or undefined).
  * @throws {TranslatorError} `INVALID_CONFIG` for an executor with no usable `type`, `schema` or `run`, or a `maxRounds` that is not a positive whole number.
  */
 export function normalize(value: any): {
     executors: any[];
     maxRounds: number | undefined;
+    mcp: any;
 };
 /**
  * The executor for a tool type.
@@ -153,7 +154,7 @@ export function run({ body, plan, options, send: direct, warn, c }: {
  * @property {(content: any, offset?: number) => string} [read] The text the upstream model reads for a successful result (default: the content as JSON); `offset` is the number of citable items before it in the request.
  * @property {(item: any) => any} [cite] The citation of one item of a result's `content` array; makes the executor's results citable with `[[cite:N]]` markers.
  */
-/** @typedef {ServerToolExecutor[] | {executors?: ServerToolExecutor[], maxRounds?: number}} ServerTools */
+/** @typedef {ServerToolExecutor[] | {executors?: ServerToolExecutor[], maxRounds?: number, mcp?: {hosts: string[], timeout?: number, maxResponse?: number, fetch?: Function, lookup?: Function}}} ServerTools */
 /** The default number of upstream calls one request may make. */
 export const ROUNDS: 10;
 export type ServerToolExecutor = {
@@ -228,4 +229,11 @@ export type ServerToolExecutor = {
 export type ServerTools = ServerToolExecutor[] | {
     executors?: ServerToolExecutor[];
     maxRounds?: number;
+    mcp?: {
+        hosts: string[];
+        timeout?: number;
+        maxResponse?: number;
+        fetch?: Function;
+        lookup?: Function;
+    };
 };

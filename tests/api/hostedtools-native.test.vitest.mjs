@@ -183,6 +183,9 @@ describe("what a native request needs, and where it is refused", () => {
 		expect(reply.status).toBe(400);
 		expect(reply.body.error).toMatchObject({ code: "unsupported_tool", param: "tools[1]" });
 		expect(reply.body.error.message).toContain('"native"');
+		const unknown = await respond(api, { model: "gpt-x", input: "hi", tools: [{ type: "mystery_tool" }] });
+		expect(unknown.reply.body.error).toMatchObject({ code: "unsupported_tool", param: "tools[0]" });
+		expect(unknown.reply.body.error.message).toContain("does not know it");
 		const item = await respond(api, {
 			model: "gpt-x",
 			input: [
@@ -292,7 +295,7 @@ describe("strip", () => {
 		);
 		expect(JSON.stringify(body)).toContain("llmt_native_choice");
 		const plain = strip(body);
-		expect(JSON.stringify(plain).replace(/llmt_native_\d+/g, "")).not.toContain("llmt_");
+		expect(JSON.stringify(plain).replace(/llmt_(native|mcp)_\d+/g, "")).not.toContain("llmt_");
 		expect(plain.messages.every((message) => message.role !== undefined)).toBe(true);
 		expect(plain.messages.length).toBeLessThan(body.messages.length);
 		const counted = await api.token.count(body);
@@ -347,6 +350,31 @@ describe("edges", () => {
 			);
 		}
 		expect(transport.calls).toHaveLength(3);
+	});
+
+	it("replays a failed code_interpreter_call as an error result", async () => {
+		const { api, transport } = await start({ api: "chat" }, {}, () => ({
+			body: {
+				id: "c",
+				object: "chat.completion",
+				created: 1,
+				model: "gpt-x",
+				choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }]
+			}
+		}));
+		await respond(
+			api,
+			{
+				model: "gpt-x",
+				input: [
+					{ role: "user", content: "x" },
+					{ type: "code_interpreter_call", id: "ci", code: "1", status: "failed" },
+					{ role: "user", content: "y" }
+				]
+			},
+			{}
+		);
+		expect(JSON.parse(transport.calls[0].init.body).messages[2].content).toContain("code_execution_tool_result_error");
 	});
 
 	it("replays a code_interpreter_call that has no outputs", async () => {

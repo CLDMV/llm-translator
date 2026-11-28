@@ -57,7 +57,8 @@ const HANDLED = new Set([
 	"safety_identifier",
 	"verbosity",
 	"llmt_native_choice",
-	"llmt_native_include"
+	"llmt_native_include",
+	"llmt_mcp_choice"
 ]);
 
 /**

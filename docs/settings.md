@@ -411,6 +411,27 @@ An empty or missing pattern or query, a pattern or query over its limit, an inva
 
 An executor sets `deferred: true` to get this behavior for a search of its own: the runner withholds the request's `defer_loading` tools until a result's `tool_references` (or the history) names them, and `details.context.tools` holds the request's tools for the search.
 
+### MCP servers (`serverTools.mcp`)
+
+The Responses API's `mcp` tool makes the translator call an MCP server, at a URL the client chose. That is an outbound call to an address somebody else picked, so it is off until `serverTools.mcp` names the hosts that may be called; without it a request with an `mcp` tool (or an `mcp_*` input item) is refused with `unsupported_tool` (`unsupported_content`) and a hint to configure it:
+
+```js
+const translator = await createTranslator({
+	upstreams: ["http://localhost:8000"],
+	serverTools: { mcp: { hosts: ["mcp.example.com", "*.corp.example.com"] } }
+});
+```
+
+- `hosts` (required): host names or addresses. An entry is a host name or address as written (`mcp.example.com`, `10.1.2.3`, `::1`), or `*.example.com` for any subdomain of it (not the domain itself). A URL whose host matches no entry is refused with `unsupported_tool` and `param: tools[i].server_url`.
+- Private and loopback addresses: every address the host resolves to must be public (loopback, private, link-local, unique-local, carrier-grade NAT, multicast and reserved ranges are not), unless the host is named exactly in `hosts`. A name that matches only a wildcard cannot be pointed at the inside network. To call a server on `localhost` or a LAN address, list it by name.
+- The URL must be `http` or `https` and carry no credentials. Redirects are not followed. A reply is read up to `maxResponse` bytes (default 4 MiB) and a call takes at most `timeout` ms (default 30000).
+- `fetch` and `lookup` replace `fetch` and `dns.lookup` (for tests and for a proxy).
+- `send(body, { serverTools: { mcp } })` takes the same value and wins over the config.
+
+The client speaks Streamable HTTP with JSON-RPC 2.0: `initialize` (protocol revision 2025-06-18, with the server's own `Mcp-Session-Id` and negotiated `MCP-Protocol-Version` sent back on later calls), `notifications/initialized`, `tools/list` (every page, at most 20) and `tools/call`; replies may be JSON or Server-Sent Events, and the session is ended with a `DELETE` when the request is done. `authorization` is sent as `Authorization: Bearer <value>` (a value that already has a scheme is sent as it is) and `headers` as they are, to that server only. Neither is put in an event, an error message, an item or the response parameters the translator echoes (and stores).
+
+What the model sees and what the client gets: the tools the server lists (filtered by `allowed_tools`, a list of names or `{ tool_names, read_only }`) are offered as functions named `mcp_<server_label>_<tool>`. The response starts with an `mcp_list_tools` item (it is left out when the input already has one for that label, and the listing is then taken from it). A call of a tool that `require_approval` does not cover (`"never"`, or the tool in `never.tool_names`) is made at once and returned as an `mcp_call` item, and its result goes to the model. A call that `require_approval` covers (the default is `"always"`) is not made: the turn ends with an `mcp_approval_request` item, and the client sends it back with an `mcp_approval_response` (`approve: true` makes the call, which starts the next response as an `mcp_call` item with `approval_request_id`; `false` tells the model it was not approved). `tool_choice: { type: "mcp", server_label, name? }` forces that tool, or any tool, of the server. `connector_id` (OpenAI's own connectors) is refused. Sent natively (`hostedTools: "native"` on a Responses upstream) the tool and its items go to OpenAI as they are and none of this applies.
+
 ## Upstream `api` (not a converter setting)
 
 `api` is set on an upstream, next to `url` and `backend`, not in `settings`. It picks the protocol the translator speaks to that upstream: `"auto"` (the default), `"anthropic.messages"`, `"openai.chat"`, `"openai.responses"`, `"ollama.chat"`, `"bedrock.converse"`, `"google.gemini"` or `"cohere.chat"`, plus the aliases `"converse"`, `"gemini"`, `"google"` and `"cohere"` and the aliases `"messages"`, `"anthropic"`, `"claude"`, `"chat"`, `"openai"`, `"chatgpt"`, `"responses"`, `"codex"`, `"native"` and `"ollama"`. Under `"auto"` each request goes over the client's own protocol when the driver's server speaks it (Chat Completions otherwise) and falls back to the next one when the server answers 404, 405 or 501; an explicit value is always that protocol and never falls back. The full rules, the per-driver protocol lists and the fall back are in [drivers.md](drivers.md#choosing-the-protocol-api).

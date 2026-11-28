@@ -44,12 +44,13 @@ import { mergeDetail, reasoningOf } from "./thinking.mjs";
 import { seal } from "./websearch.mjs";
 import { resolve as route } from "./route.mjs";
 import { RESPONSES } from "./protocol.mjs";
-import { TOOLS, hostedMark, nativeMark, replayMark, refusal } from "./responses-tools.mjs";
+import { TOOLS, hostedMark, mcpItem, nativeMark, replayMark, refusal } from "./responses-tools.mjs";
+import * as mcptools from "./mcptools.mjs";
 import { TranslatorError } from "./errors.mjs";
 import { ROUNDS, add, citable, execute, failed, find, normalize, render } from "./servertools.mjs";
 
 /** The fields the request converter adds for a Responses upstream that takes hosted tools as they are. */
-const NATIVE_FIELDS = ["llmt_native_choice", "llmt_native_include", "llmt_compact"];
+const NATIVE_FIELDS = ["llmt_native_choice", "llmt_native_include", "llmt_compact", "llmt_mcp_choice"];
 
 const DONE = { data: "[DONE]" };
 
@@ -146,7 +147,7 @@ function contentOf(kind, item) {
  * @param {any} c - Captured translator parts (`capture`).
  * @param {any} body - Chat body of a Responses request (markers from the request converter).
  * @param {any} options - The `send` options (`serverTools`).
- * @returns {{executors: any[], maxRounds: number, tools: Map<string, {tool: any, executor: any, member?: any}>, hosted: Map<any, any[]>, loaded: Set<string> | null} | null} The plan, or null for the normal path.
+ * @returns {{executors: any[], maxRounds: number, tools: Map<string, {tool: any, executor: any, member?: any}>, hosted: Map<any, any[]>, loaded: Set<string> | null, mcp: any} | null} The plan (`mcp` is the part for the `mcp` tool, see `lib/mcptools.mjs`), or null for the normal path.
  * @throws {TranslatorError} `unsupported_tool`, status 400, `param` the tool's path, for a hosted tool with no executor in `serverTools`.
  */
 export function wants(c, body, options) {
@@ -166,6 +167,8 @@ export function wants(c, body, options) {
 	const hosted = new Map();
 	for (const tool of marked) {
 		const { kind, at, tool: original } = tool.llmt_hosted;
+		// An mcp tool has no executor: its server is listed and called by `mcptools` once the run starts.
+		if (kind === "mcp") continue;
 		const row = TOOLS.find((entry) => entry.kind === kind);
 		const shown = view(kind, original);
 		const executor = find(executors, shown.type);
@@ -187,7 +190,13 @@ export function wants(c, body, options) {
 			for (const name of namesOf(contentOf("tool_search", message.llmt_hosted.item))) loaded.add(name);
 		}
 	}
-	return { executors, maxRounds: own.maxRounds ?? global.maxRounds ?? ROUNDS, tools, hosted, loaded: searching ? loaded : null };
+	const servers = marked.filter((tool) => tool.llmt_hosted.kind === "mcp");
+	const items = (Array.isArray(body.messages) ? body.messages : []).filter(
+		(message) => nativeMark(message) && mcpItem(message.llmt_native.item)
+	);
+	const mcp = servers.length > 0 || items.length > 0 ? mcptools.plan(servers, items, own.mcp ?? global.mcp) : undefined;
+	for (const server of servers) hosted.set(server, []);
+	return { executors, maxRounds: own.maxRounds ?? global.maxRounds ?? ROUNDS, tools, hosted, loaded: searching ? loaded : null, mcp };
 }
 
 /**
@@ -227,18 +236,19 @@ export function refuse(body, all) {
 	for (const tool of Array.isArray(body?.tools) ? body.tools : []) {
 		if (!hostedMark(tool) || (!all && tool.llmt_hosted.native !== true)) continue;
 		const { kind, at, tool: original } = tool.llmt_hosted;
-		const row = TOOLS.find((entry) => entry.kind === kind);
+		const note = kind === "unknown" ? "the translator does not know it." : TOOLS.find((entry) => entry.kind === kind).note;
 		throw refusal(
 			at,
-			`unsupported tool type ${JSON.stringify(original.type)}: ${row?.note ?? "the translator does not know it"} It can only go to an upstream on the Responses API (api: "responses") with the hostedTools setting "native".`
+			`unsupported tool type ${JSON.stringify(original.type)}: ${note} It can only go to an upstream on the Responses API (api: "responses") with the hostedTools setting "native".`
 		);
 	}
 	for (const message of Array.isArray(body?.messages) ? body.messages : []) {
-		const item = nativeMark(message)
-			? message.llmt_native
-			: replayMark(message) && all
-				? { item: message.llmt_hosted.item, at: undefined }
-				: null;
+		const item =
+			nativeMark(message) && (all || !mcpItem(message.llmt_native.item))
+				? message.llmt_native
+				: replayMark(message) && all
+					? { item: message.llmt_hosted.item, at: undefined }
+					: null;
 		if (item === null) continue;
 		const at = item.at ?? "input";
 		throw new TranslatorError(
@@ -337,6 +347,8 @@ export function rewrite(body, plan, history, extra = []) {
 	const gone = tools.length === 0 ? ["tool_choice", "parallel_tool_calls"] : [];
 	const out = { ...rest, ...(tools.length > 0 ? { tools } : {}), messages: [...history, ...extra] };
 	for (const name of gone) delete out[name];
+	if (body.llmt_mcp_choice !== undefined && plan.mcp !== undefined && tools.length > 0)
+		out.tool_choice = mcptools.choose(plan.mcp, body.llmt_mcp_choice);
 	return out;
 }
 
@@ -375,10 +387,12 @@ export function strip(body) {
  * @param {{id: string, input: any}} call - The call: its Chat id and parsed input.
  * @param {{result: any}} done - Result of `execute`.
  * @param {any} state - Request-wide state (`fallbackContainer`, `functions`).
+ * @param {any} plan - Plan from {@link wants}.
  * @returns {any[]} Output items.
  */
-function itemsOf(kind, call, done, state) {
+function itemsOf(kind, call, done, state, plan) {
 	const content = done.result.content;
+	if (kind === "mcp") return [mcptools.madeItem(plan.mcp, call, content)];
 	const bad = failed(content);
 	const status = bad ? "failed" : "completed";
 	if (kind === "web_search") {
@@ -495,7 +509,9 @@ export async function run({ body, plan, options, send: direct, warn, c }) {
 		})
 	);
 	const attach = (reply) => Object.defineProperty(reply, "usage", { value: usage, enumerable: false, configurable: true });
-	const earlier = past(body.messages, plan);
+	const announce = (spec) => emit(c, { ...spec, log: options.log });
+	let earlier;
+	let prefix = [];
 	/**
 	 * One upstream call: a `send` whose usage report is collected.
 	 * @param {any[]} extra - Messages the earlier rounds appended.
@@ -529,8 +545,8 @@ export async function run({ body, plan, options, send: direct, warn, c }) {
 			container: undefined
 		},
 		files: c.files(),
-		announce: (spec) => emit(c, { ...spec, log: options.log }),
-		sources: earlier.sources,
+		announce,
+		sources: [],
 		offsets: new Map(),
 		fallbackContainer: `cntr_${randomBytes(12).toString("hex")}`,
 		functions: new Map(
@@ -549,20 +565,45 @@ export async function run({ body, plan, options, send: direct, warn, c }) {
 	const stream = body.stream === true;
 	let handed = false;
 	try {
+		let messages = body.messages;
+		if (plan.mcp !== undefined) {
+			({ messages, prefix } = await mcptools.prepare({
+				plan: plan.mcp,
+				tools: plan.tools,
+				hosted: plan.hosted,
+				messages,
+				signal: options.signal,
+				announce
+			}));
+		}
+		earlier = past(messages, plan);
+		state.sources = earlier.sources;
 		const first = await ask([]);
 		if (stream ? first.stream === undefined : first.status !== 200) return attach(first);
-		if (plan.tools.size === 0) {
+		if (plan.tools.size === 0 && plan.mcp === undefined) {
 			// Only replayed history to render: the one round is the answer as it came.
 			if (stream) handed = true;
 			return attach(stream ? { ...first, stream: relay(first.stream, finish) } : first);
 		}
-		if (!stream) return attach(await collected({ first, ask, plan, state }));
+		if (!stream) return attach(await collected({ first, ask, plan, state, prefix }));
 		handed = true;
-		return attach({ status: 200, headers: first.headers, stream: streaming({ first, ask, plan, state, finish }) });
+		return attach({ status: 200, headers: first.headers, stream: streaming({ first, ask, plan, state, finish, prefix }) });
 	} finally {
 		// A stream settles the report itself, when it ends.
-		if (!handed) finish();
+		if (!handed) {
+			await close(plan);
+			finish();
+		}
 	}
+}
+
+/**
+ * End the sessions of the MCP servers a run used.
+ * @param {any} plan - Plan from {@link wants}.
+ * @returns {Promise<void>} Resolves when they are closed.
+ */
+async function close(plan) {
+	if (plan.mcp !== undefined) await mcptools.close(plan.mcp);
 }
 
 /**
@@ -584,12 +625,12 @@ async function* relay(source, finish) {
  * @param {any} spec - `{ first, ask, plan, state }`.
  * @returns {Promise<any>} The reply.
  */
-async function collected({ first, ask, plan, state }) {
+async function collected({ first, ask, plan, state, prefix }) {
 	let reply = first;
 	let rounds = 1;
 	let sum;
 	const extra = [];
-	const done = [];
+	const done = prefix.length > 0 ? [{ message: {}, hosted: prefix }] : [];
 	for (;;) {
 		const completion = reply.body;
 		const choice = completion.choices[0];
@@ -599,9 +640,16 @@ async function collected({ first, ask, plan, state }) {
 		const known = state.sources.slice();
 		const calls = hostedCalls(message, plan);
 		const ran = [];
+		// An mcp tool call that needs the client's approval is asked about, not made, and ends the turn.
+		let asking = false;
 		for (const call of calls) {
+			if (mcptools.pending(plan.mcp, call.name)) {
+				asking = true;
+				ran.push({ call, done: null, items: [mcptools.requestItem(plan.mcp, call)] });
+				continue;
+			}
 			const result = await execute(call, plan, state);
-			ran.push({ call, done: result, items: itemsOf(kindOf(plan, call), call, result, state) });
+			ran.push({ call, done: result, items: itemsOf(kindOf(plan, call), call, result, state, plan) });
 		}
 		const client = (message.tool_calls ?? []).filter((call) => !calls.some((entry) => entry.id === call.id));
 		const { tool_calls: _, ...bare } = message;
@@ -609,8 +657,8 @@ async function collected({ first, ask, plan, state }) {
 			message: annotated(client.length > 0 ? { ...bare, tool_calls: client } : bare, known),
 			hosted: ran.flatMap((entry) => entry.items)
 		});
-		const pause = calls.length > 0 && client.length === 0 && rounds >= plan.maxRounds;
-		if (calls.length === 0 || client.length > 0 || pause) {
+		const pause = calls.length > 0 && client.length === 0 && !asking && rounds >= plan.maxRounds;
+		if (calls.length === 0 || client.length > 0 || pause || asking) {
 			if (pause) state.announce(paused(rounds));
 			return {
 				status: 200,
@@ -640,7 +688,13 @@ async function collected({ first, ask, plan, state }) {
  */
 function kindOf(plan, call) {
 	const type = plan.tools.get(call.name).tool.type;
-	return type.startsWith("web_search") ? "web_search" : type.startsWith("code_execution") ? "code_interpreter" : "tool_search";
+	return type.startsWith("mcp")
+		? "mcp"
+		: type.startsWith("web_search")
+			? "web_search"
+			: type.startsWith("code_execution")
+				? "code_interpreter"
+				: "tool_search";
 }
 
 /**
@@ -693,7 +747,7 @@ function woven(ops, at) {
  * @param {any} spec - `{ first, ask, plan, state, finish }`.
  * @returns {AsyncGenerator<{event?: string, data: any}>} Chunks.
  */
-async function* streaming({ first, ask, plan, state, finish }) {
+async function* streaming({ first, ask, plan, state, finish, prefix }) {
 	let reply = first;
 	let rounds = 1;
 	let sum;
@@ -703,6 +757,8 @@ async function* streaming({ first, ask, plan, state, finish }) {
 	// What ends the stream, sent after the loop so that nothing follows the last chunk (a consumer may stop reading at `[DONE]`).
 	let tail;
 	try {
+		// The items made before the first round (the tools an MCP server listed, a call the client approved) come first.
+		if (prefix.length > 0) yield { data: { choices: [], llmt_items: prefix } };
 		rounds: for (;;) {
 			iterator = reply.stream[Symbol.asyncIterator]();
 			/** @type {Map<number, {id: string, name: string, json: string[]}>} */
@@ -772,15 +828,21 @@ async function* streaming({ first, ask, plan, state, finish }) {
 			if (rest !== "") yield { data: { ...base, choices: [{ index: 0, delta: { content: rest }, finish_reason: null }] } };
 			const calls = [...held.values()].map((entry) => ({ id: entry.id, name: entry.name, input: inputOf(entry.json.join("")) }));
 			const ran = [];
+			let asking = false;
 			for (const call of calls) {
+				if (mcptools.pending(plan.mcp, call.name)) {
+					asking = true;
+					yield { data: { ...base, choices: [], llmt_items: [mcptools.requestItem(plan.mcp, call)] } };
+					continue;
+				}
 				const result = await execute(call, plan, state);
-				const items = itemsOf(kindOf(plan, call), call, result, state);
+				const items = itemsOf(kindOf(plan, call), call, result, state, plan);
 				ran.push({ call, done: result });
 				yield { data: { ...base, choices: [], llmt_items: items } };
 			}
 			if (waiting.length > 0) yield { data: { ...base, choices: [{ index: 0, delta: { tool_calls: waiting }, finish_reason: null }] } };
-			const pause = calls.length > 0 && !client && rounds >= plan.maxRounds;
-			if (calls.length === 0 || client || pause) {
+			const pause = calls.length > 0 && !client && !asking && rounds >= plan.maxRounds;
+			if (calls.length === 0 || client || pause || asking) {
 				if (pause) state.announce(paused(rounds));
 				// A round that sent no finish reason leaves it null, and the Responses converter fails the response as cut short.
 				tail = [
@@ -816,6 +878,7 @@ async function* streaming({ first, ask, plan, state, finish }) {
 	} finally {
 		// A stream closed early cancels the round in flight so its usage report settles.
 		await iterator?.return();
+		await close(plan);
 		finish();
 	}
 }

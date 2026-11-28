@@ -20,7 +20,7 @@
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { unpack, unsummarize, COMPACTED } from "../../../../../../../lib/responses.mjs";
-import { rowOf, refusal, functionOf, shellText, argumentsOf } from "../../../../../../../lib/responses-tools.mjs";
+import { rowOf, refusal, functionOf, shellText, argumentsOf, mcpItem } from "../../../../../../../lib/responses-tools.mjs";
 
 /** Request fields with a mapping (see `docs/protocol-support.md`). */
 const HANDLED = new Set([
@@ -234,7 +234,7 @@ export function request(body, settings) {
 			const details = unpack(item.encrypted_content);
 			if (carried) pending = { text: (summary.length > 0 ? summary : content).join("\n\n"), details };
 			else if (!state.dropped.includes("reasoning")) state.dropped.push("reasoning");
-		} else if (native && typeof type === "string") {
+		} else if ((native || mcpItem(item)) && typeof type === "string") {
 			pending = null;
 			messages.push({ role: "assistant", content: null, llmt_native: { item, at } });
 		} else {
@@ -268,6 +268,12 @@ export function request(body, settings) {
 			if (choice !== undefined) out.tool_choice = choice;
 		}
 		if (typeof body.parallel_tool_calls === "boolean") out.parallel_tool_calls = body.parallel_tool_calls;
+	}
+	if (body.tool_choice?.type === "mcp" && typeof body.tool_choice.server_label === "string") {
+		out.llmt_mcp_choice = {
+			server_label: body.tool_choice.server_label,
+			...(typeof body.tool_choice.name === "string" ? { name: body.tool_choice.name } : {})
+		};
 	}
 	// What a Responses upstream needs to be sent as it came: the original tool choice and `include` (hosted tools were marked above).
 	if (native && (tools.some((tool) => tool.llmt_hosted !== undefined) || messages.some((message) => message.llmt_native !== undefined))) {
@@ -304,7 +310,7 @@ export function request(body, settings) {
 		temperature: body.temperature ?? null,
 		text: { format: body.text?.format ?? { type: "text" } },
 		tool_choice: body.tool_choice ?? "auto",
-		tools: body.tools ?? [],
+		tools: (body.tools ?? []).map((tool) => (tool?.type === "mcp" ? redacted(tool) : tool)),
 		top_p: body.top_p ?? null,
 		truncation: "disabled",
 		user: out.user ?? null,
@@ -462,6 +468,62 @@ function messageOf(item, at) {
 }
 
 /**
+ * An `mcp` tool without the credentials the client put in it (`authorization`, `headers`), for the request parameters echoed on the response, which a
+ * response store keeps.
+ * @param {any} tool - The `mcp` tool.
+ * @returns {any} A copy without them.
+ */
+function redacted(tool) {
+	const { authorization: _, headers: ___headers, ...rest } = tool;
+	return rest;
+}
+
+/**
+ * Check an `mcp` tool of a request and return it as it is.
+ * @param {any} tool - The tool.
+ * @param {string} at - Path of the tool.
+ * @returns {any} The tool.
+ * @throws {TranslatorError} `invalid_request` for a missing or malformed field.
+ */
+function mcpOf(tool, at) {
+	const bad = (field, message) => new TranslatorError(`${at}.${field} ${message}`, { code: "invalid_request", param: `${at}.${field}` });
+	for (const field of ["server_label", "server_url"])
+		if (typeof tool[field] !== "string" || tool[field] === "") throw bad(field, "is required");
+	if (tool.authorization !== undefined && typeof tool.authorization !== "string") throw bad("authorization", "must be a string");
+	if (
+		tool.headers !== undefined &&
+		(tool.headers === null || typeof tool.headers !== "object" || Object.values(tool.headers).some((v) => typeof v !== "string"))
+	) {
+		throw bad("headers", "must be an object of strings");
+	}
+	const approval = tool.require_approval;
+	const tools = (value) =>
+		value === undefined ||
+		(value !== null && typeof value === "object" && (value.tool_names === undefined || Array.isArray(value.tool_names)));
+	if (
+		approval !== undefined &&
+		approval !== "always" &&
+		approval !== "never" &&
+		!(approval !== null && typeof approval === "object" && !Array.isArray(approval) && tools(approval.always) && tools(approval.never))
+	) {
+		throw bad("require_approval", 'must be "always", "never" or { always, never } with tool_names');
+	}
+	const allowedTools = tool.allowed_tools;
+	if (
+		allowedTools !== undefined &&
+		!Array.isArray(allowedTools) &&
+		!(
+			allowedTools !== null &&
+			typeof allowedTools === "object" &&
+			(allowedTools.tool_names === undefined || Array.isArray(allowedTools.tool_names))
+		)
+	) {
+		throw bad("allowed_tools", "must be a list of tool names or { tool_names, read_only }");
+	}
+	return tool;
+}
+
+/**
  * The Chat tools for the Responses tools, by the table in `lib/responses-tools.mjs`.
  * @param {any[]} list - The request's `tools`.
  * @param {any} state - Converter state; `clientTools` gets the function names of the client-executed tools.
@@ -515,6 +577,20 @@ function toolsOf(list, state, offered, native) {
 			if (tool.format !== undefined && tool.format !== null) custom.format = tool.format;
 			return { type: "custom", custom };
 		}
+		if (row.kind === "mcp") {
+			if (tool.connector_id !== undefined && native) return kept("mcp");
+			if (tool.connector_id !== undefined) {
+				throw refusal(
+					at,
+					'unsupported tool type "mcp" with a connector_id: the translator has no OpenAI connectors; send the server_url of an MCP server instead'
+				);
+			}
+			return {
+				type: "function",
+				function: { name: `llmt_mcp_${position}`, parameters: { type: "object", properties: {} } },
+				llmt_hosted: { kind: "mcp", at: at, tool: mcpOf(tool, at) }
+			};
+		}
 		if (taken.has(row.offered)) {
 			throw refusal(
 				at,
@@ -562,6 +638,7 @@ function choiceOf(choice, offered, native) {
 		const name = row === undefined ? undefined : offered.get(row.kind);
 		return name === undefined ? undefined : { type: "function", function: { name } };
 	};
+	if (choice?.type === "mcp" && typeof choice.server_label === "string") return undefined;
 	const direct = named(choice);
 	if (direct !== undefined) return direct;
 	if (choice?.type === "allowed_tools" && Array.isArray(choice.tools)) {

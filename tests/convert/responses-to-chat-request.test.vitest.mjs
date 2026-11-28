@@ -336,7 +336,7 @@ describe("refusals", () => {
 	});
 
 	it("refuses the tool types with no counterpart, unknown types and malformed tools", () => {
-		for (const type of ["file_search", "image_generation", "local_shell", "mcp", "computer_use_preview"]) {
+		for (const type of ["file_search", "image_generation", "local_shell", "computer_use_preview"]) {
 			const error = refused({ model: "m", input: "x", tools: [{ type }] }, undefined, "unsupported_tool", "tools[0]");
 			expect(error.message).toContain(type);
 		}
@@ -384,7 +384,6 @@ describe("refusals", () => {
 			{ type: "computer_call", id: "cu_1" },
 			{ type: "image_generation_call", id: "ig_1" },
 			{ type: "local_shell_call", id: "ls_1" },
-			{ type: "mcp_call", id: "m_1" },
 			{ id: "no-type" }
 		]) {
 			refused({ model: "m", input: [item] }, undefined, "unsupported_content", "input[0]");

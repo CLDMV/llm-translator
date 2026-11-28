@@ -36,7 +36,7 @@ import { TranslatorError } from "./errors.mjs";
  * @property {string} kind - The tool's name in this module.
  * @property {RegExp} match - Matches the tool's `type`.
  * @property {"mapped" | "emulated" | "rejected"} handling - What the translator does.
- * @property {"function" | "custom" | "serverTools" | "none"} via - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
+ * @property {"function" | "custom" | "serverTools" | "mcp" | "none"} via - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
  * @property {string} [executor] - For `via: "serverTools"`: the tool type pattern an executor must serve.
  * @property {string} [offered] - The name of the function the model is offered (emulated tools).
  * @property {string} note - One line for the documentation and the error message.
@@ -126,9 +126,9 @@ export const TOOLS = Object.freeze([
 	{
 		kind: "mcp",
 		match: /^mcp$/,
-		handling: "rejected",
-		via: "none",
-		note: "The translator does not call remote MCP servers on the model's behalf."
+		handling: "emulated",
+		via: "mcp",
+		note: "The translator calls the MCP server itself (Streamable HTTP); it needs a serverTools.mcp host allowlist. A connector_id is refused."
 	}
 ]);
 
@@ -241,6 +241,30 @@ export function parsed(text) {
 	} catch {
 		return {};
 	}
+}
+
+/**
+ * The function name an MCP tool is offered to the model under: `mcp_<server_label>_<tool>` with every character outside `[A-Za-z0-9_-]` replaced by
+ * `_`, and a hash suffix instead of the tail when it would be longer than 64 characters (the limit of function names).
+ * @param {string} label - The `server_label`.
+ * @param {string} name - The tool's name on the server.
+ * @returns {string} The function name.
+ */
+export function mcpName(label, name) {
+	const plain = `mcp_${label}_${name}`.replace(/[^A-Za-z0-9_-]/g, "_");
+	if (plain.length <= 64) return plain;
+	let hash = 0;
+	for (const char of `${label}\u0000${name}`) hash = (Math.imul(hash, 31) + char.codePointAt(0)) >>> 0;
+	return `${plain.slice(0, 55)}_${hash.toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * Whether a Responses input item is one of the MCP items (`mcp_list_tools`, `mcp_call`, `mcp_approval_request`, `mcp_approval_response`).
+ * @param {any} item - Input item.
+ * @returns {boolean} True for an MCP item.
+ */
+export function mcpItem(item) {
+	return typeof item?.type === "string" && item.type.startsWith("mcp_");
 }
 
 /**
