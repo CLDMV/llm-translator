@@ -318,6 +318,7 @@ function userBlocks(content, state, s) {
 function toolChoice(choice, fit) {
 	if (choice === "none") return { type: "none" };
 	if (choice === "required") return { type: "any" };
-	if (typeof choice === "object" && choice !== null) return { type: "tool", name: fit(choice.function.name) };
+	// A custom tool or an allowed-tools choice has no Anthropic counterpart (custom tools are dropped above), so the model chooses.
+	if (choice?.type === "function" && choice.function) return { type: "tool", name: fit(choice.function.name) };
 	return { type: "auto" };
 }

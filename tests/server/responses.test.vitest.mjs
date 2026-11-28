@@ -339,7 +339,7 @@ describe("responses front, vLLM-like upstream", () => {
 			const server = await api.server.start({ port: 0 });
 			const cases = [
 				[{ ...hello, tools: [{ type: "web_search" }] }, "unsupported_tool", "tools[0]"],
-				[{ ...hello, input: [{ type: "web_search_call", id: "ws_1" }] }, "unsupported_content", "input[0]"],
+				[{ ...hello, input: [{ type: "file_search_call", id: "fs_1" }] }, "unsupported_content", "input[0]"],
 				[{ model: "qwen3-coder" }, "invalid_request", "input"]
 			];
 			for (const [body, code, param] of cases) {

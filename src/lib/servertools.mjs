@@ -126,7 +126,7 @@ export function normalize(value) {
  * @param {string} type - Tool type.
  * @returns {any} The executor, or undefined.
  */
-function find(executors, type) {
+export function find(executors, type) {
 	return executors.find((executor) => (executor.type instanceof RegExp ? executor.type.test(type) : executor.type === type));
 }
 
@@ -216,7 +216,7 @@ function text(content) {
  * @param {number} [offset] - Citable items that came before this result in the request.
  * @returns {string} Text.
  */
-function render(executor, content, offset = 0) {
+export function render(executor, content, offset = 0) {
 	return typeof executor?.read === "function" && !failed(content) ? executor.read(content, offset) : text(content);
 }
 
@@ -226,7 +226,7 @@ function render(executor, content, offset = 0) {
  * @param {any} content - The result block's `content`.
  * @returns {any[]} The items, or none.
  */
-function citable(executor, content) {
+export function citable(executor, content) {
 	return typeof executor?.cite === "function" && Array.isArray(content) ? content : [];
 }
 
@@ -272,7 +272,7 @@ function expand(block, known) {
  * @param {any} content - The result block's `content`.
  * @returns {boolean} True for an error result.
  */
-function failed(content) {
+export function failed(content) {
 	return typeof content?.error_code === "string";
 }
 

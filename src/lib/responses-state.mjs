@@ -29,7 +29,23 @@ import { resolve as settingsOf } from "./settings.mjs";
 export const LIVE = Object.freeze(["queued", "in_progress"]);
 
 /** The item types a stored history can hold, with the id prefix of each. */
-const PREFIXES = Object.freeze({ message: "msg", function_call: "fc", function_call_output: "fco", reasoning: "rs" });
+const PREFIXES = Object.freeze({
+	message: "msg",
+	function_call: "fc",
+	function_call_output: "fco",
+	reasoning: "rs",
+	custom_tool_call: "ctc",
+	custom_tool_call_output: "ctco",
+	shell_call: "sc",
+	shell_call_output: "sco",
+	apply_patch_call: "apc",
+	apply_patch_call_output: "apco",
+	web_search_call: "ws",
+	code_interpreter_call: "ci",
+	tool_search_call: "tsc",
+	tool_search_output: "tso",
+	compaction: "cmp"
+});
 
 /**
  * A client error.
@@ -128,7 +144,7 @@ export function itemsOf(input, at = "input") {
 			throw problem(400, `${where}: unsupported item type ${JSON.stringify(type ?? null)}`, "unsupported_content", where);
 		}
 		const out = { ...item, type, id: typeof item.id === "string" && item.id !== "" ? item.id : itemId(PREFIXES[type]) };
-		if (type !== "reasoning") out.status ??= "completed";
+		if (type !== "reasoning" && type !== "compaction") out.status ??= "completed";
 		if (type === "message" && typeof item.content === "string") {
 			out.content =
 				item.role === "assistant"

@@ -631,6 +631,29 @@ export function register(fastify, options, captured) {
 			const { input_tokens } = await api.count(chat, { signal: controller.signal });
 			return reply.send({ object: "response.input_tokens", input_tokens });
 		});
+		// Compaction: the conversation (with `previous_response_id` or `conversation` resolved when a response store is on) is summarised by the upstream.
+		fastify.post("/v1/responses/compact", { bodyLimit }, async (request, reply) => {
+			const controller = new AbortController();
+			reply.raw.on("close", () => {
+				if (!reply.raw.writableFinished) controller.abort();
+			});
+			const body = request.body;
+			let source = body;
+			if (body !== null && typeof body === "object" && (body.previous_response_id != null || body.conversation != null)) {
+				const made = await api.responses.plan({ ...body, input: body.input ?? [], store: false });
+				if (made !== null) source = joined(made);
+			}
+			const onUsage = typeof options.onUsage === "function" ? (report) => options.onUsage(report, contexts.get(request)) : undefined;
+			return reject(
+				reply,
+				await api.responses.compact(source, {
+					signal: controller.signal,
+					clientHeaders: forwardable(request.headers),
+					onUsage,
+					log: request.log
+				})
+			);
+		});
 		// Stored responses (`store`, on by default) and background responses. `GET` answers the response object, or with `stream=true` the events of a
 		// background response created with `stream: true`, from the one after `starting_after`.
 		fastify.get("/v1/responses/:id", async (request, reply) => {

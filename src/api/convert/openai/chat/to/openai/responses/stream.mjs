@@ -23,6 +23,7 @@ import { itemId, pack, usageOf, endOf, envelope, failureOf } from "../../../../.
 import { messages } from "../../../../../../../lib/sse.mjs";
 import { mergeDetail, reasoningOf } from "../../../../../../../lib/thinking.mjs";
 import { readAll, toResponses } from "../../../../../../../lib/citations.mjs";
+import { clientItem, clientKind } from "../../../../../../../lib/responses-tools.mjs";
 
 /**
  * Convert a Chat Completions chunk stream into Responses events.
@@ -32,7 +33,11 @@ import { readAll, toResponses } from "../../../../../../../lib/citations.mjs";
  * item `response.output_item.added`, its part and delta events, and `response.output_item.done`, and last `response.completed` (or
  * `response.incomplete` after a length stop or a content filter). Output items come in the order the deltas start them: reasoning
  * (as a summary part), the message text (or refusal) and one function call per tool call index. An `error` chunk, a fatal finish reason or
- * a stream that ends without a finish reason ends with `response.failed`. Annotations (`delta.annotations`) are sent as `response.output_text.annotation.added` events and are in the closed part. There is no `[DONE]` sentinel.
+ * a stream that ends without a finish reason ends with `response.failed`. Tool calls become `function_call` items, `custom_tool_call` items (input streamed
+ * as `response.custom_tool_call_input.delta`), or for the emulated `shell` and `apply_patch` tools (`state.clientTools`) `shell_call` / `apply_patch_call`
+ * items, which are sent whole when the call closes (their arguments are not streamed as text). A chunk of the hosted tool runner (`lib/hostedtools.mjs`)
+ * carries `llmt_items`, the Responses items of the hosted tools it ran: they close what is open and are sent with their own events
+ * (`response.web_search_call.*`, `response.code_interpreter_call.*`); `llmt_incomplete` ends the response `incomplete` with that reason. Annotations (`delta.annotations`) are sent as `response.output_text.annotation.added` events and are in the closed part. There is no `[DONE]` sentinel.
  * @param {ReadableStream|AsyncIterable<unknown>|Iterable<unknown>|string|Uint8Array} source - Chat Completions stream.
  * @param {any} state - State from the request converter (`model`, `echo`); `id` is the response id when the caller chose it, else one is made.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
@@ -46,6 +51,7 @@ export async function* stream(source, state, settings) {
 	let sequence = 0;
 	let usage = null;
 	let finish = null;
+	let cutoff = null;
 	/** Finished output items, by output index. */
 	const output = [];
 	/** The open reasoning or message item, and the open function call items by tool call index. */
@@ -156,17 +162,55 @@ export async function* stream(source, state, settings) {
 	 */
 	function* closeCalls() {
 		for (const call of [...calls.values()].sort((left, right) => left.index - right.index)) {
-			yield emit("response.function_call_arguments.done", {
-				item_id: call.item.id,
-				output_index: call.index,
-				name: call.item.name,
-				arguments: call.arguments
-			});
-			const done = { ...call.item, arguments: call.arguments, status: "completed" };
+			let done;
+			if (call.kind === "custom") {
+				yield emit("response.custom_tool_call_input.done", { item_id: call.item.id, output_index: call.index, input: call.arguments });
+				done = { ...call.item, input: call.arguments, status: "completed" };
+			} else if (call.kind === "shell" || call.kind === "apply_patch") {
+				done = clientItem(call.kind, { id: call.item.id, call_id: call.item.call_id, arguments: call.arguments, status: "completed" });
+			} else {
+				yield emit("response.function_call_arguments.done", {
+					item_id: call.item.id,
+					output_index: call.index,
+					name: call.item.name,
+					arguments: call.arguments
+				});
+				done = { ...call.item, arguments: call.arguments, status: "completed" };
+			}
 			output[call.index] = done;
 			yield emit("response.output_item.done", { output_index: call.index, item: done });
 		}
 		calls.clear();
+	}
+
+	/**
+	 * Send an item of a hosted tool the runner ran: added, the tool's own progress events, done.
+	 * @param {any} item - The finished item (`web_search_call`, `code_interpreter_call`, `tool_search_call`, `tool_search_output`).
+	 * @returns {Generator<any>} Events.
+	 */
+	function* hosted(item) {
+		const { index } = open(item);
+		const at = { item_id: item.id, output_index: index };
+		if (item.type === "web_search_call") {
+			yield emit("response.output_item.added", { output_index: index, item: { ...item, status: "in_progress" } });
+			yield emit("response.web_search_call.in_progress", at);
+			yield emit("response.web_search_call.searching", at);
+			yield emit("response.web_search_call.completed", at);
+		} else if (item.type === "code_interpreter_call") {
+			yield emit("response.output_item.added", {
+				output_index: index,
+				item: { ...item, status: "in_progress", code: null, outputs: null }
+			});
+			yield emit("response.code_interpreter_call.in_progress", at);
+			yield emit("response.code_interpreter_call_code.delta", { ...at, delta: item.code });
+			yield emit("response.code_interpreter_call_code.done", { ...at, code: item.code });
+			yield emit("response.code_interpreter_call.interpreting", at);
+			yield emit("response.code_interpreter_call.completed", at);
+		} else {
+			yield emit("response.output_item.added", { output_index: index, item: { ...item, status: "in_progress" } });
+		}
+		output[index] = item;
+		yield emit("response.output_item.done", { output_index: index, item });
 	}
 
 	/**
@@ -190,6 +234,13 @@ export async function* stream(source, state, settings) {
 			}
 			model ??= data.model;
 			if (data.usage) usage = data.usage;
+			if (typeof data.llmt_incomplete === "string") cutoff = data.llmt_incomplete;
+			if (Array.isArray(data.llmt_items)) {
+				yield* closeReasoning();
+				yield* closeText();
+				yield* closeCalls();
+				for (const item of data.llmt_items) yield* hosted(item);
+			}
 			const choice = data.choices?.[0];
 			if (!choice) continue;
 			const delta = choice.delta ?? {};
@@ -245,24 +296,35 @@ export async function* stream(source, state, settings) {
 				if (!calls.has(key)) {
 					yield* closeReasoning();
 					yield* closeText();
-					const started = open({
-						type: "function_call",
-						id: itemId("fc"),
-						call_id: call.id ?? "",
-						name: call.function?.name ?? "",
-						arguments: "",
-						status: "in_progress"
-					});
-					calls.set(key, { ...started, arguments: "" });
+					const name = call.type === "custom" || call.custom ? (call.custom?.name ?? "") : (call.function?.name ?? "");
+					const kind = call.type === "custom" || call.custom ? "custom" : (clientKind(state, name) ?? "function");
+					const started = open(
+						kind === "custom"
+							? { type: "custom_tool_call", id: itemId("ctc"), call_id: call.id ?? "", name, input: "", status: "in_progress" }
+							: kind === "function"
+								? { type: "function_call", id: itemId("fc"), call_id: call.id ?? "", name, arguments: "", status: "in_progress" }
+								: clientItem(kind, {
+										id: itemId(kind === "shell" ? "sc" : "apc"),
+										call_id: call.id ?? "",
+										arguments: "",
+										status: "in_progress"
+									})
+					);
+					calls.set(key, { ...started, kind, arguments: "" });
 					yield emit("response.output_item.added", { output_index: started.index, item: started.item });
 				}
 				const known = calls.get(key);
 				if (call.id && known.item.call_id === "") known.item.call_id = call.id;
-				if (call.function?.name && known.item.name === "") known.item.name = call.function.name;
-				const piece = call.function?.arguments;
+				const named = known.kind === "custom" ? call.custom?.name : call.function?.name;
+				if (named && known.item.name === "") known.item.name = named;
+				const piece = known.kind === "custom" ? call.custom?.input : call.function?.arguments;
 				if (typeof piece === "string" && piece !== "") {
 					known.arguments += piece;
-					yield emit("response.function_call_arguments.delta", { item_id: known.item.id, output_index: known.index, delta: piece });
+					if (known.kind === "custom") {
+						yield emit("response.custom_tool_call_input.delta", { item_id: known.item.id, output_index: known.index, delta: piece });
+					} else if (known.kind === "function") {
+						yield emit("response.function_call_arguments.delta", { item_id: known.item.id, output_index: known.index, delta: piece });
+					}
 				}
 			}
 			if (choice.finish_reason) finish = choice.finish_reason;
@@ -287,6 +349,6 @@ export async function* stream(source, state, settings) {
 	yield* annotate();
 	yield* closeText();
 	yield* closeCalls();
-	const end = endOf(finish);
+	const end = cutoff === null ? endOf(finish) : { status: "incomplete", incomplete_details: { reason: cutoff } };
 	yield emit(end.status === "completed" ? "response.completed" : "response.incomplete", { response: snapshot(end.status, end) });
 }

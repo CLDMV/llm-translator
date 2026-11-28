@@ -35,6 +35,7 @@ import * as pool from "../lib/pool.mjs";
 import { createBudget } from "../lib/thinking.mjs";
 import * as fanout from "../lib/fanout.mjs";
 import * as servertools from "../lib/servertools.mjs";
+import * as hostedtools from "../lib/hostedtools.mjs";
 import { refresh } from "../lib/health.mjs";
 
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
@@ -108,6 +109,12 @@ export async function send(body, options = {}) {
 		if (plan !== null) {
 			nested = true;
 			return await servertools.run({ body, plan, options, send, warn: warning, c: captured });
+		}
+		// The Responses front's hosted tools (`web_search`, `code_interpreter`, `tool_search`) are run the same way; a hosted tool without an executor is refused here.
+		const hosted = hostedtools.wants(captured, body, options);
+		if (hosted !== null) {
+			nested = true;
+			return await hostedtools.run({ body, plan: hosted, options, send, warn: warning, c: captured });
 		}
 		return attach(await round({ transport, textOnly, jsonInstruction, request, response, stream, error, captured }, body, options, meter));
 	} catch (cause) {

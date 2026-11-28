@@ -19,7 +19,8 @@
 
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
-import { unpack } from "../../../../../../../lib/responses.mjs";
+import { unpack, unsummarize, COMPACTED } from "../../../../../../../lib/responses.mjs";
+import { rowOf, refusal, functionOf, shellText, argumentsOf } from "../../../../../../../lib/responses-tools.mjs";
 
 /** Request fields with a mapping (see `docs/protocol-support.md`). */
 const HANDLED = new Set([
@@ -55,15 +56,19 @@ const STATEFUL = ["previous_response_id", "conversation", "prompt"];
 /**
  * Convert an OpenAI Responses request body into a Chat Completions request body, the pivot every upstream is reached through.
  *
- * The core is stateless: `previous_response_id`, `conversation`, `store: true`, `background: true` and stored prompts are refused, and so are hosted tools,
- * non-function `tool_choice` values and input items other than messages, function calls, function call outputs and reasoning items.
+ * The core is stateless: `previous_response_id`, `conversation`, `store: true`, `background: true` and stored prompts are refused (the routes resolve
+ * them first when a response store is on). Tools are classified by the table in `lib/responses-tools.mjs`: function and custom tools map, `web_search`,
+ * `code_interpreter` and `tool_search` become function tools marked for the hosted tool runner (`lib/hostedtools.mjs`, which needs a `serverTools`
+ * executor and refuses the request without one), `shell` and `apply_patch` become functions whose calls the reply converters return as their client-executed
+ * items, and every other type is refused with `unsupported_tool`. Input items other than messages, function and custom calls and their outputs, `shell` and
+ * `apply_patch` calls and outputs, hosted `web_search_call`, `code_interpreter_call` and `tool_search` items, `compaction` items and reasoning items are refused.
  * `instructions` becomes the first system message. Reasoning items are replayed to the upstream only with `reasoningRoundTrip` (their
  * `encrypted_content` carries the `reasoning_details` the converter put there); otherwise they are dropped. Fields without a mapping are
  * dropped and listed in `state.dropped`, or refused when `unknownFields` is `"error"`.
  * @param {any} body - OpenAI `POST /v1/responses` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {{ body: any, state: any }} Chat Completions body and the state the reply converters need (`model`, `stream`, `echo`, `dropped`).
- * @throws {TranslatorError} `invalid_request` for a malformed body, `unsupported_field` for stateful parameters and unmapped fields under `unknownFields: "error"`, `unsupported_tool` and `unsupported_content` for what has no counterpart.
+ * @throws {TranslatorError} `invalid_request` for a malformed body, `unsupported_field` for stateful parameters, `context_management` and unmapped fields under `unknownFields: "error"`, `unsupported_tool` and `unsupported_content` for what has no counterpart.
  */
 export function request(body, settings) {
 	const s = resolve(settings);
@@ -76,7 +81,7 @@ export function request(body, settings) {
 			param: "input"
 		});
 	}
-	const state = { model: body.model, stream: body.stream === true, dropped: [], echo: {} };
+	const state = { model: body.model, stream: body.stream === true, dropped: [], echo: {}, clientTools: {} };
 	for (const name of STATEFUL) {
 		if (body[name] !== undefined && body[name] !== null)
 			refuse(`${name}: stateful requests are not supported (there is no response store)`, name);
@@ -86,6 +91,12 @@ export function request(body, settings) {
 	for (const key of Object.keys(body)) {
 		if (HANDLED.has(key)) continue;
 		skip(state, s, key, `${key}: Unrecognized request argument`);
+	}
+	if (Array.isArray(body.context_management) && body.context_management.length > 0) {
+		refuse(
+			"context_management: automatic compaction is not supported; call POST /v1/responses/compact and send its output as the next input",
+			"context_management"
+		);
 	}
 	if (typeof body.truncation === "string" && body.truncation !== "disabled")
 		skip(state, s, "truncation", 'truncation: only "disabled" is supported');
@@ -119,6 +130,31 @@ export function request(body, settings) {
 		give(target);
 		return target;
 	};
+	/**
+	 * Add the call and the (marked) result messages of a hosted item the client replays.
+	 * @param {string} type - Item type.
+	 * @param {any} item - The item.
+	 * @param {string} at - Path of the item.
+	 * @returns {void}
+	 */
+	const replay = (type, item, at) => {
+		const kind = type === "web_search_call" ? "web_search" : type === "code_interpreter_call" ? "code_interpreter" : "tool_search";
+		const id = typeof item.call_id === "string" && item.call_id !== "" ? item.call_id : required(item.id, `${at}.id`);
+		if (type !== "tool_search_output") {
+			const input =
+				kind === "web_search"
+					? { query: item.action?.query ?? item.action?.queries?.[0] ?? "" }
+					: kind === "code_interpreter"
+						? { code: typeof item.code === "string" ? item.code : "" }
+						: item.arguments;
+			(assistant().tool_calls ??= []).push({ id, type: "function", function: { name: kind, arguments: argumentsOf(input) } });
+		}
+		// The tool_search call has no result of its own: its output item carries it.
+		if (type !== "tool_search_call") {
+			pending = null;
+			messages.push({ role: "tool", tool_call_id: id, content: "", llmt_hosted: { kind, item } });
+		}
+	};
 	const items = typeof body.input === "string" ? [{ type: "message", role: "user", content: body.input }] : body.input;
 	items.forEach((item, position) => {
 		const at = `input[${position}]`;
@@ -145,6 +181,50 @@ export function request(body, settings) {
 		} else if (type === "function_call_output") {
 			pending = null;
 			messages.push({ role: "tool", tool_call_id: required(item.call_id, `${at}.call_id`), content: outputText(item.output, at) });
+		} else if (type === "custom_tool_call") {
+			const target = assistant();
+			(target.tool_calls ??= []).push({
+				id: required(item.call_id, `${at}.call_id`),
+				type: "custom",
+				custom: { name: required(item.name, `${at}.name`), input: typeof item.input === "string" ? item.input : "" }
+			});
+		} else if (type === "custom_tool_call_output") {
+			pending = null;
+			messages.push({ role: "tool", tool_call_id: required(item.call_id, `${at}.call_id`), content: outputText(item.output, at) });
+		} else if (type === "shell_call" || type === "apply_patch_call") {
+			const shell = type === "shell_call";
+			const target = assistant();
+			(target.tool_calls ??= []).push({
+				id: required(item.call_id, `${at}.call_id`),
+				type: "function",
+				function: { name: shell ? "shell" : "apply_patch", arguments: argumentsOf(shell ? item.action : item.operation) }
+			});
+		} else if (type === "shell_call_output") {
+			pending = null;
+			messages.push({ role: "tool", tool_call_id: required(item.call_id, `${at}.call_id`), content: shellText(item.output) });
+		} else if (type === "apply_patch_call_output") {
+			pending = null;
+			const status = typeof item.status === "string" ? item.status : "completed";
+			const note = typeof item.output === "string" && item.output !== "" ? `\n${item.output}` : "";
+			messages.push({ role: "tool", tool_call_id: required(item.call_id, `${at}.call_id`), content: `${status}${note}` });
+		} else if (
+			type === "web_search_call" ||
+			type === "code_interpreter_call" ||
+			type === "tool_search_call" ||
+			type === "tool_search_output"
+		) {
+			// A hosted call the client replays. The runner turns it into the function call and the result the upstream reads (it has the executor's `read`).
+			replay(type, item, at);
+		} else if (type === "compaction") {
+			const summary = unsummarize(item.encrypted_content);
+			if (summary === null) {
+				throw new TranslatorError(`${at}: a compaction item must be one this translator wrote (its encrypted_content is not)`, {
+					code: "unsupported_content",
+					param: at
+				});
+			}
+			pending = null;
+			messages.push({ role: "user", content: `${COMPACTED}\n\n${summary}` });
 		} else if (type === "reasoning") {
 			const summary = (item.summary ?? []).filter((part) => typeof part?.text === "string").map((part) => part.text);
 			const content = (item.content ?? []).filter((part) => typeof part?.text === "string").map((part) => part.text);
@@ -173,10 +253,11 @@ export function request(body, settings) {
 	if (typeof body.prompt_cache_key === "string") out.prompt_cache_key = body.prompt_cache_key;
 	if (typeof body.reasoning?.effort === "string") out.reasoning_effort = body.reasoning.effort;
 
-	const tools = (body.tools ?? []).map((tool, position) => toolOf(tool, `tools[${position}]`));
+	const offered = new Map();
+	const tools = toolsOf(body.tools ?? [], state, offered);
 	if (tools.length > 0) {
 		out.tools = tools;
-		if (body.tool_choice !== undefined && body.tool_choice !== null) out.tool_choice = choiceOf(body.tool_choice);
+		if (body.tool_choice !== undefined && body.tool_choice !== null) out.tool_choice = choiceOf(body.tool_choice, offered);
 		if (typeof body.parallel_tool_calls === "boolean") out.parallel_tool_calls = body.parallel_tool_calls;
 	}
 	const format = body.text?.format;
@@ -340,35 +421,99 @@ function messageOf(item, at) {
 }
 
 /**
- * A Chat tool for a Responses function tool.
- * @param {any} tool - Responses tool.
- * @param {string} at - Path of the tool.
- * @returns {any} Chat tool.
- * @throws {TranslatorError} `unsupported_tool` for hosted tools and custom tools.
+ * The Chat tools for the Responses tools, by the table in `lib/responses-tools.mjs`.
+ * @param {any[]} list - The request's `tools`.
+ * @param {any} state - Converter state; `clientTools` gets the function names of the client-executed tools.
+ * @param {Map<string, string>} offered - Receives the function name each tool kind is offered under (for `tool_choice`).
+ * @returns {any[]} Chat tools.
+ * @throws {TranslatorError} `unsupported_tool` for a type that is refused, for a name the request already uses and for a hosted `shell` environment; `invalid_request` for a malformed tool.
  */
-function toolOf(tool, at) {
-	if (tool?.type !== "function") {
-		throw new TranslatorError(`${at}: unsupported tool type ${JSON.stringify(tool?.type ?? null)} (only function tools are supported)`, {
-			code: "unsupported_tool",
-			param: at
-		});
-	}
-	const fn = { name: required(tool.name, `${at}.name`) };
-	if (typeof tool.description === "string") fn.description = tool.description;
-	if (tool.parameters !== undefined && tool.parameters !== null) fn.parameters = tool.parameters;
-	if (typeof tool.strict === "boolean") fn.strict = tool.strict;
-	return { type: "function", function: fn };
+function toolsOf(list, state, offered) {
+	if (!Array.isArray(list)) throw new TranslatorError("tools must be an array", { code: "invalid_request", param: "tools" });
+	const taken = new Set(
+		list
+			.filter((tool) => tool?.type === "function" || tool?.type === "custom")
+			.map((tool) => (typeof tool.name === "string" ? tool.name : ""))
+	);
+	const searching = list.some((tool) => rowOf(tool?.type)?.kind === "tool_search");
+	return list.map((tool, position) => {
+		const at = `tools[${position}]`;
+		const type = tool?.type;
+		const row = rowOf(type);
+		if (row === undefined) {
+			throw refusal(
+				at,
+				`unsupported tool type ${JSON.stringify(type ?? null)} (the translator knows function, custom and the emulated hosted tools; see docs/protocol-support.md)`
+			);
+		}
+		if (row.handling === "rejected") throw refusal(at, `unsupported tool type ${JSON.stringify(type)}: ${row.note}`);
+		if (row.kind === "function") {
+			const fn = { name: required(tool.name, `${at}.name`) };
+			if (typeof tool.description === "string") fn.description = tool.description;
+			if (tool.parameters !== undefined && tool.parameters !== null) fn.parameters = tool.parameters;
+			if (typeof tool.strict === "boolean") fn.strict = tool.strict;
+			// A deferred function waits for tool search; with no tool_search tool in the request nothing could load it, so it is offered at once.
+			return { type: "function", function: fn, ...(tool.defer_loading === true && searching ? { llmt_deferred: true } : {}) };
+		}
+		if (row.kind === "custom") {
+			const custom = { name: required(tool.name, `${at}.name`) };
+			if (typeof tool.description === "string") custom.description = tool.description;
+			if (tool.format !== undefined && tool.format !== null) custom.format = tool.format;
+			return { type: "custom", custom };
+		}
+		if (taken.has(row.offered)) {
+			throw refusal(
+				at,
+				`the ${type} tool is offered to the model as a function named ${JSON.stringify(row.offered)}, and the request already has a tool with that name`
+			);
+		}
+		taken.add(row.offered);
+		offered.set(row.kind, row.offered);
+		if (row.kind === "shell") {
+			const environment = tool.environment?.type;
+			if (environment !== undefined && environment !== "local") {
+				throw refusal(
+					at,
+					`unsupported shell environment ${JSON.stringify(environment)}: the translator has no hosted container; the client runs the commands`
+				);
+			}
+		}
+		if (row.via === "function") {
+			state.clientTools[row.offered] = row.kind;
+			return functionOf(/** @type {"shell" | "apply_patch"} */ (row.kind));
+		}
+		return {
+			type: "function",
+			function: { name: row.offered, parameters: { type: "object", properties: {} } },
+			llmt_hosted: { kind: row.kind, at, tool }
+		};
+	});
 }
 
 /**
  * Chat `tool_choice` for a Responses one.
  * @param {any} choice - Responses `tool_choice`.
+ * @param {Map<string, string>} offered - The function name each emulated tool kind is offered under.
  * @returns {any} Chat `tool_choice`.
- * @throws {TranslatorError} `unsupported_field` for allowed-tools and hosted tool choices.
+ * @throws {TranslatorError} `unsupported_field` for a choice that names a tool the request does not offer or the translator cannot force.
  */
-function choiceOf(choice) {
+function choiceOf(choice, offered) {
 	if (choice === "auto" || choice === "none" || choice === "required") return choice;
-	if (choice?.type === "function" && typeof choice.name === "string") return { type: "function", function: { name: choice.name } };
+	const named = (entry) => {
+		if (entry?.type === "function" && typeof entry.name === "string") return { type: "function", function: { name: entry.name } };
+		if (entry?.type === "custom" && typeof entry.name === "string") return { type: "custom", custom: { name: entry.name } };
+		const row = rowOf(entry?.type);
+		const name = row === undefined ? undefined : offered.get(row.kind);
+		return name === undefined ? undefined : { type: "function", function: { name } };
+	};
+	const direct = named(choice);
+	if (direct !== undefined) return direct;
+	if (choice?.type === "allowed_tools" && Array.isArray(choice.tools)) {
+		const tools = choice.tools.map(named);
+		if (!tools.includes(undefined) && (choice.mode === "auto" || choice.mode === "required")) {
+			return { type: "allowed_tools", allowed_tools: { mode: choice.mode, tools } };
+		}
+	}
 	throw new TranslatorError(`tool_choice: unsupported value ${JSON.stringify(choice?.type ?? choice)}`, {
 		code: "unsupported_field",
 		param: "tool_choice"

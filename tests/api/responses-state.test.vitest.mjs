@@ -62,7 +62,7 @@ describe("the conversations leaves", () => {
 		await expect(api.conversations.items.create(made.id, { items: [user("b"), user("c")] })).rejects.toMatchObject({
 			code: "conversation_full"
 		});
-		await expect(api.conversations.items.create(made.id, { items: [{ type: "web_search_call" }] })).rejects.toMatchObject({
+		await expect(api.conversations.items.create(made.id, { items: [{ type: "file_search_call" }] })).rejects.toMatchObject({
 			code: "unsupported_content"
 		});
 		await expect(api.conversations.items.create("conv_nope00000000", { items: [user("x")] })).rejects.toMatchObject({ status: 404 });

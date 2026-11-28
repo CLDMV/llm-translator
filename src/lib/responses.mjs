@@ -21,13 +21,17 @@ import { randomBytes } from "node:crypto";
 
 /** Marks an `encrypted_content` value written by this translator. */
 const CARRY = "llmt-rs1:";
+/** Marks the `encrypted_content` of a `compaction` item written by this translator (the summary text). */
+const SUMMARY = "llmt-cp1:";
+/** The sentence a compaction summary is introduced with when it goes back to the model. */
+export const COMPACTED = "Summary of the earlier conversation, which has been compacted:";
 /** Most reasoning detail items and most decoded bytes read back from a client. */
 const MAX_DETAILS = 64;
 const MAX_BYTES = 1024 * 1024;
 
 /**
- * A Responses style id: `resp_`, `msg_`, `fc_`, `fco_`, `rs_` or `conv_` and 24 hex digits.
- * @param {"resp" | "msg" | "fc" | "fco" | "rs" | "conv"} prefix - Id family.
+ * A Responses style id: a short prefix (`resp`, `msg`, `fc`, `fco`, `rs`, `conv`, `ws`, `ci`, `cmp`, ...), an underscore and 24 hex digits.
+ * @param {string} prefix - Id family.
  * @returns {string} The id.
  */
 export function itemId(prefix) {
@@ -55,6 +59,31 @@ export function unpack(value) {
 		const details = JSON.parse(Buffer.from(value.slice(CARRY.length), "base64url").toString("utf8"));
 		const plain = (item) => item !== null && typeof item === "object" && !Array.isArray(item);
 		return Array.isArray(details) && details.length <= MAX_DETAILS && details.every(plain) ? details : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Pack the summary of a compaction into the `encrypted_content` of a `compaction` item. Like the reasoning carrier it is only base64: the
+ * translator reads it back when the client sends the item with a later request.
+ * @param {string} text - Summary text.
+ * @returns {string} The carrier string.
+ */
+export function summarize(text) {
+	return SUMMARY + Buffer.from(JSON.stringify({ summary: text })).toString("base64url");
+}
+
+/**
+ * Read back what {@link summarize} wrote. Anything else (another producer's data, a malformed or oversized value) gives null.
+ * @param {unknown} value - `encrypted_content` of a `compaction` item the client sent.
+ * @returns {string | null} The summary text, or null.
+ */
+export function unsummarize(value) {
+	if (typeof value !== "string" || !value.startsWith(SUMMARY) || value.length > MAX_BYTES * 2) return null;
+	try {
+		const { summary } = JSON.parse(Buffer.from(value.slice(SUMMARY.length), "base64url").toString("utf8"));
+		return typeof summary === "string" && summary !== "" ? summary : null;
 	} catch {
 		return null;
 	}
