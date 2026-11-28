@@ -81,7 +81,7 @@ describe("the tool table", () => {
 			file_search: "rejected",
 			image_generation: "rejected",
 			local_shell: "rejected",
-			computer_use_preview: "rejected",
+			computer_use_preview: "emulated",
 			mcp: "emulated"
 		});
 		expect(rowOf("web_searcher")).toBeUndefined();
@@ -363,13 +363,18 @@ describe("helpers", () => {
 
 	it("builds the shell and apply_patch items from function arguments, tolerating bad arguments", () => {
 		expect(
-			clientItem("shell", { id: "sc_1", call_id: "c", arguments: '{"commands":["ls",1],"timeout_ms":5}', status: "completed" })
+			clientItem("shell", {
+				id: "sc_1",
+				call_id: "c",
+				arguments: '{"commands":["ls",1],"timeout_ms":5,"max_output_length":99}',
+				status: "completed"
+			})
 		).toEqual({
 			id: "sc_1",
 			type: "shell_call",
 			call_id: "c",
 			status: "completed",
-			action: { commands: ["ls", "1"], timeout_ms: 5, max_output_length: null }
+			action: { commands: ["ls", "1"], timeout_ms: 5, max_output_length: 99 }
 		});
 		expect(clientItem("shell", { id: "sc_1", call_id: "c", arguments: "{", status: "in_progress" }).action).toEqual({
 			commands: [],

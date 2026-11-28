@@ -68,7 +68,7 @@ async function start(chat, config = {}, serving = {}) {
 }
 
 describe("tool types with no counterpart", () => {
-	it.each(["file_search", "image_generation", "local_shell", "computer_use_preview", "something_new"])(
+	it.each(["file_search", "image_generation", "local_shell", "something_new"])(
 		"answers %s with a 400 in the OpenAI error shape and never calls the upstream",
 		async (type) => {
 			const { upstream, url } = await start((req, body, res) => json(res, 200, completion("hi")));

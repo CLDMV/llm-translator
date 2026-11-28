@@ -48,10 +48,11 @@ export function marked(body: any): boolean;
  * speak the Responses API, which a request reaches when `api: "auto"` falls back to Chat Completions).
  * @param {any} body - Chat body of a Responses request.
  * @param {boolean} all - Refuse the emulated hosted tools too.
+ * @param {boolean} [computer] - The upstream speaks the Anthropic Messages API, which takes the computer tool and its screenshots.
  * @returns {void}
  * @throws {TranslatorError} `unsupported_tool` (`param` the tool's path) or `unsupported_content` (`param` the item's path).
  */
-export function refuse(body: any, all: boolean): void;
+export function refuse(body: any, all: boolean, computer?: boolean): void;
 /**
  * The request the upstream gets for one round.
  * @param {any} body - Chat body of the Responses request.

@@ -166,7 +166,7 @@ async function* converted(source, state, settings) {
 			if (call.kind === "custom") {
 				yield emit("response.custom_tool_call_input.done", { item_id: call.item.id, output_index: call.index, input: call.arguments });
 				done = { ...call.item, input: call.arguments, status: "completed" };
-			} else if (call.kind === "shell" || call.kind === "apply_patch") {
+			} else if (call.kind !== "function") {
 				done = clientItem(call.kind, { id: call.item.id, call_id: call.item.call_id, arguments: call.arguments, status: "completed" });
 			} else {
 				yield emit("response.function_call_arguments.done", {
@@ -321,7 +321,7 @@ async function* converted(source, state, settings) {
 							: kind === "function"
 								? { type: "function_call", id: itemId("fc"), call_id: call.id ?? "", name, arguments: "", status: "in_progress" }
 								: clientItem(kind, {
-										id: itemId(kind === "shell" ? "sc" : "apc"),
+										id: itemId({ shell: "sc", apply_patch: "apc", computer: "cu" }[kind]),
 										call_id: call.id ?? "",
 										arguments: "",
 										status: "in_progress"

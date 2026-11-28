@@ -229,11 +229,18 @@ export function marked(body) {
  * speak the Responses API, which a request reaches when `api: "auto"` falls back to Chat Completions).
  * @param {any} body - Chat body of a Responses request.
  * @param {boolean} all - Refuse the emulated hosted tools too.
+ * @param {boolean} [computer] - The upstream speaks the Anthropic Messages API, which takes the computer tool and its screenshots.
  * @returns {void}
  * @throws {TranslatorError} `unsupported_tool` (`param` the tool's path) or `unsupported_content` (`param` the item's path).
  */
-export function refuse(body, all) {
+export function refuse(body, all, computer = false) {
 	for (const tool of Array.isArray(body?.tools) ? body.tools : []) {
+		if (all && !computer && tool?.llmt_computer !== undefined) {
+			throw refusal(
+				tool.llmt_computer.at,
+				'unsupported tool type "computer_use_preview": it is mapped only to Anthropic\'s computer tool on an upstream that speaks the Anthropic Messages API, or sent as it is to an upstream on the Responses API with the hostedTools setting "native".'
+			);
+		}
 		if (!hostedMark(tool) || (!all && tool.llmt_hosted.native !== true)) continue;
 		const { kind, at, tool: original } = tool.llmt_hosted;
 		const note = kind === "unknown" ? "the translator does not know it." : TOOLS.find((entry) => entry.kind === kind).note;
@@ -243,6 +250,13 @@ export function refuse(body, all) {
 		);
 	}
 	for (const message of Array.isArray(body?.messages) ? body.messages : []) {
+		if (all && !computer && message?.llmt_screenshot !== undefined) {
+			const at = message.llmt_screenshot.at;
+			throw new TranslatorError(
+				`${at}: a computer_call_output goes only to an upstream that speaks the Anthropic Messages API, or to one on the Responses API with the hostedTools setting "native".`,
+				{ code: "unsupported_content", param: at }
+			);
+		}
 		const item =
 			nativeMark(message) && (all || !mcpItem(message.llmt_native.item))
 				? message.llmt_native
@@ -360,16 +374,22 @@ export function rewrite(body, plan, history, extra = []) {
  */
 export function strip(body) {
 	if (!body || typeof body !== "object" || !Array.isArray(body.tools) || !Array.isArray(body.messages)) return body;
-	const marked = (message) => replayMark(message) || nativeMark(message) || bare(message) !== message;
-	if (!body.tools.some((tool) => hostedMark(tool) || tool?.llmt_deferred !== undefined) && !body.messages.some(marked)) return body;
+	const marked = (message) =>
+		replayMark(message) || nativeMark(message) || message?.llmt_screenshot !== undefined || bare(message) !== message;
+	const tooled = (tool) => hostedMark(tool) || tool?.llmt_deferred !== undefined || tool?.llmt_computer !== undefined;
+	if (!body.tools.some(tooled) && !body.messages.some(marked)) return body;
 	const rest = { ...body };
 	for (const name of NATIVE_FIELDS) delete rest[name];
 	return {
 		...rest,
-		tools: body.tools.map(({ llmt_hosted: _, llmt_deferred: ___deferred, ...tool }) => tool),
+		tools: body.tools.map(({ llmt_hosted: _, llmt_deferred: ___deferred, llmt_computer: ___computer, ...tool }) => tool),
 		messages: body.messages
 			.filter((message) => !nativeMark(message))
 			.map((message) => {
+				if (message?.llmt_screenshot !== undefined) {
+					const { llmt_screenshot: ___screenshot, ...kept } = message;
+					return { ...kept, content: "[screenshot]" };
+				}
 				if (!replayMark(message)) return bare(message);
 				const { llmt_hosted: _, ...kept } = message;
 				return kept;

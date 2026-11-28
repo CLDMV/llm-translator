@@ -20,7 +20,7 @@
 import { resolve } from "../../../../../../../lib/settings.mjs";
 import { TranslatorError } from "../../../../../../../lib/errors.mjs";
 import { unpack, unsummarize, COMPACTED } from "../../../../../../../lib/responses.mjs";
-import { rowOf, refusal, functionOf, shellText, argumentsOf, mcpItem } from "../../../../../../../lib/responses-tools.mjs";
+import { rowOf, refusal, functionOf, shellText, argumentsOf, mcpItem, computerInput } from "../../../../../../../lib/responses-tools.mjs";
 
 /** Request fields with a mapping (see `docs/protocol-support.md`). */
 const HANDLED = new Set([
@@ -205,6 +205,24 @@ export function request(body, settings) {
 		} else if (type === "shell_call_output") {
 			pending = null;
 			messages.push({ role: "tool", tool_call_id: required(item.call_id, `${at}.call_id`), content: shellText(item.output) });
+		} else if (type === "computer_call" && !native) {
+			const target = assistant();
+			(target.tool_calls ??= []).push({
+				id: required(item.call_id, `${at}.call_id`),
+				type: "function",
+				function: { name: "computer", arguments: argumentsOf(computerInput(item.action)) }
+			});
+		} else if (type === "computer_call_output" && !native) {
+			// The screenshot goes to a model that reads images in tool results (Anthropic's computer tool); the runner of another upstream refuses it.
+			pending = null;
+			const url = item.output?.image_url;
+			if (item.output?.type !== "computer_screenshot" || typeof url !== "string" || url === "") {
+				throw new TranslatorError(`${at}.output: a computer_screenshot with an image_url is required`, {
+					code: "unsupported_content",
+					param: `${at}.output`
+				});
+			}
+			messages.push({ role: "tool", tool_call_id: required(item.call_id, `${at}.call_id`), content: "", llmt_screenshot: { url, at } });
 		} else if (type === "apply_patch_call_output") {
 			pending = null;
 			const status = typeof item.status === "string" ? item.status : "completed";
@@ -576,6 +594,30 @@ function toolsOf(list, state, offered, native) {
 			if (typeof tool.description === "string") custom.description = tool.description;
 			if (tool.format !== undefined && tool.format !== null) custom.format = tool.format;
 			return { type: "custom", custom };
+		}
+		if (row.kind === "computer_use_preview") {
+			if (native) return kept("computer_use_preview");
+			for (const field of ["display_width", "display_height"]) {
+				if (tool[field] !== undefined && (!Number.isInteger(tool[field]) || tool[field] < 1)) {
+					throw new TranslatorError(`${at}.${field} must be a positive whole number of pixels`, {
+						code: "invalid_request",
+						param: `${at}.${field}`
+					});
+				}
+			}
+			if (taken.has(row.offered))
+				throw refusal(
+					at,
+					'the computer tool is offered to the model as a function named "computer", and the request already has a tool with that name'
+				);
+			taken.add(row.offered);
+			offered.set(row.kind, row.offered);
+			state.clientTools.computer = "computer";
+			return {
+				type: "function",
+				function: { name: "computer", parameters: { type: "object", properties: {} } },
+				llmt_computer: { at, width: tool.display_width ?? 1024, height: tool.display_height ?? 768 }
+			};
 		}
 		if (row.kind === "mcp") {
 			if (tool.connector_id !== undefined && native) return kept("mcp");

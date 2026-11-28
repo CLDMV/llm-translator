@@ -36,7 +36,7 @@ import { TranslatorError } from "./errors.mjs";
  * @property {string} kind - The tool's name in this module.
  * @property {RegExp} match - Matches the tool's `type`.
  * @property {"mapped" | "emulated" | "rejected"} handling - What the translator does.
- * @property {"function" | "custom" | "serverTools" | "mcp" | "none"} via - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
+ * @property {"function" | "custom" | "serverTools" | "mcp" | "anthropic" | "none"} via - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
  * @property {string} [executor] - For `via: "serverTools"`: the tool type pattern an executor must serve.
  * @property {string} [offered] - The name of the function the model is offered (emulated tools).
  * @property {string} note - One line for the documentation and the error message.
@@ -119,9 +119,10 @@ export const TOOLS = Object.freeze([
 	{
 		kind: "computer_use_preview",
 		match: /^computer(_use_preview)?$/,
-		handling: "rejected",
-		via: "none",
-		note: "The computer actions and screenshots of the Responses API have no mapping to a function tool."
+		handling: "emulated",
+		via: "anthropic",
+		offered: "computer",
+		note: "Mapped to Anthropic's computer tool on an upstream that speaks the Anthropic Messages API (display_width and display_height are the display size); the call comes back as a computer_call item for the client to run. Any other upstream refuses it."
 	},
 	{
 		kind: "mcp",
@@ -269,14 +270,25 @@ export function mcpItem(item) {
 
 /**
  * The Responses item of a client-executed tool call, from the function call the model made.
- * UNSURE: `shell_call` is `{ id, type, call_id, status, action: { commands, timeout_ms, max_output_length } }` and `apply_patch_call` is
- * `{ id, type, call_id, status, operation: { type, path, diff } }`.
- * @param {"shell" | "apply_patch"} kind - The tool.
+ * UNSURE: `shell_call` is `{ id, type, call_id, status, action: { commands, timeout_ms, max_output_length } }`, `apply_patch_call` is
+ * `{ id, type, call_id, status, operation: { type, path, diff } }` and `computer_call` is `{ id, type, call_id, status, action, pending_safety_checks }`
+ * (its action is converted from Anthropic's by {@link computerAction}; `pending_safety_checks` is always empty: nothing here judges a safety check).
+ * @param {"shell" | "apply_patch" | "computer"} kind - The tool.
  * @param {{id: string, call_id: string, arguments: string, status: string}} call - The call: item id, call id, JSON arguments and status.
  * @returns {any} The item.
  */
 export function clientItem(kind, call) {
 	const input = parsed(call.arguments);
+	if (kind === "computer") {
+		return {
+			id: call.id,
+			type: "computer_call",
+			call_id: call.call_id,
+			status: call.status,
+			action: computerAction(input),
+			pending_safety_checks: []
+		};
+	}
 	if (kind === "shell") {
 		return {
 			id: call.id,
@@ -293,16 +305,112 @@ export function clientItem(kind, call) {
 	return { id: call.id, type: "apply_patch_call", call_id: call.call_id, status: call.status, operation: input };
 }
 
+/** Pixels one scroll click of Anthropic's computer tool stands for. (UNSURE: OpenAI's `scroll` counts pixels.) */
+const CLICK = 100;
+
+/**
+ * The point of an Anthropic action input (`coordinate: [x, y]`).
+ * @param {any} value - A coordinate.
+ * @returns {{x: number, y: number} | null} The point, or null when it is not one.
+ */
+function pointOf(value) {
+	return Array.isArray(value) && Number.isFinite(value[0]) && Number.isFinite(value[1]) ? { x: value[0], y: value[1] } : null;
+}
+
+/**
+ * The Responses computer action for the input of Anthropic's computer tool (`computer_20250124` and later: `{ action, coordinate, text, ... }`).
+ * `left_click`, `right_click` and `middle_click` are `click` with a button (`left`, `right`, `wheel`), `double_click` and `triple_click` (no counterpart: the
+ * closest one) are `double_click`, `mouse_move` is `move`, `left_click_drag` is `drag`, `key` and `hold_key` are `keypress`, and `type`, `scroll`, `wait`
+ * and `screenshot` keep their names. What has no counterpart (`cursor_position`, `left_mouse_down`, `left_mouse_up`, `zoom`, an unknown action, or an action
+ * that needs a point and has none) becomes a `screenshot`, which a client can always take and from which the model plans again.
+ * @param {any} input - The tool call's input.
+ * @returns {any} The action.
+ */
+export function computerAction(input) {
+	const at = pointOf(input.coordinate);
+	const need = (make) => (at === null ? { type: "screenshot" } : make(at));
+	switch (input.action) {
+		case "left_click":
+			return need((point) => ({ type: "click", button: "left", ...point }));
+		case "right_click":
+			return need((point) => ({ type: "click", button: "right", ...point }));
+		case "middle_click":
+			return need((point) => ({ type: "click", button: "wheel", ...point }));
+		case "double_click":
+		case "triple_click":
+			return need((point) => ({ type: "double_click", ...point }));
+		case "mouse_move":
+			return need((point) => ({ type: "move", ...point }));
+		case "left_click_drag": {
+			const from = pointOf(input.start_coordinate);
+			return from === null || at === null ? { type: "screenshot" } : { type: "drag", path: [from, at] };
+		}
+		case "scroll": {
+			const amount = (Number.isFinite(input.scroll_amount) ? input.scroll_amount : 1) * CLICK;
+			const by = { up: [0, -amount], down: [0, amount], left: [-amount, 0], right: [amount, 0] }[input.scroll_direction];
+			return at === null || by === undefined ? { type: "screenshot" } : { type: "scroll", ...at, scroll_x: by[0], scroll_y: by[1] };
+		}
+		case "type":
+			return typeof input.text === "string" ? { type: "type", text: input.text } : { type: "screenshot" };
+		case "key":
+		case "hold_key":
+			return typeof input.text === "string" ? { type: "keypress", keys: input.text.split("+") } : { type: "screenshot" };
+		case "wait":
+			return { type: "wait" };
+		default:
+			return { type: "screenshot" };
+	}
+}
+
+/**
+ * The input of Anthropic's computer tool for a Responses computer action, for a `computer_call` the client replays.
+ * @param {any} action - The `action` of the item.
+ * @returns {Record<string, any>} The input (`{ action: "screenshot" }` for an action it does not know).
+ */
+export function computerInput(action) {
+	const at = Number.isFinite(action?.x) && Number.isFinite(action?.y) ? [action.x, action.y] : undefined;
+	switch (action?.type) {
+		case "click":
+			return {
+				action: action.button === "right" ? "right_click" : action.button === "wheel" ? "middle_click" : "left_click",
+				coordinate: at
+			};
+		case "double_click":
+			return { action: "double_click", coordinate: at };
+		case "move":
+			return { action: "mouse_move", coordinate: at };
+		case "drag": {
+			const path = Array.isArray(action.path) ? action.path : [];
+			const last = path.at(-1);
+			return { action: "left_click_drag", start_coordinate: [path[0]?.x, path[0]?.y], coordinate: [last?.x, last?.y] };
+		}
+		case "scroll": {
+			const vertical = Math.abs(action.scroll_y ?? 0) >= Math.abs(action.scroll_x ?? 0);
+			const amount = Math.max(1, Math.round(Math.abs(vertical ? (action.scroll_y ?? 0) : (action.scroll_x ?? 0)) / CLICK));
+			const direction = vertical ? ((action.scroll_y ?? 0) < 0 ? "up" : "down") : (action.scroll_x ?? 0) < 0 ? "left" : "right";
+			return { action: "scroll", coordinate: at, scroll_direction: direction, scroll_amount: amount };
+		}
+		case "type":
+			return { action: "type", text: String(action.text ?? "") };
+		case "keypress":
+			return { action: "key", text: (Array.isArray(action.keys) ? action.keys : []).join("+") };
+		case "wait":
+			return { action: "wait", duration: 2 };
+		default:
+			return { action: "screenshot" };
+	}
+}
+
 /**
  * The tool names (and so the kinds) a request's emulated client tools are offered under, recorded on the converter's state so the reply
  * converters can turn a function call of that name back into the tool's item.
  * @param {any} state - Converter state.
  * @param {string} name - Function name.
- * @returns {"shell" | "apply_patch" | undefined} The tool the name stands for in this request.
+ * @returns {"shell" | "apply_patch" | "computer" | undefined} The tool the name stands for in this request.
  */
 export function clientKind(state, name) {
 	const kind = state?.clientTools?.[name];
-	return kind === "shell" || kind === "apply_patch" ? kind : undefined;
+	return kind === "shell" || kind === "apply_patch" || kind === "computer" ? kind : undefined;
 }
 
 /**

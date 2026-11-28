@@ -132,6 +132,8 @@ export async function request(chatBody, settings, context) {
 			}
 			case "tool": {
 				const result = { type: "tool_result", tool_use_id: fitId(message.tool_call_id), content: plainText(message.content) };
+				// A screenshot a Responses client returned for a computer call: an image block.
+				if (message.llmt_screenshot !== undefined) result.content = [screenshotBlock(message.llmt_screenshot.url)];
 				if (s.toolErrorInference) {
 					// The marker is only a convention (see `toolErrors` on the other direction), so it is looked for only when asked.
 					const marker = s.toolErrorMarker.trimEnd();
@@ -166,6 +168,17 @@ export async function request(chatBody, settings, context) {
 	for (const tool of chatBody.tools ?? []) {
 		if (tool.type !== "function") {
 			drop(state, `tool:${tool.type}`);
+			continue;
+		}
+		// A Responses `computer_use_preview` tool is Anthropic's own computer tool, with the display size the client gave.
+		if (tool.llmt_computer !== undefined) {
+			tools.push({
+				type: s.computerTool,
+				name: "computer",
+				display_width_px: tool.llmt_computer.width,
+				display_height_px: tool.llmt_computer.height
+			});
+			state.beta = s.computerTool === "computer_20250124" ? "computer-use-2025-01-24" : "computer-use-2025-11-24";
 			continue;
 		}
 		const fn = tool.function;
@@ -307,6 +320,16 @@ function userBlocks(content, state, s) {
 		}
 	}
 	return blocks;
+}
+
+/**
+ * The image block of a screenshot: a data URL as base64, anything else as a URL.
+ * @param {string} url - The screenshot's `image_url`.
+ * @returns {{type: "image", source: any}} The block.
+ */
+function screenshotBlock(url) {
+	const match = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+	return { type: "image", source: match === null ? { type: "url", url } : { type: "base64", media_type: match[1], data: match[2] } };
 }
 
 /**

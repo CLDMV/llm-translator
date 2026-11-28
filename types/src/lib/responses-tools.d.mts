@@ -59,26 +59,43 @@ export function mcpName(label: string, name: string): string;
 export function mcpItem(item: any): boolean;
 /**
  * The Responses item of a client-executed tool call, from the function call the model made.
- * UNSURE: `shell_call` is `{ id, type, call_id, status, action: { commands, timeout_ms, max_output_length } }` and `apply_patch_call` is
- * `{ id, type, call_id, status, operation: { type, path, diff } }`.
- * @param {"shell" | "apply_patch"} kind - The tool.
+ * UNSURE: `shell_call` is `{ id, type, call_id, status, action: { commands, timeout_ms, max_output_length } }`, `apply_patch_call` is
+ * `{ id, type, call_id, status, operation: { type, path, diff } }` and `computer_call` is `{ id, type, call_id, status, action, pending_safety_checks }`
+ * (its action is converted from Anthropic's by {@link computerAction}; `pending_safety_checks` is always empty: nothing here judges a safety check).
+ * @param {"shell" | "apply_patch" | "computer"} kind - The tool.
  * @param {{id: string, call_id: string, arguments: string, status: string}} call - The call: item id, call id, JSON arguments and status.
  * @returns {any} The item.
  */
-export function clientItem(kind: "shell" | "apply_patch", call: {
+export function clientItem(kind: "shell" | "apply_patch" | "computer", call: {
     id: string;
     call_id: string;
     arguments: string;
     status: string;
 }): any;
 /**
+ * The Responses computer action for the input of Anthropic's computer tool (`computer_20250124` and later: `{ action, coordinate, text, ... }`).
+ * `left_click`, `right_click` and `middle_click` are `click` with a button (`left`, `right`, `wheel`), `double_click` and `triple_click` (no counterpart: the
+ * closest one) are `double_click`, `mouse_move` is `move`, `left_click_drag` is `drag`, `key` and `hold_key` are `keypress`, and `type`, `scroll`, `wait`
+ * and `screenshot` keep their names. What has no counterpart (`cursor_position`, `left_mouse_down`, `left_mouse_up`, `zoom`, an unknown action, or an action
+ * that needs a point and has none) becomes a `screenshot`, which a client can always take and from which the model plans again.
+ * @param {any} input - The tool call's input.
+ * @returns {any} The action.
+ */
+export function computerAction(input: any): any;
+/**
+ * The input of Anthropic's computer tool for a Responses computer action, for a `computer_call` the client replays.
+ * @param {any} action - The `action` of the item.
+ * @returns {Record<string, any>} The input (`{ action: "screenshot" }` for an action it does not know).
+ */
+export function computerInput(action: any): Record<string, any>;
+/**
  * The tool names (and so the kinds) a request's emulated client tools are offered under, recorded on the converter's state so the reply
  * converters can turn a function call of that name back into the tool's item.
  * @param {any} state - Converter state.
  * @param {string} name - Function name.
- * @returns {"shell" | "apply_patch" | undefined} The tool the name stands for in this request.
+ * @returns {"shell" | "apply_patch" | "computer" | undefined} The tool the name stands for in this request.
  */
-export function clientKind(state: any, name: string): "shell" | "apply_patch" | undefined;
+export function clientKind(state: any, name: string): "shell" | "apply_patch" | "computer" | undefined;
 /**
  * Whether a Chat tool carries the hosted marker (an emulated tool the runner serves).
  * @param {any} tool - Chat tool.
@@ -102,7 +119,7 @@ export function nativeMark(message: any): boolean;
  * @property {string} kind - The tool's name in this module.
  * @property {RegExp} match - Matches the tool's `type`.
  * @property {"mapped" | "emulated" | "rejected"} handling - What the translator does.
- * @property {"function" | "custom" | "serverTools" | "mcp" | "none"} via - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
+ * @property {"function" | "custom" | "serverTools" | "mcp" | "anthropic" | "none"} via - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
  * @property {string} [executor] - For `via: "serverTools"`: the tool type pattern an executor must serve.
  * @property {string} [offered] - The name of the function the model is offered (emulated tools).
  * @property {string} note - One line for the documentation and the error message.
@@ -167,7 +184,7 @@ export type ToolRow = {
     /**
      * - What carries it: a Chat function or custom tool, a `serverTools` executor, or nothing.
      */
-    via: "function" | "custom" | "serverTools" | "mcp" | "none";
+    via: "function" | "custom" | "serverTools" | "mcp" | "anthropic" | "none";
     /**
      * - For `via: "serverTools"`: the tool type pattern an executor must serve.
      */

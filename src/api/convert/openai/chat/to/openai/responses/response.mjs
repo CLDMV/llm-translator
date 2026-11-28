@@ -75,7 +75,7 @@ function itemsOf(message, state, s, hosted = []) {
 		if (kind !== undefined) {
 			output.push(
 				clientItem(kind, {
-					id: itemId(kind === "shell" ? "sc" : "apc"),
+					id: itemId({ shell: "sc", apply_patch: "apc", computer: "cu" }[kind]),
 					call_id: call.id,
 					arguments: call.function.arguments ?? "",
 					status: "completed"
