@@ -20,6 +20,7 @@
 import { context, self } from "../../lib/runtime.mjs";
 import { capture } from "../../lib/capture.mjs";
 import { estimate } from "../../lib/estimate.mjs";
+import { strip } from "../../lib/hostedtools.mjs";
 
 /**
  * Count input tokens for a client request. Uses the upstream's own tokenizer when its driver has one (vLLM `/tokenize`,
@@ -31,7 +32,8 @@ import { estimate } from "../../lib/estimate.mjs";
 export async function count(body, options = {}) {
 	const c = capture(self, context, options.front);
 	const { request } = self;
-	const prepared = await request(body, { front: options.front, tokens: true });
+	// The hosted tools of a Responses request are counted as the function tools they are offered as.
+	const prepared = await request(strip(body), { front: options.front, tokens: true });
 	const endpoint = c.endpoint(prepared.upstream);
 	const driver = c.driver(endpoint);
 	const exact = driver.count

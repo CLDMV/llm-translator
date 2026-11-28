@@ -126,9 +126,13 @@ describe("request: messages", () => {
 					tool_calls: [
 						{ id: "c1", type: "function", function: { name: "f" } },
 						{ id: "c2", function: { name: "g", arguments: "{}" } },
-						{ id: "c3", type: "custom", custom: { name: "h", input: "x" } }
+						{ id: "c3", type: "custom", custom: { name: "h", input: "x" } },
+						{ id: "c4", type: "custom", custom: { name: "i" } },
+						{ id: "c5", type: "weird" }
 					]
 				},
+				{ role: "tool", tool_call_id: "c3", content: "X" },
+				{ role: "tool", tool_call_id: "c1", content: "F" },
 				{ role: "assistant", content: "" }
 			]
 		});
@@ -137,9 +141,13 @@ describe("request: messages", () => {
 			{ role: "assistant", content: "no" },
 			{ role: "assistant", content: "a" },
 			{ type: "function_call", call_id: "c1", name: "f", arguments: "{}" },
-			{ type: "function_call", call_id: "c2", name: "g", arguments: "{}" }
+			{ type: "function_call", call_id: "c2", name: "g", arguments: "{}" },
+			{ type: "custom_tool_call", call_id: "c3", name: "h", input: "x" },
+			{ type: "custom_tool_call", call_id: "c4", name: "i", input: "" },
+			{ type: "custom_tool_call_output", call_id: "c3", output: "X" },
+			{ type: "function_call_output", call_id: "c1", output: "F" }
 		]);
-		expect(state.dropped).toEqual(["tool_call:custom"]);
+		expect(state.dropped).toEqual(["tool_call:weird"]);
 	});
 
 	test("an unknown role is an error", () => {
@@ -371,6 +379,8 @@ describe("response", () => {
 					{ type: "message", content: [{ type: "output_text", text: "a" }, { type: "refusal", refusal: "no" }, { type: "other" }, null] },
 					{ type: "function_call", call_id: "c1", name: "f", arguments: "{}" },
 					{ type: "function_call", id: "fc2", name: "g" },
+					{ type: "custom_tool_call", call_id: "c9", name: "w", input: "in" },
+					{ type: "custom_tool_call", id: "ct2", name: "v" },
 					{ type: "message" },
 					{ type: "web_search_call" },
 					null
@@ -398,7 +408,9 @@ describe("response", () => {
 				reasoning_details: [{ type: "reasoning.encrypted", data: "E", format: "openai-responses-v1", index: 0, id: "rs", summary: "why" }],
 				tool_calls: [
 					{ id: "c1", type: "function", function: { name: "f", arguments: "{}" } },
-					{ id: "fc2", type: "function", function: { name: "g", arguments: "{}" } }
+					{ id: "fc2", type: "function", function: { name: "g", arguments: "{}" } },
+					{ id: "c9", type: "custom", custom: { name: "w", input: "in" } },
+					{ id: "ct2", type: "custom", custom: { name: "v", input: "" } }
 				]
 			}
 		});
@@ -543,6 +555,30 @@ describe("stream", () => {
 		expect(bare[0].id).toMatch(/^chatcmpl-/);
 		expect(bare.at(-2)).toMatchObject({ choices: [] });
 		expect(bare.at(-2).usage).toBeUndefined();
+	});
+
+	test("a custom tool call streams its input, and a finished item that was not streamed sends it whole", async () => {
+		const call = { type: "custom_tool_call", id: "ct", call_id: "c1", name: "w" };
+		const chunks = await run([
+			created,
+			{ type: "response.custom_tool_call_input.delta", output_index: 4, delta: "lost" },
+			{ type: "response.output_item.added", output_index: 0, item: call },
+			{ type: "response.custom_tool_call_input.delta", output_index: 0, delta: "he" },
+			{ type: "response.custom_tool_call_input.delta", output_index: 0 },
+			{ type: "response.output_item.done", output_index: 0, item: { ...call, input: "he" } },
+			{ type: "response.output_item.done", output_index: 1, item: { ...call, call_id: "c2", input: "whole" } },
+			{ type: "response.output_item.done", output_index: 2, item: { ...call, call_id: "c3" } },
+			done()
+		]);
+		const calls = deltas(chunks).flatMap((choice) => choice.delta.tool_calls ?? []);
+		expect(calls).toEqual([
+			{ index: 0, id: "c1", type: "custom", custom: { name: "w", input: "" } },
+			{ index: 0, custom: { input: "he" } },
+			{ index: 0, custom: { input: "" } },
+			{ index: 1, id: "c2", type: "custom", custom: { name: "w", input: "" } },
+			{ index: 1, custom: { input: "whole" } },
+			{ index: 2, id: "c3", type: "custom", custom: { name: "w", input: "" } }
+		]);
 	});
 
 	test("a tool call starts when its item is added and streams its arguments; the delta of an unknown item is ignored", async () => {

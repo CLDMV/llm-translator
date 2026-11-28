@@ -55,6 +55,7 @@ import { resolve } from "./route.mjs";
 import { combine, deliver } from "./usage.mjs";
 import { emit } from "./events.mjs";
 import { split, streamer } from "./citemarks.mjs";
+import { normalize as normalizeMcp } from "./mcp.mjs";
 
 /**
  * @typedef {object} ServerToolExecutor
@@ -70,7 +71,7 @@ import { split, streamer } from "./citemarks.mjs";
  * @property {(item: any) => any} [cite] The citation of one item of a result's `content` array; makes the executor's results citable with `[[cite:N]]` markers.
  */
 
-/** @typedef {ServerToolExecutor[] | {executors?: ServerToolExecutor[], maxRounds?: number}} ServerTools */
+/** @typedef {ServerToolExecutor[] | {executors?: ServerToolExecutor[], maxRounds?: number, mcp?: {hosts: string[], timeout?: number, maxResponse?: number, fetch?: Function, lookup?: Function}}} ServerTools */
 
 /** The default number of upstream calls one request may make. */
 export const ROUNDS = 10;
@@ -92,12 +93,12 @@ export function kind(type) {
 
 /**
  * Validate the `serverTools` option of the config or of a `send` call.
- * @param {any} value - `undefined`, an array of executors, or `{ executors, maxRounds }`.
- * @returns {{executors: any[], maxRounds: number | undefined}} Normalized option.
+ * @param {any} value - `undefined`, an array of executors, or `{ executors, maxRounds, mcp }`.
+ * @returns {{executors: any[], maxRounds: number | undefined, mcp: any}} Normalized option (`mcp` is the allowlist for the Responses `mcp` tool, see `lib/mcp.mjs`, or undefined).
  * @throws {TranslatorError} `INVALID_CONFIG` for an executor with no usable `type`, `schema` or `run`, or a `maxRounds` that is not a positive whole number.
  */
 export function normalize(value) {
-	if (value === undefined || value === null) return { executors: [], maxRounds: undefined };
+	if (value === undefined || value === null) return { executors: [], maxRounds: undefined, mcp: undefined };
 	const spec = Array.isArray(value) ? { executors: value } : value;
 	const executors = spec.executors ?? [];
 	const bad = (message) => new TranslatorError(`serverTools: ${message}`, { code: "INVALID_CONFIG", status: 500 });
@@ -117,7 +118,7 @@ export function normalize(value) {
 	if (spec.maxRounds !== undefined && (!Number.isInteger(spec.maxRounds) || spec.maxRounds < 1)) {
 		throw bad("maxRounds must be a positive whole number");
 	}
-	return { executors: [...executors], maxRounds: spec.maxRounds };
+	return { executors: [...executors], maxRounds: spec.maxRounds, mcp: normalizeMcp(spec.mcp) };
 }
 
 /**
@@ -126,7 +127,7 @@ export function normalize(value) {
  * @param {string} type - Tool type.
  * @returns {any} The executor, or undefined.
  */
-function find(executors, type) {
+export function find(executors, type) {
 	return executors.find((executor) => (executor.type instanceof RegExp ? executor.type.test(type) : executor.type === type));
 }
 
@@ -216,7 +217,7 @@ function text(content) {
  * @param {number} [offset] - Citable items that came before this result in the request.
  * @returns {string} Text.
  */
-function render(executor, content, offset = 0) {
+export function render(executor, content, offset = 0) {
 	return typeof executor?.read === "function" && !failed(content) ? executor.read(content, offset) : text(content);
 }
 
@@ -226,7 +227,7 @@ function render(executor, content, offset = 0) {
  * @param {any} content - The result block's `content`.
  * @returns {any[]} The items, or none.
  */
-function citable(executor, content) {
+export function citable(executor, content) {
 	return typeof executor?.cite === "function" && Array.isArray(content) ? content : [];
 }
 
@@ -272,7 +273,7 @@ function expand(block, known) {
  * @param {any} content - The result block's `content`.
  * @returns {boolean} True for an error result.
  */
-function failed(content) {
+export function failed(content) {
 	return typeof content?.error_code === "string";
 }
 

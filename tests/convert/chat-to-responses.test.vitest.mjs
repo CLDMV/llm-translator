@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { response } from "../../src/api/convert/openai/chat/to/openai/responses/response.mjs";
 import { stream } from "../../src/api/convert/openai/chat/to/openai/responses/stream.mjs";
-import { pack, unpack, failureOf } from "../../src/lib/responses.mjs";
+import { pack, unpack, failureOf, usageOf } from "../../src/lib/responses.mjs";
 import { collect, openaiSse } from "../helpers/streams.mjs";
 
 const state = { model: "m", echo: { instructions: "i", store: false } };
@@ -121,6 +121,11 @@ describe("response", () => {
 });
 
 describe("helpers", () => {
+	it("counts a missing side of a usage object as zero", () => {
+		expect(usageOf({ completion_tokens: 3 })).toMatchObject({ input_tokens: 0, output_tokens: 3, total_tokens: 3 });
+		expect(usageOf({ prompt_tokens: 2 })).toMatchObject({ input_tokens: 2, output_tokens: 0, total_tokens: 2 });
+	});
+
 	it("packs and unpacks reasoning details and refuses anything else", () => {
 		expect(pack(undefined)).toBeUndefined();
 		expect(pack([])).toBeUndefined();

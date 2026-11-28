@@ -335,16 +335,31 @@ describe("refusals", () => {
 		refused({ model: "m", input: "x", background: true }, undefined, "unsupported_field", "background");
 	});
 
-	it("refuses hosted tools, custom tools and non-function tool choices", () => {
-		for (const type of ["web_search", "file_search", "code_interpreter", "mcp", "computer_use_preview", "custom"]) {
-			refused({ model: "m", input: "x", tools: [{ type }] }, undefined, "unsupported_tool", "tools[0]");
+	it("refuses the tool types with no counterpart, unknown types and malformed tools", () => {
+		for (const type of ["file_search", "image_generation", "local_shell"]) {
+			const error = refused({ model: "m", input: "x", tools: [{ type }] }, undefined, "unsupported_tool", "tools[0]");
+			expect(error.message).toContain(type);
 		}
+		refused({ model: "m", input: "x", tools: [{ type: "something_new" }] }, undefined, "unsupported_tool", "tools[0]");
 		refused({ model: "m", input: "x", tools: [{}] }, undefined, "unsupported_tool", "tools[0]");
+		refused({ model: "m", input: "x", tools: [null] }, undefined, "unsupported_tool", "tools[0]");
 		refused({ model: "m", input: "x", tools: [{ type: "function" }] }, undefined, "invalid_request", "tools[0].name");
+		refused({ model: "m", input: "x", tools: [{ type: "custom" }] }, undefined, "invalid_request", "tools[0].name");
+		refused({ model: "m", input: "x", tools: "web_search" }, undefined, "invalid_request", "tools");
+	});
+
+	it("refuses tool choices that name nothing the request offers", () => {
 		const tools = [{ type: "function", name: "a" }];
 		refused({ model: "m", input: "x", tools, tool_choice: { type: "web_search" } }, undefined, "unsupported_field", "tool_choice");
+		refused({ model: "m", input: "x", tools, tool_choice: { type: "file_search" } }, undefined, "unsupported_field", "tool_choice");
 		refused(
-			{ model: "m", input: "x", tools, tool_choice: { type: "allowed_tools", mode: "auto", tools } },
+			{ model: "m", input: "x", tools, tool_choice: { type: "allowed_tools", mode: "auto", tools: [{ type: "web_search" }] } },
+			undefined,
+			"unsupported_field",
+			"tool_choice"
+		);
+		refused(
+			{ model: "m", input: "x", tools, tool_choice: { type: "allowed_tools", mode: "sometimes", tools } },
 			undefined,
 			"unsupported_field",
 			"tool_choice"
@@ -353,12 +368,21 @@ describe("refusals", () => {
 		refused({ model: "m", input: "x", tools, tool_choice: 5 }, undefined, "unsupported_field", "tool_choice");
 	});
 
+	it("refuses a context_management entry that is not a compaction, and still drops an empty one", () => {
+		refused(
+			{ model: "m", input: "x", context_management: [{ type: "clear_thinking" }] },
+			undefined,
+			"unsupported_field",
+			"context_management[0].type"
+		);
+	});
+
 	it("refuses input items and parts that have no counterpart", () => {
 		for (const item of [
 			{ type: "item_reference", id: "msg_1" },
-			{ type: "web_search_call", id: "ws_1" },
-			{ type: "computer_call", id: "cu_1" },
-			{ type: "mcp_call", id: "m_1" },
+			{ type: "file_search_call", id: "fs_1" },
+			{ type: "image_generation_call", id: "ig_1" },
+			{ type: "local_shell_call", id: "ls_1" },
 			{ id: "no-type" }
 		]) {
 			refused({ model: "m", input: [item] }, undefined, "unsupported_content", "input[0]");

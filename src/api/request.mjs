@@ -37,7 +37,8 @@ import * as vllm from "../lib/vllm.mjs";
 import { resolve as resolveFiles } from "../lib/files.mjs";
 import * as documentUrls from "../lib/document-urls.mjs";
 import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
-import { CONVERSE, GEMINI } from "../lib/protocol.mjs";
+import { CONVERSE, GEMINI, MESSAGES } from "../lib/protocol.mjs";
+import { refuse as refuseHosted } from "../lib/hostedtools.mjs";
 
 /**
  * Who produced reasoning data signed for this endpoint: driver, protocol and host, so two upstreams on the generic driver stay apart.
@@ -127,6 +128,8 @@ function checkStrict(c, upstream, endpoint, driver, settings, options) {
  */
 async function prepare(c, body, options, picked) {
 	const { endpoint, model, unserved, convert, pool, pin, protocol } = picked;
+	// A Responses client's hosted tools are only served over the Responses API (natively) or by the emulation runner, which strips them before a round is sent.
+	if (options.wire === "responses" && protocol !== RESPONSES) refuseHosted(body, true, protocol === MESSAGES);
 	const levels = Object.hasOwn(c.config.efforts, model) ? c.config.efforts[model] : undefined;
 	// An alias that pins settings overrides what the request asked for, before conversion; a pinned effort is always mapped.
 	if (pin) body = pinBody(body, pin, c.front);
@@ -309,6 +312,8 @@ async function prepare(c, body, options, picked) {
 		...(convert === null && endpoint.protocol === "anthropic.messages" ? options.clientHeaders : undefined),
 		...http.headers(endpoint, driver.info.auth, options.headers)
 	};
+	// The beta a converted body needs (the computer tool), joined with any the headers already name.
+	if (converted?.beta) headers["anthropic-beta"] = [headers["anthropic-beta"], converted.beta].filter(Boolean).join(",");
 	// A driver whose credentials are fetched (Google's access tokens) has an `auth` leaf that returns the headers to send; token counting sends none of these headers.
 	if (driver.auth && options.tokens !== true)
 		headers = await driver.auth({ endpoint, headers, transport: c.state.transport, timeout: c.config.detectTimeout });

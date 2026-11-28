@@ -348,7 +348,7 @@ describe("previous_response_id", () => {
 			// An error in the new input names its position in the request, not in the replayed history.
 			const wrong = await post(`${url}/v1/responses`, {
 				...hello,
-				input: [{ type: "web_search_call", id: "ws_1" }],
+				input: [{ type: "file_search_call", id: "fs_1" }],
 				previous_response_id: first.id
 			});
 			expect(wrong.status).toBe(400);
@@ -439,7 +439,7 @@ describe("conversations", () => {
 			const bad = [
 				{ items: "x" },
 				{ items: Array.from({ length: 21 }, () => ({ role: "user", content: "x" })) },
-				{ items: [{ type: "web_search_call" }] },
+				{ items: [{ type: "file_search_call" }] },
 				{
 					items: [
 						{ role: "user", content: "a" },

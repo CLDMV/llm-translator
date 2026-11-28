@@ -97,6 +97,7 @@ export async function plugin(fastify, options = {}) {
 			keep: (made, response) => finish(made, response, { config, state }),
 			jobs: () => jobsOf(state),
 			get: responses.get,
+			compact: responses.compact,
 			remove: responses.remove,
 			cancel: responses.cancel,
 			input: responses.input
