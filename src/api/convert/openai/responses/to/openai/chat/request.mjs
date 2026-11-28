@@ -68,7 +68,7 @@ const STATEFUL = ["previous_response_id", "conversation", "prompt"];
  * @param {any} body - OpenAI `POST /v1/responses` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {{ body: any, state: any }} Chat Completions body and the state the reply converters need (`model`, `stream`, `echo`, `dropped`).
- * @throws {TranslatorError} `invalid_request` for a malformed body, `unsupported_field` for stateful parameters, `context_management` and unmapped fields under `unknownFields: "error"`, `unsupported_tool` and `unsupported_content` for what has no counterpart.
+ * @throws {TranslatorError} `invalid_request` for a malformed body, `unsupported_field` for stateful parameters, a `context_management` entry that is not a compaction and unmapped fields under `unknownFields: "error"`, `unsupported_tool` and `unsupported_content` for what has no counterpart.
  */
 export function request(body, settings) {
 	const s = resolve(settings);
@@ -91,15 +91,10 @@ export function request(body, settings) {
 	}
 	if (body.store === true) refuse("store: responses are not stored; send store: false or omit it", "store");
 	if (body.background === true) refuse("background: background responses are not supported", "background");
+	const compact = compactionOf(body.context_management);
 	for (const key of Object.keys(body)) {
-		if (HANDLED.has(key)) continue;
+		if (HANDLED.has(key) || (key === "context_management" && compact !== null)) continue;
 		skip(state, s, key, `${key}: Unrecognized request argument`);
-	}
-	if (Array.isArray(body.context_management) && body.context_management.length > 0) {
-		refuse(
-			"context_management: automatic compaction is not supported; call POST /v1/responses/compact and send its output as the next input",
-			"context_management"
-		);
 	}
 	if (typeof body.truncation === "string" && body.truncation !== "disabled")
 		skip(state, s, "truncation", 'truncation: only "disabled" is supported');
@@ -279,6 +274,7 @@ export function request(body, settings) {
 		if (body.tool_choice !== null && typeof body.tool_choice === "object") out.llmt_native_choice = body.tool_choice;
 		if (Array.isArray(body.include)) out.llmt_native_include = body.include;
 	}
+	if (compact !== null) out.llmt_compact = compact;
 	const format = body.text?.format;
 	if (format?.type === "json_object") out.response_format = { type: "json_object" };
 	else if (format?.type === "json_schema") {
@@ -315,6 +311,32 @@ export function request(body, settings) {
 		metadata: body.metadata ?? {}
 	};
 	return { body: out, state };
+}
+
+/**
+ * The automatic compaction a request asks for: `context_management: [{ type: "compaction", compact_threshold }]`. With several entries the first one counts.
+ * @param {unknown} list - The request's `context_management`.
+ * @returns {{ threshold: number } | null} The threshold, or null when the request asks for none (an empty list is dropped like any unmapped field).
+ * @throws {TranslatorError} `unsupported_field` for an entry that is not a compaction, `invalid_request` for a threshold that is not a positive whole number.
+ */
+function compactionOf(list) {
+	if (!Array.isArray(list) || list.length === 0) return null;
+	list.forEach((entry, position) => {
+		const at = `context_management[${position}]`;
+		if (entry?.type !== "compaction") {
+			refuse(
+				`${at}.type: unsupported context management type ${JSON.stringify(entry?.type ?? null)} (only compaction is supported)`,
+				`${at}.type`
+			);
+		}
+		if (!Number.isInteger(entry.compact_threshold) || entry.compact_threshold < 1) {
+			throw new TranslatorError(`${at}.compact_threshold must be a positive whole number of tokens`, {
+				code: "invalid_request",
+				param: `${at}.compact_threshold`
+			});
+		}
+	});
+	return { threshold: list[0].compact_threshold };
 }
 
 /**

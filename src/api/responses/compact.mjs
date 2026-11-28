@@ -21,11 +21,7 @@ import { context, self } from "../../lib/runtime.mjs";
 import { capture } from "../../lib/capture.mjs";
 import { resolve as routeTo } from "../../lib/route.mjs";
 import { TranslatorError } from "../../lib/errors.mjs";
-import { itemId, summarize, usageOf } from "../../lib/responses.mjs";
-
-/** What the model is asked to write. */
-const PROMPT =
-	"Write a summary of the conversation above that will replace its earlier turns. Keep the user's goals and instructions, the decisions made, the facts, names and identifiers later turns depend on, the work still to do, and the state of any tool use. Reply with the summary only.";
+import { COMPACT_PROMPT, itemId, summarize, usageOf } from "../../lib/responses.mjs";
 
 /**
  * Whether an input item is a user message, which a compaction keeps as it is.
@@ -70,7 +66,7 @@ export async function compact(body, options = {}) {
 		{ model: body.model, input, ...(typeof body.instructions === "string" ? { instructions: body.instructions } : {}) },
 		settings
 	);
-	const chat = { ...converted.body, messages: [...converted.body.messages, { role: "user", content: PROMPT }] };
+	const chat = { ...converted.body, messages: [...converted.body.messages, { role: "user", content: COMPACT_PROMPT }] };
 	const reply = await self.send(chat, {
 		signal: options.signal,
 		wire: "responses",

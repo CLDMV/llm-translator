@@ -206,6 +206,9 @@ async function* converted(source, state, settings) {
 			yield emit("response.code_interpreter_call_code.done", { ...at, code: item.code });
 			yield emit("response.code_interpreter_call.interpreting", at);
 			yield emit("response.code_interpreter_call.completed", at);
+		} else if (item.type === "compaction") {
+			// UNSURE: OpenAI documents no events of its own for the compaction item; it is sent as an added and a done item.
+			yield emit("response.output_item.added", { output_index: index, item });
 		} else {
 			yield emit("response.output_item.added", { output_index: index, item: { ...item, status: "in_progress" } });
 		}

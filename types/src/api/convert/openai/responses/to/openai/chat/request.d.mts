@@ -13,7 +13,7 @@
  * @param {any} body - OpenAI `POST /v1/responses` body.
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {{ body: any, state: any }} Chat Completions body and the state the reply converters need (`model`, `stream`, `echo`, `dropped`).
- * @throws {TranslatorError} `invalid_request` for a malformed body, `unsupported_field` for stateful parameters, `context_management` and unmapped fields under `unknownFields: "error"`, `unsupported_tool` and `unsupported_content` for what has no counterpart.
+ * @throws {TranslatorError} `invalid_request` for a malformed body, `unsupported_field` for stateful parameters, a `context_management` entry that is not a compaction and unmapped fields under `unknownFields: "error"`, `unsupported_tool` and `unsupported_content` for what has no counterpart.
  */
 export function request(body: any, settings?: Partial<import("../../../../../../../lib/settings.mjs").Settings>): {
     body: any;

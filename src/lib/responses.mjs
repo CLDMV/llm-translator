@@ -29,6 +29,10 @@ export const COMPACTED = "Summary of the earlier conversation, which has been co
 const MAX_DETAILS = 64;
 const MAX_BYTES = 1024 * 1024;
 
+/** What the model is asked to write when a conversation is compacted (`POST /v1/responses/compact` and automatic compaction). */
+export const COMPACT_PROMPT =
+	"Write a summary of the conversation above that will replace its earlier turns. Keep the user's goals and instructions, the decisions made, the facts, names and identifiers later turns depend on, the work still to do, and the state of any tool use. Reply with the summary only.";
+
 /**
  * A Responses style id: a short prefix (`resp`, `msg`, `fc`, `fco`, `rs`, `conv`, `ws`, `ci`, `cmp`, ...), an underscore and 24 hex digits.
  * @param {string} prefix - Id family.

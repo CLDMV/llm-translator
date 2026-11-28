@@ -85,3 +85,5 @@ export function failureOf(error: any): {
 };
 /** The sentence a compaction summary is introduced with when it goes back to the model. */
 export const COMPACTED: "Summary of the earlier conversation, which has been compacted:";
+/** What the model is asked to write when a conversation is compacted (`POST /v1/responses/compact` and automatic compaction). */
+export const COMPACT_PROMPT: "Write a summary of the conversation above that will replace its earlier turns. Keep the user's goals and instructions, the decisions made, the facts, names and identifiers later turns depend on, the work still to do, and the state of any tool use. Reply with the summary only.";

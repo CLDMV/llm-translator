@@ -28,6 +28,20 @@ export function wants(c: any, body: any, options: any): {
     loaded: Set<string> | null;
 } | null;
 /**
+ * Whether the request goes to an upstream that takes hosted tools as they are: the Responses protocol with `hostedTools: "native"`.
+ * @param {any} c - Captured translator parts (`capture`).
+ * @param {any} body - Chat body of a Responses request.
+ * @param {any} options - The `send` options (`wire`).
+ * @returns {boolean} True for a native route.
+ */
+export function nativeRoute(c: any, body: any, options: any): boolean;
+/**
+ * Whether a Chat body of a Responses request carries any hosted tool or hosted item (marked by the request converter).
+ * @param {any} body - Chat body.
+ * @returns {boolean} True when something is marked.
+ */
+export function marked(body: any): boolean;
+/**
  * Refuse what cannot be sent to the upstream the request goes to: a tool or an input item only a Responses upstream with `hostedTools: "native"` can
  * take (`all: false`, used where the emulation runner takes over), or any hosted tool or item at all (`all: true`, used for an upstream that does not
  * speak the Responses API, which a request reaches when `api: "auto"` falls back to Chat Completions).

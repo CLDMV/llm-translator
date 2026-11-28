@@ -36,6 +36,7 @@ import { createBudget } from "../lib/thinking.mjs";
 import * as fanout from "../lib/fanout.mjs";
 import * as servertools from "../lib/servertools.mjs";
 import * as hostedtools from "../lib/hostedtools.mjs";
+import * as compaction from "../lib/compaction.mjs";
 import { refresh } from "../lib/health.mjs";
 
 const SSE_HEADERS = { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", "x-accel-buffering": "no" };
@@ -99,6 +100,18 @@ export async function send(body, options = {}) {
 	try {
 		// `n` above 1 for an Anthropic-protocol upstream (which has no `n`) becomes `n` parallel single-choice requests, each a `send` of its own.
 		const warning = (message, details) => warn(config, state, message, { type: "usage", ...details, log: options.log });
+		// Automatic compaction (`context_management` on a Responses request): the conversation is summarised first when it is long, then the turn runs.
+		if (compaction.wants(captured, body, options)) {
+			nested = true;
+			return await compaction.run({
+				body,
+				options,
+				send,
+				warn: warning,
+				count: (counted) => self.token.count(counted, { signal: options.signal, front: options.front }),
+				fail: (status, message, details) => build(status, message, { ...details, front: options.front })
+			});
+		}
 		const count = fanout.wants(captured, body);
 		if (count > 0) {
 			nested = true;

@@ -49,7 +49,7 @@ import { TranslatorError } from "./errors.mjs";
 import { ROUNDS, add, citable, execute, failed, find, normalize, render } from "./servertools.mjs";
 
 /** The fields the request converter adds for a Responses upstream that takes hosted tools as they are. */
-const NATIVE_FIELDS = ["llmt_native_choice", "llmt_native_include"];
+const NATIVE_FIELDS = ["llmt_native_choice", "llmt_native_include", "llmt_compact"];
 
 const DONE = { data: "[DONE]" };
 
@@ -172,7 +172,7 @@ export function wants(c, body, options) {
 		if (executor === undefined) {
 			throw refusal(
 				at,
-				`the ${original?.type ?? kind} tool needs an executor for ${row?.executor ?? kind} in serverTools, and none is configured (see docs/settings.md)`
+				`the ${original?.type ?? kind} tool needs an executor for ${row.executor} in serverTools, and none is configured (see docs/settings.md)`
 			);
 		}
 		const members = typeof executor.members === "function" ? executor.members(shown) : [];
@@ -197,9 +197,21 @@ export function wants(c, body, options) {
  * @param {any} options - The `send` options (`wire`).
  * @returns {boolean} True for a native route.
  */
-function nativeRoute(c, body, options) {
+export function nativeRoute(c, body, options) {
 	const picked = route(c, body, { wire: options.wire });
 	return picked.protocol === RESPONSES && c.settings(picked.endpoint, picked.protocol).hostedTools === "native";
+}
+
+/**
+ * Whether a Chat body of a Responses request carries any hosted tool or hosted item (marked by the request converter).
+ * @param {any} body - Chat body.
+ * @returns {boolean} True when something is marked.
+ */
+export function marked(body) {
+	return (
+		(Array.isArray(body?.tools) && body.tools.some(hostedMark)) ||
+		(Array.isArray(body?.messages) && body.messages.some((m) => replayMark(m) || nativeMark(m)))
+	);
 }
 
 /**

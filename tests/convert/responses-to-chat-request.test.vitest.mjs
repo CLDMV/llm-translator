@@ -368,12 +368,12 @@ describe("refusals", () => {
 		refused({ model: "m", input: "x", tools, tool_choice: 5 }, undefined, "unsupported_field", "tool_choice");
 	});
 
-	it("refuses automatic compaction (context_management) and still drops an empty one", () => {
+	it("refuses a context_management entry that is not a compaction, and still drops an empty one", () => {
 		refused(
-			{ model: "m", input: "x", context_management: [{ type: "compaction", compact_threshold: 1000 }] },
+			{ model: "m", input: "x", context_management: [{ type: "clear_thinking" }] },
 			undefined,
 			"unsupported_field",
-			"context_management"
+			"context_management[0].type"
 		);
 	});
 

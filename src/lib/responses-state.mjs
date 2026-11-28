@@ -375,8 +375,9 @@ function recordOf(made, response) {
 		id: response.id,
 		response,
 		input: itemsOf(made.input),
-		// A conversation is its own history; a chain keeps the items it was answered after.
-		history: made.conversation === null ? made.history : [],
+		// A conversation is its own history; a chain keeps the items it was answered after, unless this response compacted them (its
+		// `compaction` item stands for them and the next turn starts from it).
+		history: made.conversation === null && !response.output.some((item) => item?.type === "compaction") ? made.history : [],
 		conversation: made.conversation,
 		background: made.background
 	};

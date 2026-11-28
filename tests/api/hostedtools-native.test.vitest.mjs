@@ -331,7 +331,7 @@ describe("edges", () => {
 				choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }]
 			}
 		}));
-		for (const tools of [undefined, [{ function: { name: "a" } }, { type: "function" }, null]]) {
+		for (const extra of [{}, { tools: [{ function: { name: "a" } }, { type: "function" }, null] }, { status: "failed" }]) {
 			await respond(
 				api,
 				{
@@ -339,13 +339,38 @@ describe("edges", () => {
 					input: [
 						{ role: "user", content: "x" },
 						{ type: "tool_search_call", id: "tsc", call_id: "k", arguments: {} },
-						{ type: "tool_search_output", id: "tso", call_id: "k", ...(tools === undefined ? {} : { tools }) },
+						{ type: "tool_search_output", id: "tso", call_id: "k", ...extra },
 						{ role: "user", content: "y" }
 					]
 				},
 				{}
 			);
 		}
-		expect(transport.calls).toHaveLength(2);
+		expect(transport.calls).toHaveLength(3);
+	});
+
+	it("replays a code_interpreter_call that has no outputs", async () => {
+		const { api, transport } = await start({ api: "chat" }, {}, () => ({
+			body: {
+				id: "c",
+				object: "chat.completion",
+				created: 1,
+				model: "gpt-x",
+				choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }]
+			}
+		}));
+		await respond(
+			api,
+			{
+				model: "gpt-x",
+				input: [
+					{ role: "user", content: "x" },
+					{ type: "code_interpreter_call", id: "ci", code: "1" },
+					{ role: "user", content: "y" }
+				]
+			},
+			{}
+		);
+		expect(JSON.parse(transport.calls[0].init.body).messages[2].content).toContain("code_execution_result");
 	});
 });

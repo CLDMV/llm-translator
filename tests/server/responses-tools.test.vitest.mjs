@@ -93,7 +93,7 @@ describe("tool types with no counterpart", () => {
 		}
 	);
 
-	it("answers an emulated hosted tool with no executor the same way, and refuses automatic compaction", async () => {
+	it("answers an emulated hosted tool with no executor the same way, and refuses an unknown context management type", async () => {
 		const { upstream, url } = await start((req, body, res) => json(res, 200, completion("hi")));
 		try {
 			const reply = await post(url, { model: "qwen3-coder", input: "x", tools: [{ type: "web_search" }] });
@@ -102,10 +102,10 @@ describe("tool types with no counterpart", () => {
 			const managed = await post(url, {
 				model: "qwen3-coder",
 				input: "x",
-				context_management: [{ type: "compaction", compact_threshold: 100000 }]
+				context_management: [{ type: "something_else" }]
 			});
 			expect(managed.status).toBe(400);
-			expect((await managed.json()).error).toMatchObject({ code: "unsupported_field", param: "context_management" });
+			expect((await managed.json()).error).toMatchObject({ code: "unsupported_field", param: "context_management[0].type" });
 		} finally {
 			await upstream.close();
 		}
@@ -367,6 +367,37 @@ describe("POST /v1/responses/compact", () => {
 			expect((await answer.json()).error).toMatchObject({ code: "invalid_upstream_response" });
 		} finally {
 			await empty.upstream.close();
+		}
+	});
+});
+
+describe("automatic compaction with the response store", () => {
+	it("keeps a compacting response without the history it replaced", async () => {
+		const answers = ["A1", "SUM", "A2", "A3"];
+		let turn = 0;
+		const { upstream, url } = await start((req, body, res) => json(res, 200, completion(answers[turn++])));
+		try {
+			const first = await (await post(url, { model: "qwen3-coder", input: "first" })).json();
+			const second = await (
+				await post(url, {
+					model: "qwen3-coder",
+					input: "second",
+					previous_response_id: first.id,
+					context_management: [{ type: "compaction", compact_threshold: 10 }]
+				})
+			).json();
+			expect(second.output.map((item) => item.type)).toEqual(["compaction", "message"]);
+			expect(unsummarize(second.output[0].encrypted_content)).toBe("SUM");
+			const turnBody = chatBody(upstream);
+			expect(turnBody.messages.map((message) => message.role)).toEqual(["user", "user", "user"].slice(0, 2));
+			const third = await post(url, { model: "qwen3-coder", input: "third", previous_response_id: second.id });
+			expect(third.status).toBe(200);
+			const replayed = chatBody(upstream).messages;
+			expect(replayed.map((message) => message.role)).toEqual(["user", "user", "assistant", "user"]);
+			expect(JSON.stringify(replayed)).not.toContain("first");
+			expect(replayed[1].content).toBe(`${COMPACTED}\n\nSUM`);
+		} finally {
+			await upstream.close();
 		}
 	});
 });
