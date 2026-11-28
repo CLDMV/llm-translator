@@ -300,3 +300,12 @@ export function replayMark(message) {
 		message !== null && typeof message === "object" && message.llmt_hosted !== undefined && typeof message.llmt_hosted?.kind === "string"
 	);
 }
+
+/**
+ * Whether a Chat message carries an input item only a Responses upstream can take (`hostedTools: "native"`).
+ * @param {any} message - Chat message.
+ * @returns {boolean} True for a marked message.
+ */
+export function nativeMark(message) {
+	return message !== null && typeof message === "object" && message.llmt_native !== undefined && message.llmt_native?.item !== undefined;
+}

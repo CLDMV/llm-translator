@@ -28,6 +28,16 @@ export function wants(c: any, body: any, options: any): {
     loaded: Set<string> | null;
 } | null;
 /**
+ * Refuse what cannot be sent to the upstream the request goes to: a tool or an input item only a Responses upstream with `hostedTools: "native"` can
+ * take (`all: false`, used where the emulation runner takes over), or any hosted tool or item at all (`all: true`, used for an upstream that does not
+ * speak the Responses API, which a request reaches when `api: "auto"` falls back to Chat Completions).
+ * @param {any} body - Chat body of a Responses request.
+ * @param {boolean} all - Refuse the emulated hosted tools too.
+ * @returns {void}
+ * @throws {TranslatorError} `unsupported_tool` (`param` the tool's path) or `unsupported_content` (`param` the item's path).
+ */
+export function refuse(body: any, all: boolean): void;
+/**
  * The request the upstream gets for one round.
  * @param {any} body - Chat body of the Responses request.
  * @param {any} plan - Plan from {@link wants}.

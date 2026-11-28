@@ -117,9 +117,12 @@ export function response(completion, state, settings) {
 	const s = resolve(settings);
 	const choice = completion?.choices?.[0];
 	if (!choice) throw new TranslatorError("Upstream response contained no choices", { code: "invalid_upstream_response", status: 502 });
-	const output = Array.isArray(completion.llmt_rounds)
-		? completion.llmt_rounds.flatMap((round) => itemsOf(round.message, state, s, round.hosted))
-		: itemsOf(choice.message ?? {}, state, s);
+	// `llmt_output` is the output of an upstream that was sent hosted tools as they were: it goes back as the upstream wrote it.
+	const output = Array.isArray(completion.llmt_output)
+		? completion.llmt_output
+		: Array.isArray(completion.llmt_rounds)
+			? completion.llmt_rounds.flatMap((round) => itemsOf(round.message, state, s, round.hosted))
+			: itemsOf(choice.message ?? {}, state, s);
 	const end =
 		typeof completion.llmt_incomplete === "string"
 			? { status: "incomplete", incomplete_details: { reason: completion.llmt_incomplete } }

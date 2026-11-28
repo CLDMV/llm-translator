@@ -55,7 +55,9 @@ const HANDLED = new Set([
 	"service_tier",
 	"prompt_cache_key",
 	"safety_identifier",
-	"verbosity"
+	"verbosity",
+	"llmt_native_choice",
+	"llmt_native_include"
 ]);
 
 /**
@@ -153,6 +155,11 @@ function assistantItems(message, state, round, custom) {
 	if (text === "" && typeof message.refusal === "string") text = message.refusal;
 	if (text !== "") parts.push({ role: "assistant", content: text });
 	for (const call of message.tool_calls ?? []) {
+		if (call?.llmt_item !== undefined) {
+			state.nativeHosted = true;
+			parts.push(call.llmt_item);
+			continue;
+		}
 		if (call?.type === "custom") {
 			custom.add(call.id);
 			parts.push({
@@ -209,9 +216,20 @@ function convertMessages(list, state, round) {
 				});
 				break;
 			case "assistant":
+				if (message.llmt_native !== undefined) {
+					state.nativeHosted = true;
+					input.push(message.llmt_native.item);
+					break;
+				}
 				input.push(...assistantItems(message, state, round, custom));
 				break;
 			case "tool":
+				// A hosted call replayed from the client: its item went out with the call, or is this message's item.
+				if (message.llmt_hosted !== undefined) {
+					state.nativeHosted = true;
+					if (message.llmt_hosted.paired !== true) input.push(message.llmt_hosted.item);
+					break;
+				}
 				input.push({
 					type: custom.has(message.tool_call_id) ? "custom_tool_call_output" : "function_call_output",
 					call_id: message.tool_call_id,
@@ -234,7 +252,11 @@ function convertMessages(list, state, round) {
 function convertTools(tools, state) {
 	const out = [];
 	for (const tool of tools) {
-		if (tool?.type === "function" && tool.function) {
+		if (tool?.llmt_hosted !== undefined) {
+			// A hosted tool the client sent, as it sent it (`hostedTools: "native"`).
+			state.nativeHosted = true;
+			out.push(tool.llmt_hosted.tool);
+		} else if (tool?.type === "function" && tool.function) {
 			const fn = tool.function;
 			out.push({
 				type: "function",
@@ -346,6 +368,7 @@ export function request(chat, settings) {
 	if (state.stream) out.stream = true;
 	out.store = false;
 	if (s.reasoningRoundTrip) out.include = ["reasoning.encrypted_content"];
+	if (Array.isArray(chat.llmt_native_include)) out.include = [...new Set([...(out.include ?? []), ...chat.llmt_native_include])];
 	const limit = chat.max_completion_tokens ?? chat.max_tokens;
 	if (limit !== undefined) out.max_output_tokens = limit;
 	for (const key of ["temperature", "top_p", "user", "metadata", "service_tier", "prompt_cache_key", "safety_identifier"]) {
@@ -355,7 +378,12 @@ export function request(chat, settings) {
 	const tools = convertTools(chat.tools ?? [], state);
 	if (tools.length > 0) {
 		out.tools = tools;
-		const choice = chat.tool_choice === undefined ? undefined : convertChoice(chat.tool_choice, state);
+		const choice =
+			chat.llmt_native_choice !== undefined
+				? chat.llmt_native_choice
+				: chat.tool_choice === undefined
+					? undefined
+					: convertChoice(chat.tool_choice, state);
 		if (choice !== undefined) out.tool_choice = choice;
 		if (chat.parallel_tool_calls !== undefined && s.parallelToolCalls) out.parallel_tool_calls = chat.parallel_tool_calls;
 	}
@@ -522,7 +550,10 @@ export function response(reply, state, settings) {
 	const usage = usageOf(reply.usage);
 	// Kept for `send`, whose usage report wants the upstream's own counts.
 	if (state && usage) state.upstreamUsage = usage;
+	// A request that sent hosted tools as they were gets the upstream's own output items back, whole.
+	const native = state?.nativeHosted === true ? { llmt_output: reply.output } : {};
 	return {
+		...native,
 		id: `chatcmpl-${String(reply.id ?? "").replace(/^resp_/, "") || completionId().slice(9)}`,
 		object: "chat.completion",
 		created: reply.created_at ?? Math.floor(Date.now() / 1000),
@@ -601,6 +632,8 @@ export async function* stream(source, state, settings) {
 	try {
 		for await (const { data } of messages(source)) {
 			if (data === "[DONE]") break;
+			// Hosted tools sent as they were: the upstream's events go back to the client unchanged (the chunks below still carry the usage).
+			if (state?.nativeHosted === true) yield { data: { llmt_event: data } };
 			const type = data?.type;
 			const index = data?.output_index ?? 0;
 			if (type === "response.created") {

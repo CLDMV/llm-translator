@@ -78,6 +78,12 @@ export function hostedMark(tool: any): boolean;
  */
 export function replayMark(message: any): boolean;
 /**
+ * Whether a Chat message carries an input item only a Responses upstream can take (`hostedTools: "native"`).
+ * @param {any} message - Chat message.
+ * @returns {boolean} True for a marked message.
+ */
+export function nativeMark(message: any): boolean;
+/**
  * @typedef {object} ToolRow
  * @property {string} kind - The tool's name in this module.
  * @property {RegExp} match - Matches the tool's `type`.

@@ -285,17 +285,18 @@ describe("input items", () => {
 		expect(body.messages[1].tool_calls[0]).toEqual({
 			id: "ws_1",
 			type: "function",
-			function: { name: "web_search", arguments: '{"query":"q"}' }
+			function: { name: "web_search", arguments: '{"query":"q"}' },
+			llmt_item: search
 		});
 		expect(body.messages[2]).toEqual({
 			role: "tool",
 			tool_call_id: "ws_1",
 			content: "",
-			llmt_hosted: { kind: "web_search", item: search }
+			llmt_hosted: { kind: "web_search", item: search, paired: true }
 		});
 		expect(body.messages[3].tool_calls[0].function).toEqual({ name: "code_interpreter", arguments: '{"code":"1+1"}' });
 		expect(body.messages[5].tool_calls[0]).toMatchObject({ id: "k1", function: { name: "tool_search", arguments: '{"query":"order"}' } });
-		expect(body.messages[6]).toMatchObject({ tool_call_id: "k1", llmt_hosted: { kind: "tool_search", item: loaded } });
+		expect(body.messages[6]).toMatchObject({ tool_call_id: "k1", llmt_hosted: { kind: "tool_search", item: loaded, paired: false } });
 		expect(body.messages.filter(replayMark)).toHaveLength(3);
 		expect(replayMark({ role: "user" })).toBe(false);
 		expect(replayMark(null)).toBe(false);

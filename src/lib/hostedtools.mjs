@@ -42,8 +42,14 @@ import { fromAnthropic, toAnnotation } from "./citations.mjs";
 import { itemId } from "./responses.mjs";
 import { mergeDetail, reasoningOf } from "./thinking.mjs";
 import { seal } from "./websearch.mjs";
-import { TOOLS, hostedMark, replayMark, refusal } from "./responses-tools.mjs";
+import { resolve as route } from "./route.mjs";
+import { RESPONSES } from "./protocol.mjs";
+import { TOOLS, hostedMark, nativeMark, replayMark, refusal } from "./responses-tools.mjs";
+import { TranslatorError } from "./errors.mjs";
 import { ROUNDS, add, citable, execute, failed, find, normalize, render } from "./servertools.mjs";
+
+/** The fields the request converter adds for a Responses upstream that takes hosted tools as they are. */
+const NATIVE_FIELDS = ["llmt_native_choice", "llmt_native_include"];
 
 const DONE = { data: "[DONE]" };
 
@@ -147,7 +153,10 @@ export function wants(c, body, options) {
 	if (!body || typeof body !== "object" || Array.isArray(body)) return null;
 	const marked = Array.isArray(body.tools) ? body.tools.filter(hostedMark) : [];
 	const replays = Array.isArray(body.messages) ? body.messages.filter(replayMark) : [];
-	if (marked.length === 0 && replays.length === 0) return null;
+	if (marked.length === 0 && replays.length === 0 && !(Array.isArray(body.messages) && body.messages.some(nativeMark))) return null;
+	// An upstream on the Responses API set to `hostedTools: "native"` gets the tools and items as they are, so the runner steps aside.
+	if (nativeRoute(c, body, options)) return null;
+	refuse(body, false);
 	const own = normalize(options.serverTools);
 	const global = c.config.serverTools;
 	const executors = [...own.executors, ...global.executors];
@@ -182,12 +191,68 @@ export function wants(c, body, options) {
 }
 
 /**
+ * Whether the request goes to an upstream that takes hosted tools as they are: the Responses protocol with `hostedTools: "native"`.
+ * @param {any} c - Captured translator parts (`capture`).
+ * @param {any} body - Chat body of a Responses request.
+ * @param {any} options - The `send` options (`wire`).
+ * @returns {boolean} True for a native route.
+ */
+function nativeRoute(c, body, options) {
+	const picked = route(c, body, { wire: options.wire });
+	return picked.protocol === RESPONSES && c.settings(picked.endpoint, picked.protocol).hostedTools === "native";
+}
+
+/**
+ * Refuse what cannot be sent to the upstream the request goes to: a tool or an input item only a Responses upstream with `hostedTools: "native"` can
+ * take (`all: false`, used where the emulation runner takes over), or any hosted tool or item at all (`all: true`, used for an upstream that does not
+ * speak the Responses API, which a request reaches when `api: "auto"` falls back to Chat Completions).
+ * @param {any} body - Chat body of a Responses request.
+ * @param {boolean} all - Refuse the emulated hosted tools too.
+ * @returns {void}
+ * @throws {TranslatorError} `unsupported_tool` (`param` the tool's path) or `unsupported_content` (`param` the item's path).
+ */
+export function refuse(body, all) {
+	for (const tool of Array.isArray(body?.tools) ? body.tools : []) {
+		if (!hostedMark(tool) || (!all && tool.llmt_hosted.native !== true)) continue;
+		const { kind, at, tool: original } = tool.llmt_hosted;
+		const row = TOOLS.find((entry) => entry.kind === kind);
+		throw refusal(
+			at,
+			`unsupported tool type ${JSON.stringify(original.type)}: ${row?.note ?? "the translator does not know it"} It can only go to an upstream on the Responses API (api: "responses") with the hostedTools setting "native".`
+		);
+	}
+	for (const message of Array.isArray(body?.messages) ? body.messages : []) {
+		const item = nativeMark(message)
+			? message.llmt_native
+			: replayMark(message) && all
+				? { item: message.llmt_hosted.item, at: undefined }
+				: null;
+		if (item === null) continue;
+		const at = item.at ?? "input";
+		throw new TranslatorError(
+			`${at}: unsupported input item type ${JSON.stringify(item.item?.type ?? null)}: it can only go to an upstream on the Responses API (api: "responses") with the hostedTools setting "native".`,
+			{ code: "unsupported_content", param: at }
+		);
+	}
+}
+
+/**
  * The tool names a tool search result names.
  * @param {any} content - The result content.
  * @returns {string[]} Names.
  */
 function namesOf(content) {
 	return (content?.tool_references ?? []).map((reference) => reference?.tool_name).filter((name) => typeof name === "string");
+}
+
+/**
+ * A message without the replayed item its tool calls carry for a Responses upstream.
+ * @param {any} message - Chat message.
+ * @returns {any} The message, or a copy without `llmt_item` on its tool calls.
+ */
+function bare(message) {
+	if (!Array.isArray(message?.tool_calls) || !message.tool_calls.some((call) => call?.llmt_item !== undefined)) return message;
+	return { ...message, tool_calls: message.tool_calls.map(({ llmt_item: _, ...call }) => call) };
 }
 
 /**
@@ -201,7 +266,7 @@ function past(messages, plan) {
 	let seen = 0;
 	const sources = [];
 	const out = messages.map((message) => {
-		if (!replayMark(message)) return message;
+		if (!replayMark(message)) return bare(message);
 		const { kind, item } = message.llmt_hosted;
 		const executor = find(plan.executors, view(kind).type);
 		const content = contentOf(kind, item);
@@ -255,6 +320,7 @@ function offered(tools, plan) {
  */
 export function rewrite(body, plan, history, extra = []) {
 	const { tools: _, ...rest } = body;
+	for (const name of NATIVE_FIELDS) delete rest[name];
 	const tools = offered(body.tools ?? [], plan);
 	const gone = tools.length === 0 ? ["tool_choice", "parallel_tool_calls"] : [];
 	const out = { ...rest, ...(tools.length > 0 ? { tools } : {}), messages: [...history, ...extra] };
@@ -270,15 +336,20 @@ export function rewrite(body, plan, history, extra = []) {
  */
 export function strip(body) {
 	if (!body || typeof body !== "object" || !Array.isArray(body.tools) || !Array.isArray(body.messages)) return body;
-	if (!body.tools.some((tool) => hostedMark(tool) || tool?.llmt_deferred !== undefined) && !body.messages.some(replayMark)) return body;
+	const marked = (message) => replayMark(message) || nativeMark(message) || bare(message) !== message;
+	if (!body.tools.some((tool) => hostedMark(tool) || tool?.llmt_deferred !== undefined) && !body.messages.some(marked)) return body;
+	const rest = { ...body };
+	for (const name of NATIVE_FIELDS) delete rest[name];
 	return {
-		...body,
+		...rest,
 		tools: body.tools.map(({ llmt_hosted: _, llmt_deferred: ___deferred, ...tool }) => tool),
-		messages: body.messages.map((message) => {
-			if (!replayMark(message)) return message;
-			const { llmt_hosted: _, ...rest } = message;
-			return rest;
-		})
+		messages: body.messages
+			.filter((message) => !nativeMark(message))
+			.map((message) => {
+				if (!replayMark(message)) return bare(message);
+				const { llmt_hosted: _, ...kept } = message;
+				return kept;
+			})
 	};
 }
 

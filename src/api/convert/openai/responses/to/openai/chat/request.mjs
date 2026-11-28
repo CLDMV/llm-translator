@@ -82,6 +82,9 @@ export function request(body, settings) {
 		});
 	}
 	const state = { model: body.model, stream: body.stream === true, dropped: [], echo: {}, clientTools: {} };
+	// With `hostedTools: "native"` the tools, items and tool choice the translator cannot emulate are kept in marked form: `send` refuses them unless the
+	// request goes to an upstream on the Responses API, which gets them as they are (see `lib/hostedtools.mjs`).
+	const native = s.hostedTools === "native";
 	for (const name of STATEFUL) {
 		if (body[name] !== undefined && body[name] !== null)
 			refuse(`${name}: stateful requests are not supported (there is no response store)`, name);
@@ -123,7 +126,7 @@ export function request(body, settings) {
 	 */
 	const assistant = () => {
 		let target = messages.at(-1);
-		if (target?.role !== "assistant") {
+		if (target?.role !== "assistant" || target.llmt_native !== undefined) {
 			target = { role: "assistant", content: null };
 			messages.push(target);
 		}
@@ -147,12 +150,17 @@ export function request(body, settings) {
 					: kind === "code_interpreter"
 						? { code: typeof item.code === "string" ? item.code : "" }
 						: item.arguments;
-			(assistant().tool_calls ??= []).push({ id, type: "function", function: { name: kind, arguments: argumentsOf(input) } });
+			(assistant().tool_calls ??= []).push({
+				id,
+				type: "function",
+				function: { name: kind, arguments: argumentsOf(input) },
+				llmt_item: item
+			});
 		}
-		// The tool_search call has no result of its own: its output item carries it.
+		// The tool_search call has no result of its own: its output item carries it. `paired` says the call's own item is already on the call.
 		if (type !== "tool_search_call") {
 			pending = null;
-			messages.push({ role: "tool", tool_call_id: id, content: "", llmt_hosted: { kind, item } });
+			messages.push({ role: "tool", tool_call_id: id, content: "", llmt_hosted: { kind, item, paired: type !== "tool_search_output" } });
 		}
 	};
 	const items = typeof body.input === "string" ? [{ type: "message", role: "user", content: body.input }] : body.input;
@@ -231,6 +239,9 @@ export function request(body, settings) {
 			const details = unpack(item.encrypted_content);
 			if (carried) pending = { text: (summary.length > 0 ? summary : content).join("\n\n"), details };
 			else if (!state.dropped.includes("reasoning")) state.dropped.push("reasoning");
+		} else if (native && typeof type === "string") {
+			pending = null;
+			messages.push({ role: "assistant", content: null, llmt_native: { item, at } });
 		} else {
 			throw new TranslatorError(`${at}: unsupported input item type ${JSON.stringify(type ?? null)}`, {
 				code: "unsupported_content",
@@ -254,11 +265,19 @@ export function request(body, settings) {
 	if (typeof body.reasoning?.effort === "string") out.reasoning_effort = body.reasoning.effort;
 
 	const offered = new Map();
-	const tools = toolsOf(body.tools ?? [], state, offered);
+	const tools = toolsOf(body.tools ?? [], state, offered, native);
 	if (tools.length > 0) {
 		out.tools = tools;
-		if (body.tool_choice !== undefined && body.tool_choice !== null) out.tool_choice = choiceOf(body.tool_choice, offered);
+		if (body.tool_choice !== undefined && body.tool_choice !== null) {
+			const choice = choiceOf(body.tool_choice, offered, native);
+			if (choice !== undefined) out.tool_choice = choice;
+		}
 		if (typeof body.parallel_tool_calls === "boolean") out.parallel_tool_calls = body.parallel_tool_calls;
+	}
+	// What a Responses upstream needs to be sent as it came: the original tool choice and `include` (hosted tools were marked above).
+	if (native && (tools.some((tool) => tool.llmt_hosted !== undefined) || messages.some((message) => message.llmt_native !== undefined))) {
+		if (body.tool_choice !== null && typeof body.tool_choice === "object") out.llmt_native_choice = body.tool_choice;
+		if (Array.isArray(body.include)) out.llmt_native_include = body.include;
 	}
 	const format = body.text?.format;
 	if (format?.type === "json_object") out.response_format = { type: "json_object" };
@@ -425,10 +444,11 @@ function messageOf(item, at) {
  * @param {any[]} list - The request's `tools`.
  * @param {any} state - Converter state; `clientTools` gets the function names of the client-executed tools.
  * @param {Map<string, string>} offered - Receives the function name each tool kind is offered under (for `tool_choice`).
+ * @param {boolean} native - Whether `hostedTools` is `native`: a tool with no emulation is kept for a Responses upstream instead of being refused.
  * @returns {any[]} Chat tools.
  * @throws {TranslatorError} `unsupported_tool` for a type that is refused, for a name the request already uses and for a hosted `shell` environment; `invalid_request` for a malformed tool.
  */
-function toolsOf(list, state, offered) {
+function toolsOf(list, state, offered, native) {
 	if (!Array.isArray(list)) throw new TranslatorError("tools must be an array", { code: "invalid_request", param: "tools" });
 	const taken = new Set(
 		list
@@ -440,13 +460,25 @@ function toolsOf(list, state, offered) {
 		const at = `tools[${position}]`;
 		const type = tool?.type;
 		const row = rowOf(type);
+		/** A tool only a Responses upstream can serve, kept as a marked function the translator never offers to a model. */
+		const kept = (kind) => ({
+			type: "function",
+			function: { name: `llmt_native_${position}`, parameters: { type: "object", properties: {} } },
+			llmt_hosted: { kind, at, tool, native: true }
+		});
+		if (row === undefined && native && typeof type === "string") return kept("unknown");
 		if (row === undefined) {
 			throw refusal(
 				at,
 				`unsupported tool type ${JSON.stringify(type ?? null)} (the translator knows function, custom and the emulated hosted tools; see docs/protocol-support.md)`
 			);
 		}
-		if (row.handling === "rejected") throw refusal(at, `unsupported tool type ${JSON.stringify(type)}: ${row.note}`);
+		if (row.handling === "rejected" && native) return kept(row.kind);
+		if (row.handling === "rejected")
+			throw refusal(
+				at,
+				`unsupported tool type ${JSON.stringify(type)}: ${row.note} An upstream on the Responses API with the hostedTools setting "native" takes it as it is.`
+			);
 		if (row.kind === "function") {
 			const fn = { name: required(tool.name, `${at}.name`) };
 			if (typeof tool.description === "string") fn.description = tool.description;
@@ -471,6 +503,7 @@ function toolsOf(list, state, offered) {
 		offered.set(row.kind, row.offered);
 		if (row.kind === "shell") {
 			const environment = tool.environment?.type;
+			if (environment !== undefined && environment !== "local" && native) return kept("shell");
 			if (environment !== undefined && environment !== "local") {
 				throw refusal(
 					at,
@@ -494,10 +527,11 @@ function toolsOf(list, state, offered) {
  * Chat `tool_choice` for a Responses one.
  * @param {any} choice - Responses `tool_choice`.
  * @param {Map<string, string>} offered - The function name each emulated tool kind is offered under.
- * @returns {any} Chat `tool_choice`.
+ * @param {boolean} native - Whether `hostedTools` is `native`: a choice the translator cannot map is left to the Responses upstream (see `llmt_native_choice`).
+ * @returns {any} Chat `tool_choice`, or undefined for a choice only a Responses upstream can honour.
  * @throws {TranslatorError} `unsupported_field` for a choice that names a tool the request does not offer or the translator cannot force.
  */
-function choiceOf(choice, offered) {
+function choiceOf(choice, offered, native) {
 	if (choice === "auto" || choice === "none" || choice === "required") return choice;
 	const named = (entry) => {
 		if (entry?.type === "function" && typeof entry.name === "string") return { type: "function", function: { name: entry.name } };
@@ -514,6 +548,7 @@ function choiceOf(choice, offered) {
 			return { type: "allowed_tools", allowed_tools: { mode: choice.mode, tools } };
 		}
 	}
+	if (native) return undefined;
 	throw new TranslatorError(`tool_choice: unsupported value ${JSON.stringify(choice?.type ?? choice)}`, {
 		code: "unsupported_field",
 		param: "tool_choice"

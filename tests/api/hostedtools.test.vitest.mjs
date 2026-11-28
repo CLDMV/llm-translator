@@ -956,6 +956,19 @@ describe("executors with members and unusual citations", () => {
 		});
 	});
 
+	it("leaves the text alone when its markers name no source", async () => {
+		const transport = script([json(calling([["c1", "web_search", { query: "q" }]])), json(saying("Fact.[[cite:9]]"))]);
+		const api = await make({
+			front: "openai",
+			upstreams: [chat],
+			transport,
+			detect: false,
+			serverTools: [webSearch({ provider: provider() })]
+		});
+		const { response } = await respond(api, { ...ask, tools: [{ type: "web_search" }] });
+		expect(response.output.at(-1).content[0]).toMatchObject({ text: "Fact.[[cite:9]]", annotations: [] });
+	});
+
 	it("keeps the text of a marker whose citation the translator cannot read", async () => {
 		const executor = {
 			type: /^web_search_/,

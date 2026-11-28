@@ -30,6 +30,7 @@ export function resolve(...layers: (Partial<Settings> | null | undefined)[]): Se
  * @property {{ pages: boolean, maxPages: number, maxBytes: number, maxImages: number, scale: number }} pdf - PDF handling: render page images, Anthropic-like limits, image budget and render scale.
  * @property {"pass"|"sanitize"} toolSchema - Sanitize tool JSON Schemas (drop `$schema`, remove unbounded integer limits).
  * @property {"forward"|"drop"} deferredTools - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
+ * @property {"emulate"|"native"} hostedTools - What a Responses client's hosted tools (`web_search`, `code_interpreter`, `file_search`, `image_generation`, `mcp`, ...) become on this upstream. `emulate` (default) runs the ones the translator can through `serverTools` and refuses the rest; `native` sends them as they are, with their `*_call` history items and tool choices, to an upstream on the Responses API (`api: "responses"`) and returns its hosted output items and events unchanged.
  * @property {"expand"|"inline"|"native"} toolSearch - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
  * @property {"schema"|"instruction"|"drop"} jsonObject - OpenAI to Anthropic: how `response_format: json_object` is sent. `schema` sends `output_config.format` with the permissive schema `{ "type": "object" }`, `instruction` appends a short system instruction asking for one JSON object, `drop` omits it and records the drop.
  * @property {boolean} jsonObjectFallback - Retry a request once with `jsonObject: "instruction"` when an Anthropic-protocol upstream answers 400 or 422 to the schema `jsonObject: "schema"` sent. The endpoint and model are remembered until the process ends only when the retry succeeds.
@@ -182,6 +183,10 @@ export type Settings = {
      * - Offer `defer_loading` tools as `toolSearch` says, or drop them (and the search tool).
      */
     deferredTools: "forward" | "drop";
+    /**
+     * - What a Responses client's hosted tools (`web_search`, `code_interpreter`, `file_search`, `image_generation`, `mcp`, ...) become on this upstream. `emulate` (default) runs the ones the translator can through `serverTools` and refuses the rest; `native` sends them as they are, with their `*_call` history items and tool choices, to an upstream on the Responses API (`api: "responses"`) and returns its hosted output items and events unchanged.
+     */
+    hostedTools: "emulate" | "native";
     /**
      * - Claude Code's tool search. `expand` offers a deferred tool once a `tool_reference` (or a `ToolSearch` result) loads it; `inline` offers every deferred tool up front and hides `ToolSearch` (it stays when `DeferredToolPlaceholder` shows Claude Code holds tools whose definitions it did not send; `expand` does the same when the request has no `ToolSearch` at all); `native` passes `defer_loading` and `tool_reference` through to a server that understands them.
      */

@@ -43,7 +43,7 @@ import { clientItem, clientKind } from "../../../../../../../lib/responses-tools
  * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
  * @returns {AsyncGenerator<{ event: string, data: any }, void, undefined>} Responses events.
  */
-export async function* stream(source, state, settings) {
+async function* converted(source, state, settings) {
 	const s = resolve(settings);
 	const id = state.id ?? itemId("resp");
 	const created = Math.floor(Date.now() / 1000);
@@ -351,4 +351,30 @@ export async function* stream(source, state, settings) {
 	yield* closeCalls();
 	const end = cutoff === null ? endOf(finish) : { status: "incomplete", incomplete_details: { reason: cutoff } };
 	yield emit(end.status === "completed" ? "response.completed" : "response.incomplete", { response: snapshot(end.status, end) });
+}
+
+/**
+ * The same conversion, or, for an upstream that was sent hosted tools as they were (`hostedTools: "native"`), the upstream's own events: its chunks
+ * carry them as `llmt_event` and they are passed on unchanged, with nothing synthesized around them.
+ * @param {ReadableStream|AsyncIterable<unknown>|Iterable<unknown>|string|Uint8Array} source - Chat Completions stream.
+ * @param {any} state - State from the request converter (`model`, `echo`).
+ * @param {Partial<import("../../../../../../../lib/settings.mjs").Settings>} [settings] - Translator settings.
+ * @returns {AsyncGenerator<{ event: string, data: any }, void, undefined>} Responses events.
+ */
+export async function* stream(source, state, settings) {
+	const iterator = messages(source)[Symbol.asyncIterator]();
+	const first = await iterator.next();
+	/**
+	 * The messages again, from the one that was read to see what kind of stream this is.
+	 * @returns {AsyncGenerator<any>} Messages.
+	 */
+	async function* again() {
+		if (!first.done) yield first.value;
+		for (let step = await iterator.next(); !step.done; step = await iterator.next()) yield step.value;
+	}
+	if (!first.done && first.value.data?.llmt_event !== undefined) {
+		for await (const { data } of again()) if (data?.llmt_event !== undefined) yield { event: data.llmt_event.type, data: data.llmt_event };
+		return;
+	}
+	yield* converted(again(), state, settings);
 }

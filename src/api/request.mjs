@@ -38,6 +38,7 @@ import { resolve as resolveFiles } from "../lib/files.mjs";
 import * as documentUrls from "../lib/document-urls.mjs";
 import { PROTOCOL as RESPONSES } from "../lib/responses-upstream.mjs";
 import { CONVERSE, GEMINI } from "../lib/protocol.mjs";
+import { refuse as refuseHosted } from "../lib/hostedtools.mjs";
 
 /**
  * Who produced reasoning data signed for this endpoint: driver, protocol and host, so two upstreams on the generic driver stay apart.
@@ -127,6 +128,8 @@ function checkStrict(c, upstream, endpoint, driver, settings, options) {
  */
 async function prepare(c, body, options, picked) {
 	const { endpoint, model, unserved, convert, pool, pin, protocol } = picked;
+	// A Responses client's hosted tools are only served over the Responses API (natively) or by the emulation runner, which strips them before a round is sent.
+	if (options.wire === "responses" && protocol !== RESPONSES) refuseHosted(body, true);
 	const levels = Object.hasOwn(c.config.efforts, model) ? c.config.efforts[model] : undefined;
 	// An alias that pins settings overrides what the request asked for, before conversion; a pinned effort is always mapped.
 	if (pin) body = pinBody(body, pin, c.front);
